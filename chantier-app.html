@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Saisie Chantier</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; }
+
+    .header {
+      background: #1a1a2e;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .header-icon {
+      width: 44px; height: 44px;
+      background: #2563eb;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+    }
+    .header h1 { color: #fff; font-size: 18px; font-weight: 800; }
+    .header p { color: #94a3b8; font-size: 12px; margin-top: 2px; }
+
+    .form { padding: 20px; max-width: 600px; margin: 0 auto; }
+
+    .field { margin-bottom: 20px; }
+    .field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    input[type="date"], input[type="number"], input[type="text"], textarea {
+      width: 100%;
+      background: #fff;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 13px 14px;
+      font-size: 15px;
+      color: #1e293b;
+      outline: none;
+      -webkit-appearance: none;
+    }
+    input[type="date"]:focus, input[type="number"]:focus, textarea:focus {
+      border-color: #2563eb;
+    }
+    textarea { min-height: 100px; resize: vertical; }
+
+    .hours-row { display: flex; }
+    .hours-row input { border-radius: 12px 0 0 12px; flex: 1; }
+    .hours-suffix {
+      background: #f1f5f9;
+      border: 1.5px solid #e2e8f0;
+      border-left: none;
+      border-radius: 0 12px 12px 0;
+      padding: 13px 16px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #64748b;
+    }
+
+    /* Multi-select */
+    .multiselect-box {
+      background: #fff;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      min-height: 50px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .multiselect-box:active { border-color: #2563eb; }
+    .tags { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+    .tag {
+      background: #2563eb;
+      color: #fff;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .placeholder { color: #94a3b8; font-size: 15px; }
+    .chevron { color: #94a3b8; font-size: 16px; }
+
+    /* Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 100;
+    }
+    .modal-backdrop.open { display: flex; align-items: flex-end; }
+    .modal-sheet {
+      background: #fff;
+      border-radius: 24px 24px 0 0;
+      width: 100%;
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .modal-header h3 { font-size: 17px; font-weight: 700; color: #1e293b; }
+    .modal-close { font-size: 24px; cursor: pointer; color: #64748b; background: none; border: none; }
+    .modal-options { overflow-y: auto; flex: 1; }
+    .modal-option {
+      display: flex;
+      align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid #f8fafc;
+      cursor: pointer;
+      gap: 12px;
+      font-size: 15px;
+      color: #334155;
+    }
+    .modal-option.selected { background: #eff6ff; color: #2563eb; font-weight: 600; }
+    .modal-option .check { margin-left: auto; color: #2563eb; font-size: 18px; }
+    .modal-footer {
+      padding: 16px;
+      border-top: 1px solid #f1f5f9;
+    }
+    .btn-validate {
+      width: 100%;
+      background: #1a1a2e;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      padding: 16px;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .info-box {
+      background: #eff6ff;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #3b82f6;
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .btn-submit {
+      width: 100%;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 16px;
+      padding: 18px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 8px;
+      box-shadow: 0 6px 20px rgba(37,99,235,0.3);
+    }
+    .btn-submit:active { opacity: 0.85; }
+    .btn-submit:disabled { background: #93c5fd; box-shadow: none; }
+
+    .success {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      gap: 16px;
+      padding: 40px;
+      text-align: center;
+    }
+    .success.show { display: flex; }
+    .success-icon {
+      width: 90px; height: 90px;
+      background: #16a34a;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 48px;
+    }
+    .success h2 { font-size: 28px; font-weight: 800; color: #1e293b; }
+    .success p { font-size: 15px; color: #64748b; }
+
+    .loading { text-align: center; padding: 60px 20px; color: #64748b; }
+    .spinner {
+      width: 40px; height: 40px;
+      border: 4px solid #e2e8f0;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">🏗️</div>
+  <div>
+    <h1>Saisie de chantier</h1>
+    <p>Nouvelle entrée Baserow</p>
+  </div>
+</div>
+
+<div id="loading" class="loading">
+  <div class="spinner"></div>
+  <p>Chargement des données…</p>
+</div>
+
+<div id="app" style="display:none">
+  <div class="form">
+
+    <!-- DATE -->
+    <div class="field">
+      <label>Date</label>
+      <input type="date" id="field-date" />
+    </div>
+
+    <!-- MULTI-SELECTS -->
+    <div class="field">
+      <label>Collaborateur</label>
+      <div class="multiselect-box" onclick="openModal('Collaborateur')">
+        <div class="tags" id="tags-Collaborateur"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Véhicules</label>
+      <div class="multiselect-box" onclick="openModal('Véhicules')">
+        <div class="tags" id="tags-Véhicules"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Chantiers</label>
+      <div class="multiselect-box" onclick="openModal('Chantiers')">
+        <div class="tags" id="tags-Chantiers"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Poste</label>
+      <div class="multiselect-box" onclick="openModal('Poste')">
+        <div class="tags" id="tags-Poste"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Type de tâches</label>
+      <div class="multiselect-box" onclick="openModal('Type de taches')">
+        <div class="tags" id="tags-Type de taches"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Sous-tâches</label>
+      <div class="multiselect-box" onclick="openModal('Sous Taches')">
+        <div class="tags" id="tags-Sous Taches"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Zones</label>
+      <div class="multiselect-box" onclick="openModal('Zones')">
+        <div class="tags" id="tags-Zones"><span class="placeholder">Sélectionner…</span></div>
+        <span class="chevron">▾</span>
+      </div>
+    </div>
+
+    <!-- HEURES -->
+    <div class="field">
+      <label>Heures Normales</label>
+      <div class="hours-row">
+        <input type="number" id="field-heures" placeholder="Ex: 7.5" step="0.5" min="0" />
+        <div class="hours-suffix">h</div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      ℹ️ <span><strong>Total Heures</strong> est calculé automatiquement par Baserow.</span>
+    </div>
+
+    <!-- NOTES -->
+    <div class="field">
+      <label>Notes</label>
+      <textarea id="field-notes" placeholder="Remarques, observations…"></textarea>
+    </div>
+
+    <button class="btn-submit" id="btn-submit" onclick="submitForm()">
+      ☁️ Envoyer dans Baserow
+    </button>
+
+    <div style="height:40px"></div>
+  </div>
+
+  <div class="success" id="success">
+    <div class="success-icon">✅</div>
+    <h2>Enregistré !</h2>
+    <p>La saisie a bien été envoyée dans Baserow.</p>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-backdrop" id="modal" onclick="closeModalOutside(event)">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <h3 id="modal-title">Sélectionner</h3>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-options" id="modal-options"></div>
+    <div class="modal-footer">
+      <button class="btn-validate" onclick="closeModal()">Valider</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  //  CONFIG — ton token et ta table Baserow
+  // ============================================================
+  const BASEROW_TOKEN = 'OQPkMO1c5o3o2jW7hEQzuR8zC1oDgsiE';
+  const TABLE_ID = '1014445';
+  const HEADERS = {
+    'Authorization': `Token ${BASEROW_TOKEN}`,
+    'Content-Type': 'application/json'
+  };
+
+  // État global
+  const fieldOptions = {};
+  const selected = {};
+  let currentField = null;
+
+  // ============================================================
+  //  Init — charge les options depuis Baserow
+  // ============================================================
+  async function init() {
+    // Date par défaut = aujourd'hui
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('field-date').value = today;
+
+    try {
+      const res = await fetch(
+        `https://api.baserow.io/api/database/fields/table/${TABLE_ID}/`,
+        { headers: HEADERS }
+      );
+      const data = await res.json();
+      data.forEach(field => {
+        if (field.type === 'multiple_select' || field.type === 'single_select') {
+          fieldOptions[field.name] = field.select_options || [];
+          selected[field.name] = [];
+        }
+      });
+    } catch(e) {
+      console.error('Erreur chargement:', e);
+    }
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+  }
+
+  // ============================================================
+  //  Modal multi-select
+  // ============================================================
+  function openModal(fieldName) {
+    currentField = fieldName;
+    document.getElementById('modal-title').textContent = fieldName;
+    renderOptions(fieldName);
+    document.getElementById('modal').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+    renderTags(currentField);
+    currentField = null;
+  }
+
+  function closeModalOutside(e) {
+    if (e.target === document.getElementById('modal')) closeModal();
+  }
+
+  function renderOptions(fieldName) {
+    const options = fieldOptions[fieldName] || [];
+    const sel = selected[fieldName] || [];
+    const container = document.getElementById('modal-options');
+
+    if (options.length === 0) {
+      container.innerHTML = '<div style="padding:20px;color:#94a3b8;text-align:center">Aucune option trouvée</div>';
+      return;
+    }
+
+    container.innerHTML = options.map(opt => {
+      const isSel = sel.find(s => s.id === opt.id);
+      return `
+        <div class="modal-option ${isSel ? 'selected' : ''}" onclick="toggleOption('${fieldName}', ${opt.id}, '${opt.value.replace(/'/g, "\\'")}')">
+          ${opt.value}
+          ${isSel ? '<span class="check">✓</span>' : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function toggleOption(fieldName, id, value) {
+    if (!selected[fieldName]) selected[fieldName] = [];
+    const idx = selected[fieldName].findIndex(s => s.id === id);
+    if (idx >= 0) selected[fieldName].splice(idx, 1);
+    else selected[fieldName].push({ id, value });
+    renderOptions(fieldName);
+  }
+
+  function renderTags(fieldName) {
+    const tagsEl = document.getElementById(`tags-${fieldName}`);
+    if (!tagsEl) return;
+    const sel = selected[fieldName] || [];
+    if (sel.length === 0) {
+      tagsEl.innerHTML = '<span class="placeholder">Sélectionner…</span>';
+    } else {
+      tagsEl.innerHTML = sel.map(s => `<span class="tag">${s.value}</span>`).join('');
+    }
+  }
+
+  // ============================================================
+  //  Envoi du formulaire
+  // ============================================================
+  async function submitForm() {
+    const heures = document.getElementById('field-heures').value;
+    if (!heures) {
+      alert('Veuillez saisir les heures normales.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true;
+    btn.textContent = 'Envoi en cours…';
+
+    const payload = {
+      Date: document.getElementById('field-date').value || null,
+      Collaborateur: (selected['Collaborateur'] || []).map(o => o.id),
+      Véhicules: (selected['Véhicules'] || []).map(o => o.id),
+      Chantiers: (selected['Chantiers'] || []).map(o => o.id),
+      Poste: (selected['Poste'] || []).map(o => o.id),
+      'Type de taches': (selected['Type de taches'] || []).map(o => o.id),
+      'Sous Taches': (selected['Sous Taches'] || []).map(o => o.id),
+      Zones: (selected['Zones'] || []).map(o => o.id),
+      'Heures Normales': parseFloat(heures) || 0,
+      Notes: document.getElementById('field-notes').value || '',
+    };
+
+    try {
+      const res = await fetch(
+        `https://api.baserow.io/api/database/rows/table/${TABLE_ID}/?user_field_names=true`,
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) }
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(JSON.stringify(err));
+      }
+
+      // Succès
+      document.querySelector('.form').style.display = 'none';
+      document.getElementById('success').classList.add('show');
+      setTimeout(() => {
+        document.getElementById('success').classList.remove('show');
+        document.querySelector('.form').style.display = 'block';
+        // Reset
+        document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
+        document.getElementById('field-heures').value = '';
+        document.getElementById('field-notes').value = '';
+        Object.keys(selected).forEach(k => {
+          selected[k] = [];
+          renderTags(k);
+        });
+        btn.disabled = false;
+        btn.innerHTML = '☁️ Envoyer dans Baserow';
+      }, 2500);
+
+    } catch(e) {
+      alert("Erreur lors de l'envoi. Vérifiez votre connexion et votre token API.\n\n" + e.message);
+      btn.disabled = false;
+      btn.innerHTML = '☁️ Envoyer dans Baserow';
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>
