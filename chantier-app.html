@@ -18,45 +18,32 @@
       --gris-clair: #f4f4f2;
     }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--gris-clair); }
-    .header {
-      background: linear-gradient(135deg, #2c2c2c 0%, #3a3a3a 60%, #4a5240 100%);
-      padding: 0;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      box-shadow: 0 3px 12px rgba(0,0,0,0.35);
-    }
-    .header-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 20px;
-    }
+
+    /* HEADER */
+    .header { background: linear-gradient(135deg, #2c2c2c 0%, #3a3a3a 60%, #4a5240 100%); padding: 0; position: sticky; top: 0; z-index: 10; box-shadow: 0 3px 12px rgba(0,0,0,0.35); }
+    .header-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; }
     .header-logo { height: 78px; width: auto; filter: brightness(1.1); }
-    .header-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: #fff;
-      text-align: right;
-      letter-spacing: 0.3px;
-    }
-    .header-bar {
-      height: 4px;
-      background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%);
-    }
+    .header-title { font-size: 13px; font-weight: 700; color: #fff; text-align: right; letter-spacing: 0.3px; }
+    .header-bar { height: 4px; background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%); }
+
+    /* SECTIONS */
     .section { background: #fff; border-radius: 16px; margin: 16px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
     .section-title { font-size: 12px; font-weight: 700; color: var(--vert); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+
+    /* FIELDS */
     .field { margin-bottom: 14px; }
     .field:last-child { margin-bottom: 0; }
     .field label { display: block; font-size: 11px; font-weight: 700; color: var(--gris-moyen); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
     input[type="date"], input[type="number"], textarea { width: 100%; background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 10px; padding: 11px 13px; font-size: 15px; color: var(--gris); outline: none; -webkit-appearance: none; }
     input:focus, textarea:focus { border-color: var(--vert); background: #fff; }
     textarea { min-height: 80px; resize: vertical; }
+
+    /* SELECTOR */
     .selector { background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 10px; padding: 11px 13px; min-height: 46px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .selector:active { border-color: var(--vert); }
     .selector-value { flex: 1; font-size: 15px; color: var(--gris); font-weight: 500; }
     .selector-value.empty { color: #aaa; font-weight: 400; }
-    .selector-clear { color: #aaa; font-size: 18px; padding: 2px 6px; }
+
+    /* LIGNE TACHE */
     .ligne-card { background: var(--vert-clair); border: 1.5px solid #c5d9c3; border-radius: 12px; padding: 14px; margin-bottom: 12px; border-left: 4px solid var(--vert); }
     .ligne-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .ligne-num { font-size: 12px; font-weight: 700; color: var(--vert); }
@@ -65,50 +52,59 @@
     .hours-row input { border-radius: 10px 0 0 10px; flex: 1; }
     .hours-suffix { background: var(--beige); border: 1.5px solid var(--beige); border-left: none; border-radius: 0 10px 10px 0; padding: 11px 13px; font-size: 14px; font-weight: 700; color: #fff; }
     .btn-add-ligne { width: 100%; background: var(--vert-clair); border: 2px dashed var(--vert); border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; color: var(--vert); cursor: pointer; margin-top: 4px; }
-    .info-box { background: #eff6ff; border-radius: 10px; padding: 11px 13px; font-size: 13px; color: #3b82f6; margin-bottom: 14px; }
+
+    /* BOUTON VALIDER */
     .btn-submit { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 14px; padding: 17px; font-size: 16px; font-weight: 700; cursor: pointer; margin: 0 0 30px 0; box-shadow: 0 4px 16px rgba(74,124,63,0.35); }
     .btn-submit:disabled { background: #aaa; box-shadow: none; }
-    .success { display: none; flex-direction: column; padding: 16px; gap: 16px; }
-    .success.show { display: flex; }
-    .success-header { background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); border-radius: 16px; padding: 28px 20px; text-align: center; color: #fff; }
-    .success-check { font-size: 52px; margin-bottom: 10px; }
-    .success-header h2 { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
-    .success-header p { font-size: 14px; opacity: 0.85; }
-    .summary-card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
-    .summary-title { font-size: 12px; font-weight: 700; color: var(--vert); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
-    .summary-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid #f1ece3; gap: 10px; }
-    .summary-row:last-child { border-bottom: none; }
-    .summary-label { font-size: 13px; color: var(--gris-moyen); font-weight: 600; min-width: 110px; }
-    .summary-value { font-size: 13px; color: var(--gris); font-weight: 500; text-align: right; }
-    .summary-tache { background: var(--vert-clair); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; border-left: 3px solid var(--vert); }
-    .summary-tache-title { font-size: 12px; font-weight: 700; color: var(--vert); margin-bottom: 4px; }
-    .summary-tache-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--gris-moyen); padding: 2px 0; }
-    .summary-total { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 2px solid var(--beige); }
-    .summary-total span { font-size: 14px; font-weight: 700; color: var(--gris); }
-    .summary-total-val { font-size: 20px; font-weight: 800; color: var(--vert); }
-    .summary-stamp { background: var(--vert-clair); border: 2px solid var(--vert); border-radius: 14px; padding: 16px; text-align: center; }
-    .stamp-icon { font-size: 28px; margin-bottom: 6px; }
-    .stamp-text { font-size: 14px; font-weight: 700; color: var(--vert); }
-    .stamp-time { font-size: 12px; color: var(--gris-moyen); margin-top: 4px; }
-    .btn-new-saisie { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 14px; padding: 17px; font-size: 16px; font-weight: 700; cursor: pointer; margin-bottom: 30px; box-shadow: 0 4px 16px rgba(74,124,63,0.35); }
-    .loading { text-align: center; padding: 60px 20px; color: #64748b; }
-    .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* MODAL */
     .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; }
     .modal-backdrop.open { display: flex; align-items: flex-end; }
     .modal-sheet { background: #fff; border-radius: 24px 24px 0 0; width: 100%; max-height: 75vh; display: flex; flex-direction: column; }
     .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; border-bottom: 1px solid #f1f5f9; }
-    .modal-header h3 { font-size: 16px; font-weight: 700; color: #1e293b; }
-    .modal-close { font-size: 22px; cursor: pointer; color: #64748b; background: none; border: none; }
+    .modal-header h3 { font-size: 16px; font-weight: 700; color: var(--gris); }
+    .modal-close { font-size: 22px; cursor: pointer; color: #aaa; background: none; border: none; }
     .modal-options { overflow-y: auto; flex: 1; }
-    .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: #334155; gap: 10px; }
-    .modal-option:active { background: #eff6ff; }
+    .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: var(--gris); gap: 10px; }
     .modal-option.selected { background: var(--vert-clair); color: var(--vert); font-weight: 600; }
     .modal-option .check { margin-left: auto; color: var(--vert); font-size: 18px; }
+    .btn-validate { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 12px; padding: 15px; font-size: 15px; font-weight: 700; cursor: pointer; margin: 14px 16px; width: calc(100% - 32px); }
+
+    /* PAGE RESUME */
+    .page { display: none; }
+    .page.active { display: block; }
+    .resume-header { background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); padding: 28px 20px; text-align: center; }
+    .resume-check { font-size: 56px; margin-bottom: 10px; }
+    .resume-header h2 { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 6px; }
+    .resume-header p { font-size: 13px; color: rgba(255,255,255,0.85); }
+    .resume-header-bar { height: 4px; background: linear-gradient(90deg, #c8a96e 0%, #fff 50%, #c8a96e 100%); }
+    .resume-section { background: #fff; border-radius: 16px; margin: 16px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
+    .resume-section-title { font-size: 12px; font-weight: 700; color: var(--vert); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .resume-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid #f1ece3; gap: 10px; }
+    .resume-row:last-child { border-bottom: none; }
+    .resume-label { font-size: 13px; color: var(--gris-moyen); font-weight: 600; min-width: 110px; }
+    .resume-value { font-size: 13px; color: var(--gris); font-weight: 500; text-align: right; }
+    .tache-card { background: var(--vert-clair); border-radius: 10px; padding: 12px; margin-bottom: 10px; border-left: 3px solid var(--vert); }
+    .tache-card-title { font-size: 12px; font-weight: 700; color: var(--vert); margin-bottom: 8px; }
+    .tache-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--gris-moyen); padding: 3px 0; }
+    .tache-row span:last-child { font-weight: 600; color: var(--gris); }
+    .resume-total { display: flex; justify-content: space-between; align-items: center; padding: 12px 0 0 0; border-top: 2px solid var(--beige); margin-top: 4px; }
+    .resume-total-label { font-size: 15px; font-weight: 700; color: var(--gris); }
+    .resume-total-val { font-size: 24px; font-weight: 800; color: var(--vert); }
+    .stamp { background: var(--vert-clair); border: 2px solid var(--vert); border-radius: 14px; margin: 0 16px; padding: 16px; text-align: center; }
+    .stamp-icon { font-size: 28px; margin-bottom: 6px; }
+    .stamp-text { font-size: 14px; font-weight: 700; color: var(--vert); }
+    .stamp-time { font-size: 12px; color: var(--gris-moyen); margin-top: 4px; }
+    .btn-new { width: calc(100% - 32px); margin: 16px; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 14px; padding: 17px; font-size: 16px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 16px rgba(74,124,63,0.35); display: block; }
+
+    .loading { text-align: center; padding: 60px 20px; color: #64748b; }
+    .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: var(--vert); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
 
+<!-- HEADER (toujours visible) -->
 <div class="header">
   <div class="header-top">
     <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
@@ -117,12 +113,17 @@
   <div class="header-bar"></div>
 </div>
 
-<div id="loading" class="loading">
-  <div class="spinner"></div>
-  <p>Chargement des données…</p>
+<!-- PAGE CHARGEMENT -->
+<div id="page-loading" class="page active">
+  <div class="loading">
+    <div class="spinner"></div>
+    <p>Chargement des données…</p>
+  </div>
 </div>
 
-<div id="main" style="display:none">
+<!-- PAGE FORMULAIRE -->
+<div id="page-form" class="page">
+
   <div class="section">
     <div class="section-title">📋 Informations générales</div>
     <div class="field">
@@ -150,7 +151,6 @@
         <span>▾</span>
       </div>
     </div>
-
   </div>
 
   <div class="section">
@@ -160,37 +160,49 @@
   </div>
 
   <div style="padding: 0 16px">
-    
     <button class="btn-submit" id="btn-submit" onclick="submitForm()">✅ Valider la saisie</button>
   </div>
 
-  <div class="success" id="success">
-    <div class="success-header">
-      <div class="success-check">✅</div>
-      <h2>Saisie validée !</h2>
-      <p>Les informations ont bien été transmises.</p>
-    </div>
-    <div class="summary-card">
-      <div class="summary-title">📋 Récapitulatif</div>
-      <div class="summary-row"><span class="summary-label">Date</span><span class="summary-value" id="sum-date">—</span></div>
-      <div class="summary-row"><span class="summary-label">Collaborateur</span><span class="summary-value" id="sum-collab">—</span></div>
-      <div class="summary-row"><span class="summary-label">Véhicule</span><span class="summary-value" id="sum-vehicule">—</span></div>
-      <div class="summary-row"><span class="summary-label">Chantier</span><span class="summary-value" id="sum-chantier">—</span></div>
-    </div>
-    <div class="summary-card" id="sum-taches-card">
-      <div class="summary-title">⚙️ Tâches saisies</div>
-      <div id="sum-taches"></div>
-      <div class="summary-total"><span>Total heures</span><span id="sum-total-h" class="summary-total-val">0h</span></div>
-    </div>
-    <div class="summary-stamp">
-      <div class="stamp-icon">🟢</div>
-      <div class="stamp-text">Données enregistrées dans Baserow</div>
-      <div class="stamp-time" id="sum-time"></div>
-    </div>
-    <button class="btn-new-saisie" onclick="nouvelleSession()">+ Nouvelle saisie</button>
-  </div>
 </div>
 
+<!-- PAGE RÉSUMÉ -->
+<div id="page-resume" class="page">
+
+  <div class="resume-header">
+    <div class="resume-check">✅</div>
+    <h2>Saisie validée !</h2>
+    <p>Les informations ont bien été transmises.</p>
+  </div>
+  <div class="resume-header-bar"></div>
+
+  <div class="resume-section">
+    <div class="resume-section-title">📋 Informations générales</div>
+    <div class="resume-row"><span class="resume-label">Date</span><span class="resume-value" id="res-date">—</span></div>
+    <div class="resume-row"><span class="resume-label">Collaborateur</span><span class="resume-value" id="res-collab">—</span></div>
+    <div class="resume-row"><span class="resume-label">Véhicule</span><span class="resume-value" id="res-vehicule">—</span></div>
+    <div class="resume-row"><span class="resume-label">Chantier</span><span class="resume-value" id="res-chantier">—</span></div>
+  </div>
+
+  <div class="resume-section">
+    <div class="resume-section-title">⚙️ Tâches</div>
+    <div id="res-taches"></div>
+    <div class="resume-total">
+      <span class="resume-total-label">Total heures</span>
+      <span class="resume-total-val" id="res-total">0h</span>
+    </div>
+  </div>
+
+  <div class="stamp">
+    <div class="stamp-icon">🟢</div>
+    <div class="stamp-text">Données enregistrées dans Baserow</div>
+    <div class="stamp-time" id="res-time"></div>
+  </div>
+
+  <button class="btn-new" onclick="nouvelleSession()">+ Nouvelle saisie</button>
+
+</div>
+
+<!-- MODAL -->
 <div class="modal-backdrop" id="modal" onclick="closeModalOutside(event)">
   <div class="modal-sheet">
     <div class="modal-header">
@@ -198,13 +210,13 @@
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-options" id="modal-options"></div>
+    <button class="btn-validate" onclick="closeModal()">Fermer</button>
   </div>
 </div>
 
 <script>
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   const TABLE_SAISIE = '1014445';
-
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
     Vehicules:     { id: '1017158', field: 'Immatriculation', label: 'Véhicule' },
@@ -213,18 +225,19 @@
     SousTaches:    { id: '1015608', field: 'Libellé',         label: 'Sous-tâche' },
     Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
   };
-
   const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
   const tableData = {};
-
-  // Sélections globales (une seule valeur)
-  const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null, Zones: null };
-
-  // Lignes de tâches
+  const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null };
   let lignes = [];
   let ligneCounter = 0;
   let modalKey = null;
   let modalLigneId = null;
+
+  function showPage(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    window.scrollTo(0, 0);
+  }
 
   async function loadTable(key) {
     const { id, field } = TABLES[key];
@@ -239,8 +252,7 @@
     document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
     await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
     ajouterLigne();
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('main').style.display = 'block';
+    showPage('page-form');
   }
 
   function ajouterLigne() {
@@ -256,8 +268,7 @@
   }
 
   function renderLignes() {
-    const container = document.getElementById('lignes-container');
-    container.innerHTML = lignes.map((l, i) => `
+    document.getElementById('lignes-container').innerHTML = lignes.map((l, i) => `
       <div class="ligne-card">
         <div class="ligne-header">
           <span class="ligne-num">Tâche ${i+1}</span>
@@ -265,54 +276,45 @@
         </div>
         <div class="field">
           <label>Type de tâche</label>
-          <div class="selector" onclick="openModal('TypeTaches', ${l.id})">
-            <span class="selector-value ${l.typeTache ? '' : 'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache ? l.typeTache.value : 'Sélectionner…'}</span>
+          <div class="selector" onclick="openModal('TypeTaches',${l.id})">
+            <span class="selector-value ${l.typeTache?'':'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache?l.typeTache.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
         <div class="field">
           <label>Sous-tâche</label>
-          <div class="selector" onclick="openModal('SousTaches', ${l.id})">
-            <span class="selector-value ${l.sousTache ? '' : 'empty'}" id="val-SousTaches-${l.id}">${l.sousTache ? l.sousTache.value : 'Sélectionner…'}</span>
+          <div class="selector" onclick="openModal('SousTaches',${l.id})">
+            <span class="selector-value ${l.sousTache?'':'empty'}" id="val-SousTaches-${l.id}">${l.sousTache?l.sousTache.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
-        <div class="field" id="zone-field-${l.id}" style="display:${l.typeTache && l.typeTache.value === 'Pose' ? 'block' : 'none'}">
+        <div class="field" id="zone-field-${l.id}" style="display:${l.typeTache&&l.typeTache.value==='Pose'?'block':'none'}">
           <label>Zone</label>
-          <div class="selector" onclick="openModal('Zones', ${l.id})">
-            <span class="selector-value ${l.zone ? '' : 'empty'}" id="val-Zones-${l.id}">${l.zone ? l.zone.value : 'Sélectionner…'}</span>
+          <div class="selector" onclick="openModal('Zones',${l.id})">
+            <span class="selector-value ${l.zone?'':'empty'}" id="val-Zones-${l.id}">${l.zone?l.zone.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
         <div class="field">
           <label>Heures</label>
           <div class="hours-row">
-            <input type="number" placeholder="Ex: 3.5" step="0.5" min="0" value="${l.heures}"
-              oninput="updateHeures(${l.id}, this.value)" />
+            <input type="number" placeholder="Ex: 3.5" step="0.5" min="0" value="${l.heures}" oninput="updateHeures(${l.id},this.value)" />
             <div class="hours-suffix">h</div>
           </div>
         </div>
         <div class="field">
           <label>Notes</label>
-          <textarea placeholder="Remarques…" oninput="updateNotes(${l.id}, this.value)">${l.notes || ''}</textarea>
+          <textarea placeholder="Remarques…" oninput="updateNotes(${l.id},this.value)">${l.notes||''}</textarea>
         </div>
       </div>
     `).join('');
   }
 
-  function updateHeures(ligneId, val) {
-    const l = lignes.find(l => l.id === ligneId);
-    if (l) l.heures = val;
-  }
-
-  function updateNotes(ligneId, val) {
-    const l = lignes.find(l => l.id === ligneId);
-    if (l) l.notes = val;
-  }
+  function updateHeures(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.heures=val; }
+  function updateNotes(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.notes=val; }
 
   function openModal(key, ligneId) {
-    modalKey = key;
-    modalLigneId = ligneId;
+    modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
@@ -323,13 +325,15 @@
     modalKey = null; modalLigneId = null;
   }
 
-  function closeModalOutside(e) { if (e.target === document.getElementById('modal')) closeModal(); }
+  function closeModalOutside(e) { if(e.target===document.getElementById('modal')) closeModal(); }
 
   function getCurrentValue() {
     if (modalLigneId !== null) {
-      const l = lignes.find(l => l.id === modalLigneId);
+      const l = lignes.find(l=>l.id===modalLigneId);
       if (!l) return null;
-      return modalKey === 'TypeTaches' ? l.typeTache : l.sousTache;
+      if (modalKey==='TypeTaches') return l.typeTache;
+      if (modalKey==='SousTaches') return l.sousTache;
+      if (modalKey==='Zones') return l.zone;
     }
     return globalSelected[modalKey];
   }
@@ -338,10 +342,7 @@
     const options = tableData[modalKey] || [];
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-    if (options.length === 0) {
-      container.innerHTML = '<div style="padding:20px;color:#94a3b8;text-align:center">Aucune option trouvée</div>';
-      return;
-    }
+    if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
     container.innerHTML = options.map(opt => {
       const isSel = current && current.id === opt.id;
       return `<div class="modal-option ${isSel?'selected':''}" onclick="selectOption(${opt.id},'${String(opt.value).replace(/'/g,"\\'")}')">
@@ -353,16 +354,15 @@
   function selectOption(id, value) {
     const obj = { id, value };
     if (modalLigneId !== null) {
-      const l = lignes.find(l => l.id === modalLigneId);
+      const l = lignes.find(l=>l.id===modalLigneId);
       if (l) {
-        if (modalKey === 'TypeTaches') {
+        if (modalKey==='TypeTaches') {
           l.typeTache = obj;
-          // Affiche/cache le champ Zone selon si c'est "Pose"
-          const zoneField = document.getElementById(`zone-field-${modalLigneId}`);
-          if (zoneField) zoneField.style.display = value === 'Pose' ? 'block' : 'none';
-          if (value !== 'Pose') { l.zone = null; const zv = document.getElementById(`val-Zones-${modalLigneId}`); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
-        } else if (modalKey === 'SousTaches') l.sousTache = obj;
-        else if (modalKey === 'Zones') l.zone = obj;
+          const zf = document.getElementById(`zone-field-${modalLigneId}`);
+          if (zf) zf.style.display = value==='Pose' ? 'block' : 'none';
+          if (value!=='Pose') { l.zone=null; const zv=document.getElementById(`val-Zones-${modalLigneId}`); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
+        } else if (modalKey==='SousTaches') l.sousTache = obj;
+        else if (modalKey==='Zones') l.zone = obj;
         const el = document.getElementById(`val-${modalKey}-${modalLigneId}`);
         if (el) { el.textContent = value; el.classList.remove('empty'); }
       }
@@ -377,71 +377,62 @@
   async function submitForm() {
     if (!globalSelected.Collaborateur) { alert('Veuillez sélectionner un collaborateur.'); return; }
     if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
-    const totalH = lignes.reduce((s, l) => s + (parseFloat(l.heures)||0), 0);
-    if (totalH === 0) { alert('Veuillez saisir les heures pour au moins une tâche.'); return; }
+    const totalH = lignes.reduce((s,l) => s+(parseFloat(l.heures)||0), 0);
+    if (totalH===0) { alert('Veuillez saisir les heures pour au moins une tâche.'); return; }
 
     const btn = document.getElementById('btn-submit');
     btn.disabled = true; btn.textContent = 'Envoi en cours…';
 
-    const promises = lignes.map(l => {
-      const payload = {
-        Date: document.getElementById('field-date').value || null,
-        Collaborateur: globalSelected.Collaborateur ? [globalSelected.Collaborateur.id] : [],
-        'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
-        Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
-        Zones: l.zone ? [l.zone.id] : [],
-        'Type de taches': l.typeTache ? [l.typeTache.id] : [],
-        'Sous Taches': l.sousTache ? [l.sousTache.id] : [],
-        'Heures Normales': parseFloat(l.heures) || 0,
-        Notes: l.notes || '',
-      };
-      return fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true`,
-        { method:'POST', headers:HEADERS, body:JSON.stringify(payload) });
-    });
-
     try {
-      const results = await Promise.all(promises);
-      for (const r of results) {
-        if (!r.ok) { const err = await r.json(); throw new Error(JSON.stringify(err)); }
+      for (const l of lignes) {
+        const payload = {
+          Date: document.getElementById('field-date').value || null,
+          Collaborateur: globalSelected.Collaborateur ? [globalSelected.Collaborateur.id] : [],
+          'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
+          Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
+          Zones: l.zone ? [l.zone.id] : [],
+          'Type de taches': l.typeTache ? [l.typeTache.id] : [],
+          'Sous Taches': l.sousTache ? [l.sousTache.id] : [],
+          'Heures Normales': parseFloat(l.heures) || 0,
+          Notes: l.notes || '',
+        };
+        const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true`,
+          { method:'POST', headers:HEADERS, body:JSON.stringify(payload) });
+        if (!res.ok) { const err = await res.json(); throw new Error(JSON.stringify(err)); }
       }
-      // Remplir le résumé
+
+      // Remplir la page résumé
       const now = new Date();
-      document.getElementById('sum-date').textContent = document.getElementById('field-date').value || '—';
-      document.getElementById('sum-collab').textContent = globalSelected.Collaborateur ? globalSelected.Collaborateur.value : '—';
-      document.getElementById('sum-vehicule').textContent = globalSelected.Vehicules ? globalSelected.Vehicules.value : '—';
-      document.getElementById('sum-chantier').textContent = globalSelected.Chantiers ? globalSelected.Chantiers.value : '—';
-      document.getElementById('sum-time').textContent = 'Le ' + now.toLocaleDateString('fr-FR') + ' à ' + now.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
-      
-      let totalH = 0;
-      const tachesHTML = lignes.map((l, i) => {
-        const h = parseFloat(l.heures) || 0;
-        totalH += h;
-        return `<div class="summary-tache">
-          <div class="summary-tache-title">Tâche ${i+1}</div>
-          ${l.typeTache ? `<div class="summary-tache-row"><span>Type</span><span>${l.typeTache.value}</span></div>` : ''}
-          ${l.sousTache ? `<div class="summary-tache-row"><span>Sous-tâche</span><span>${l.sousTache.value}</span></div>` : ''}
-          ${l.zone ? `<div class="summary-tache-row"><span>Zone</span><span>${l.zone.value}</span></div>` : ''}
-          ${l.notes ? `<div class="summary-tache-row"><span>Notes</span><span>${l.notes}</span></div>` : ''}
-          <div class="summary-tache-row"><span>Heures</span><span><strong>${h}h</strong></span></div>
+      document.getElementById('res-date').textContent = document.getElementById('field-date').value || '—';
+      document.getElementById('res-collab').textContent = globalSelected.Collaborateur?.value || '—';
+      document.getElementById('res-vehicule').textContent = globalSelected.Vehicules?.value || '—';
+      document.getElementById('res-chantier').textContent = globalSelected.Chantiers?.value || '—';
+      document.getElementById('res-time').textContent = 'Le ' + now.toLocaleDateString('fr-FR') + ' à ' + now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+
+      let total = 0;
+      document.getElementById('res-taches').innerHTML = lignes.map((l,i) => {
+        const h = parseFloat(l.heures)||0; total += h;
+        return `<div class="tache-card">
+          <div class="tache-card-title">Tâche ${i+1}</div>
+          ${l.typeTache ? `<div class="tache-row"><span>Type</span><span>${l.typeTache.value}</span></div>` : ''}
+          ${l.sousTache ? `<div class="tache-row"><span>Sous-tâche</span><span>${l.sousTache.value}</span></div>` : ''}
+          ${l.zone ? `<div class="tache-row"><span>Zone</span><span>${l.zone.value}</span></div>` : ''}
+          <div class="tache-row"><span>Heures</span><span>${h}h</span></div>
+          ${l.notes ? `<div class="tache-row"><span>Notes</span><span>${l.notes}</span></div>` : ''}
         </div>`;
       }).join('');
-      document.getElementById('sum-taches').innerHTML = tachesHTML;
-      document.getElementById('sum-total-h').textContent = totalH + 'h';
+      document.getElementById('res-total').textContent = total + 'h';
 
-      document.getElementById('main').style.display = 'none';
-      document.getElementById('success').classList.add('show');
-      document.getElementById('success').style.display = 'flex';
-      btn.disabled = false; btn.innerHTML = '✅ Valider la saisie';
+      showPage('page-resume');
+
     } catch(e) {
       alert("Erreur : " + e.message);
-      btn.disabled = false; btn.innerHTML = '✅ Valider la saisie';
+    } finally {
+      btn.disabled = false; btn.textContent = '✅ Valider la saisie';
     }
   }
 
   function nouvelleSession() {
-    document.getElementById('success').classList.remove('show');
-    document.getElementById('success').style.display = 'none';
-    document.getElementById('main').style.display = 'block';
     document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
     Object.keys(globalSelected).forEach(k => { globalSelected[k] = null; });
     ['Collaborateur','Vehicules','Chantiers'].forEach(k => {
@@ -449,7 +440,7 @@
       if (el) { el.textContent = 'Sélectionner…'; el.classList.add('empty'); }
     });
     lignes = []; ligneCounter = 0; ajouterLigne();
-    window.scrollTo(0, 0);
+    showPage('page-form');
   }
 
   init();
