@@ -69,6 +69,9 @@
     .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; border-bottom: 1px solid #f1f5f9; }
     .modal-header h3 { font-size: 16px; font-weight: 700; color: var(--gris); }
     .modal-close { font-size: 22px; cursor: pointer; color: #aaa; background: none; border: none; }
+    .modal-search { padding: 12px 16px; border-bottom: 1px solid #f1f5f9; }
+    .modal-search input { width: 100%; background: #f8fafc; border: 1.5px solid #ddd5c5; border-radius: 10px; padding: 10px 13px; font-size: 15px; color: var(--gris); outline: none; }
+    .modal-search input:focus { border-color: var(--vert); }
     .modal-options { overflow-y: auto; flex: 1; }
     .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: var(--gris); gap: 10px; }
     .modal-option.selected { background: var(--vert-clair); color: var(--vert); font-weight: 600; }
@@ -214,6 +217,9 @@
       <h3 id="modal-title">Sélectionner</h3>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
+    <div class="modal-search">
+      <input type="text" id="modal-search-input" placeholder="Rechercher…" oninput="filterOptions(this.value)" />
+    </div>
     <div class="modal-options" id="modal-options"></div>
     <button class="btn-validate" onclick="closeModal()">Fermer</button>
   </div>
@@ -321,8 +327,10 @@
   function openModal(key, ligneId) {
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
+    document.getElementById('modal-search-input').value = '';
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
+    setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
   }
 
   function closeModal() {
@@ -341,6 +349,21 @@
       if (modalKey==='Zones') return l.zone;
     }
     return globalSelected[modalKey];
+  }
+
+  function filterOptions(query) {
+    const q = query.toLowerCase().trim();
+    const options = tableData[modalKey] || [];
+    const current = getCurrentValue();
+    const filtered = q ? options.filter(o => o.value.toLowerCase().includes(q)) : options;
+    const container = document.getElementById('modal-options');
+    if (!filtered.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucun résultat</div>'; return; }
+    container.innerHTML = filtered.map(opt => {
+      const isSel = current && current.id === opt.id;
+      return `<div class="modal-option ${isSel?'selected':''}" onclick="selectOption(${opt.id},'${String(opt.value).replace(/'/g,"\'")}')">
+        ${opt.value}${isSel?'<span class="check">✓</span>':''}
+      </div>`;
+    }).join('');
   }
 
   function renderModalOptions() {
