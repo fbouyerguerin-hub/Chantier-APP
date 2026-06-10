@@ -5,228 +5,116 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Saisie Chantier</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; }
-
+    :root {
+      --vert: #4a7c3f;
+      --vert-clair: #e8f0e7;
+      --beige: #c8a96e;
+      --beige-clair: #f7f2ea;
+      --gris: #2c2c2c;
+      --gris-moyen: #5a5a5a;
+      --gris-clair: #f4f4f2;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--gris-clair); }
     .header {
-      background: #1a1a2e;
-      padding: 20px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
+      background: linear-gradient(135deg, #2c2c2c 0%, #3a3a3a 60%, #4a5240 100%);
+      padding: 0;
       position: sticky;
       top: 0;
       z-index: 10;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.35);
     }
-    .header-icon {
-      width: 44px; height: 44px;
-      background: #2563eb;
-      border-radius: 12px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 22px;
+    .header-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
     }
-    .header h1 { color: #fff; font-size: 18px; font-weight: 800; }
-    .header p { color: #94a3b8; font-size: 12px; margin-top: 2px; }
-
-    .form { padding: 20px; max-width: 600px; margin: 0 auto; }
-
-    .field { margin-bottom: 20px; }
-    .field label {
-      display: block;
-      font-size: 11px;
+    .header-logo { height: 78px; width: auto; filter: brightness(1.1); }
+    .header-title {
+      font-size: 13px;
       font-weight: 700;
-      color: #475569;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
+      color: #fff;
+      text-align: right;
+      letter-spacing: 0.3px;
     }
-
-    input[type="date"], input[type="number"], input[type="text"], textarea {
-      width: 100%;
-      background: #fff;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 13px 14px;
-      font-size: 15px;
-      color: #1e293b;
-      outline: none;
-      -webkit-appearance: none;
+    .header-bar {
+      height: 4px;
+      background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%);
     }
-    input[type="date"]:focus, input[type="number"]:focus, textarea:focus {
-      border-color: #2563eb;
-    }
-    textarea { min-height: 100px; resize: vertical; }
-
+    .section { background: #fff; border-radius: 16px; margin: 16px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
+    .section-title { font-size: 12px; font-weight: 700; color: var(--vert); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+    .field { margin-bottom: 14px; }
+    .field:last-child { margin-bottom: 0; }
+    .field label { display: block; font-size: 11px; font-weight: 700; color: var(--gris-moyen); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
+    input[type="date"], input[type="number"], textarea { width: 100%; background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 10px; padding: 11px 13px; font-size: 15px; color: var(--gris); outline: none; -webkit-appearance: none; }
+    input:focus, textarea:focus { border-color: var(--vert); background: #fff; }
+    textarea { min-height: 80px; resize: vertical; }
+    .selector { background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 10px; padding: 11px 13px; min-height: 46px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .selector:active { border-color: var(--vert); }
+    .selector-value { flex: 1; font-size: 15px; color: var(--gris); font-weight: 500; }
+    .selector-value.empty { color: #aaa; font-weight: 400; }
+    .selector-clear { color: #aaa; font-size: 18px; padding: 2px 6px; }
+    .ligne-card { background: var(--vert-clair); border: 1.5px solid #c5d9c3; border-radius: 12px; padding: 14px; margin-bottom: 12px; border-left: 4px solid var(--vert); }
+    .ligne-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .ligne-num { font-size: 12px; font-weight: 700; color: var(--vert); }
+    .btn-delete { background: #fde8e8; border: none; border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: #c0392b; font-weight: 600; }
     .hours-row { display: flex; }
-    .hours-row input { border-radius: 12px 0 0 12px; flex: 1; }
-    .hours-suffix {
-      background: #f1f5f9;
-      border: 1.5px solid #e2e8f0;
-      border-left: none;
-      border-radius: 0 12px 12px 0;
-      padding: 13px 16px;
-      font-size: 15px;
-      font-weight: 600;
-      color: #64748b;
-    }
-
-    /* Multi-select */
-    .multiselect-box {
-      background: #fff;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 10px 14px;
-      min-height: 50px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .multiselect-box:active { border-color: #2563eb; }
-    .tags { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
-    .tag {
-      background: #2563eb;
-      color: #fff;
-      border-radius: 6px;
-      padding: 3px 8px;
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .placeholder { color: #94a3b8; font-size: 15px; }
-    .chevron { color: #94a3b8; font-size: 16px; }
-
-    /* Modal */
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 100;
-    }
-    .modal-backdrop.open { display: flex; align-items: flex-end; }
-    .modal-sheet {
-      background: #fff;
-      border-radius: 24px 24px 0 0;
-      width: 100%;
-      max-height: 70vh;
-      display: flex;
-      flex-direction: column;
-    }
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 20px;
-      border-bottom: 1px solid #f1f5f9;
-    }
-    .modal-header h3 { font-size: 17px; font-weight: 700; color: #1e293b; }
-    .modal-close { font-size: 24px; cursor: pointer; color: #64748b; background: none; border: none; }
-    .modal-options { overflow-y: auto; flex: 1; }
-    .modal-option {
-      display: flex;
-      align-items: center;
-      padding: 14px 20px;
-      border-bottom: 1px solid #f8fafc;
-      cursor: pointer;
-      gap: 12px;
-      font-size: 15px;
-      color: #334155;
-    }
-    .modal-option.selected { background: #eff6ff; color: #2563eb; font-weight: 600; }
-    .modal-option .check { margin-left: auto; color: #2563eb; font-size: 18px; }
-    .modal-footer {
-      padding: 16px;
-      border-top: 1px solid #f1f5f9;
-    }
-    .btn-validate {
-      width: 100%;
-      background: #1a1a2e;
-      color: #fff;
-      border: none;
-      border-radius: 14px;
-      padding: 16px;
-      font-size: 16px;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    .info-box {
-      background: #eff6ff;
-      border-radius: 10px;
-      padding: 12px;
-      margin-bottom: 20px;
-      font-size: 13px;
-      color: #3b82f6;
-      display: flex;
-      gap: 8px;
-      align-items: flex-start;
-    }
-
-    .btn-submit {
-      width: 100%;
-      background: #2563eb;
-      color: #fff;
-      border: none;
-      border-radius: 16px;
-      padding: 18px;
-      font-size: 17px;
-      font-weight: 700;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      margin-top: 8px;
-      box-shadow: 0 6px 20px rgba(37,99,235,0.3);
-    }
-    .btn-submit:active { opacity: 0.85; }
-    .btn-submit:disabled { background: #93c5fd; box-shadow: none; }
-
-    .success {
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      min-height: 60vh;
-      gap: 16px;
-      padding: 40px;
-      text-align: center;
-    }
+    .hours-row input { border-radius: 10px 0 0 10px; flex: 1; }
+    .hours-suffix { background: var(--beige); border: 1.5px solid var(--beige); border-left: none; border-radius: 0 10px 10px 0; padding: 11px 13px; font-size: 14px; font-weight: 700; color: #fff; }
+    .btn-add-ligne { width: 100%; background: var(--vert-clair); border: 2px dashed var(--vert); border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; color: var(--vert); cursor: pointer; margin-top: 4px; }
+    .info-box { background: #eff6ff; border-radius: 10px; padding: 11px 13px; font-size: 13px; color: #3b82f6; margin-bottom: 14px; }
+    .btn-submit { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 14px; padding: 17px; font-size: 16px; font-weight: 700; cursor: pointer; margin: 0 0 30px 0; box-shadow: 0 4px 16px rgba(74,124,63,0.35); }
+    .btn-submit:disabled { background: #aaa; box-shadow: none; }
+    .success { display: none; flex-direction: column; padding: 16px; gap: 16px; }
     .success.show { display: flex; }
-    .success-icon {
-      width: 90px; height: 90px;
-      background: #16a34a;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 48px;
-    }
-    .success h2 { font-size: 28px; font-weight: 800; color: #1e293b; }
-    .success p { font-size: 15px; color: #64748b; }
-
+    .success-header { background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); border-radius: 16px; padding: 28px 20px; text-align: center; color: #fff; }
+    .success-check { font-size: 52px; margin-bottom: 10px; }
+    .success-header h2 { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
+    .success-header p { font-size: 14px; opacity: 0.85; }
+    .summary-card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
+    .summary-title { font-size: 12px; font-weight: 700; color: var(--vert); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .summary-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid #f1ece3; gap: 10px; }
+    .summary-row:last-child { border-bottom: none; }
+    .summary-label { font-size: 13px; color: var(--gris-moyen); font-weight: 600; min-width: 110px; }
+    .summary-value { font-size: 13px; color: var(--gris); font-weight: 500; text-align: right; }
+    .summary-tache { background: var(--vert-clair); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; border-left: 3px solid var(--vert); }
+    .summary-tache-title { font-size: 12px; font-weight: 700; color: var(--vert); margin-bottom: 4px; }
+    .summary-tache-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--gris-moyen); padding: 2px 0; }
+    .summary-total { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 2px solid var(--beige); }
+    .summary-total span { font-size: 14px; font-weight: 700; color: var(--gris); }
+    .summary-total-val { font-size: 20px; font-weight: 800; color: var(--vert); }
+    .summary-stamp { background: var(--vert-clair); border: 2px solid var(--vert); border-radius: 14px; padding: 16px; text-align: center; }
+    .stamp-icon { font-size: 28px; margin-bottom: 6px; }
+    .stamp-text { font-size: 14px; font-weight: 700; color: var(--vert); }
+    .stamp-time { font-size: 12px; color: var(--gris-moyen); margin-top: 4px; }
+    .btn-new-saisie { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 14px; padding: 17px; font-size: 16px; font-weight: 700; cursor: pointer; margin-bottom: 30px; box-shadow: 0 4px 16px rgba(74,124,63,0.35); }
     .loading { text-align: center; padding: 60px 20px; color: #64748b; }
-    .spinner {
-      width: 40px; height: 40px;
-      border: 4px solid #e2e8f0;
-      border-top-color: #2563eb;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin: 0 auto 16px;
-    }
+    .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; }
+    .modal-backdrop.open { display: flex; align-items: flex-end; }
+    .modal-sheet { background: #fff; border-radius: 24px 24px 0 0; width: 100%; max-height: 75vh; display: flex; flex-direction: column; }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; border-bottom: 1px solid #f1f5f9; }
+    .modal-header h3 { font-size: 16px; font-weight: 700; color: #1e293b; }
+    .modal-close { font-size: 22px; cursor: pointer; color: #64748b; background: none; border: none; }
+    .modal-options { overflow-y: auto; flex: 1; }
+    .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: #334155; gap: 10px; }
+    .modal-option:active { background: #eff6ff; }
+    .modal-option.selected { background: var(--vert-clair); color: var(--vert); font-weight: 600; }
+    .modal-option .check { margin-left: auto; color: var(--vert); font-size: 18px; }
   </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-icon">🏗️</div>
-  <div>
-    <h1>Saisie de chantier</h1>
-    <p>Nouvelle entrée Baserow</p>
+  <div class="header-top">
+    <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
+    <div class="header-title">Saisie de chantier</div>
   </div>
+  <div class="header-bar"></div>
 </div>
 
 <div id="loading" class="loading">
@@ -234,106 +122,75 @@
   <p>Chargement des données…</p>
 </div>
 
-<div id="app" style="display:none">
-  <div class="form">
-
-    <!-- DATE -->
+<div id="main" style="display:none">
+  <div class="section">
+    <div class="section-title">📋 Informations générales</div>
     <div class="field">
       <label>Date</label>
       <input type="date" id="field-date" />
     </div>
-
-    <!-- MULTI-SELECTS -->
     <div class="field">
       <label>Collaborateur</label>
-      <div class="multiselect-box" onclick="openModal('Collaborateur')">
-        <div class="tags" id="tags-Collaborateur"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
+      <div class="selector" onclick="openModal('Collaborateur', null)">
+        <span class="selector-value empty" id="val-Collaborateur">Sélectionner…</span>
+        <span>▾</span>
+      </div>
+    </div>
+    <div class="field">
+      <label>Véhicule</label>
+      <div class="selector" onclick="openModal('Vehicules', null)">
+        <span class="selector-value empty" id="val-Vehicules">Sélectionner…</span>
+        <span>▾</span>
+      </div>
+    </div>
+    <div class="field">
+      <label>Chantier</label>
+      <div class="selector" onclick="openModal('Chantiers', null)">
+        <span class="selector-value empty" id="val-Chantiers">Sélectionner…</span>
+        <span>▾</span>
       </div>
     </div>
 
-    <div class="field">
-      <label>Véhicules</label>
-      <div class="multiselect-box" onclick="openModal('Véhicules')">
-        <div class="tags" id="tags-Véhicules"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
+  </div>
 
-    <div class="field">
-      <label>Chantiers</label>
-      <div class="multiselect-box" onclick="openModal('Chantiers')">
-        <div class="tags" id="tags-Chantiers"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
+  <div class="section">
+    <div class="section-title">⚙️ Tâches</div>
+    <div id="lignes-container"></div>
+    <button class="btn-add-ligne" onclick="ajouterLigne()">+ Ajouter une tâche</button>
+  </div>
 
-    <div class="field">
-      <label>Poste</label>
-      <div class="multiselect-box" onclick="openModal('Poste')">
-        <div class="tags" id="tags-Poste"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Type de tâches</label>
-      <div class="multiselect-box" onclick="openModal('Type de taches')">
-        <div class="tags" id="tags-Type de taches"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Sous-tâches</label>
-      <div class="multiselect-box" onclick="openModal('Sous Taches')">
-        <div class="tags" id="tags-Sous Taches"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Zones</label>
-      <div class="multiselect-box" onclick="openModal('Zones')">
-        <div class="tags" id="tags-Zones"><span class="placeholder">Sélectionner…</span></div>
-        <span class="chevron">▾</span>
-      </div>
-    </div>
-
-    <!-- HEURES -->
-    <div class="field">
-      <label>Heures Normales</label>
-      <div class="hours-row">
-        <input type="number" id="field-heures" placeholder="Ex: 7.5" step="0.5" min="0" />
-        <div class="hours-suffix">h</div>
-      </div>
-    </div>
-
-    <div class="info-box">
-      ℹ️ <span><strong>Total Heures</strong> est calculé automatiquement par Baserow.</span>
-    </div>
-
-    <!-- NOTES -->
-    <div class="field">
-      <label>Notes</label>
-      <textarea id="field-notes" placeholder="Remarques, observations…"></textarea>
-    </div>
-
-    <button class="btn-submit" id="btn-submit" onclick="submitForm()">
-      ☁️ Envoyer dans Baserow
-    </button>
-
-    <div style="height:40px"></div>
+  <div style="padding: 0 16px">
+    
+    <button class="btn-submit" id="btn-submit" onclick="submitForm()">✅ Valider la saisie</button>
   </div>
 
   <div class="success" id="success">
-    <div class="success-icon">✅</div>
-    <h2>Enregistré !</h2>
-    <p>La saisie a bien été envoyée dans Baserow.</p>
+    <div class="success-header">
+      <div class="success-check">✅</div>
+      <h2>Saisie validée !</h2>
+      <p>Les informations ont bien été transmises.</p>
+    </div>
+    <div class="summary-card">
+      <div class="summary-title">📋 Récapitulatif</div>
+      <div class="summary-row"><span class="summary-label">Date</span><span class="summary-value" id="sum-date">—</span></div>
+      <div class="summary-row"><span class="summary-label">Collaborateur</span><span class="summary-value" id="sum-collab">—</span></div>
+      <div class="summary-row"><span class="summary-label">Véhicule</span><span class="summary-value" id="sum-vehicule">—</span></div>
+      <div class="summary-row"><span class="summary-label">Chantier</span><span class="summary-value" id="sum-chantier">—</span></div>
+    </div>
+    <div class="summary-card" id="sum-taches-card">
+      <div class="summary-title">⚙️ Tâches saisies</div>
+      <div id="sum-taches"></div>
+      <div class="summary-total"><span>Total heures</span><span id="sum-total-h" class="summary-total-val">0h</span></div>
+    </div>
+    <div class="summary-stamp">
+      <div class="stamp-icon">🟢</div>
+      <div class="stamp-text">Données enregistrées dans Baserow</div>
+      <div class="stamp-time" id="sum-time"></div>
+    </div>
+    <button class="btn-new-saisie" onclick="nouvelleSession()">+ Nouvelle saisie</button>
   </div>
 </div>
 
-<!-- MODAL -->
 <div class="modal-backdrop" id="modal" onclick="closeModalOutside(event)">
   <div class="modal-sheet">
     <div class="modal-header">
@@ -341,176 +198,258 @@
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-options" id="modal-options"></div>
-    <div class="modal-footer">
-      <button class="btn-validate" onclick="closeModal()">Valider</button>
-    </div>
   </div>
 </div>
 
 <script>
-  // ============================================================
-  //  CONFIG — ton token et ta table Baserow
-  // ============================================================
-  const BASEROW_TOKEN = 'OQPkMO1c5o3o2jW7hEQzuR8zC1oDgsiE';
-  const TABLE_ID = '1014445';
-  const HEADERS = {
-    'Authorization': `Token ${BASEROW_TOKEN}`,
-    'Content-Type': 'application/json'
+  const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
+  const TABLE_SAISIE = '1014445';
+
+  const TABLES = {
+    Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
+    Vehicules:     { id: '1017158', field: 'Immatriculation', label: 'Véhicule' },
+    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier' },
+    TypeTaches:    { id: '1014444', field: 'Libellé',         label: 'Type de tâche' },
+    SousTaches:    { id: '1015608', field: 'Libellé',         label: 'Sous-tâche' },
+    Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
   };
 
-  // État global
-  const fieldOptions = {};
-  const selected = {};
-  let currentField = null;
+  const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
+  const tableData = {};
 
-  // ============================================================
-  //  Init — charge les options depuis Baserow
-  // ============================================================
-  async function init() {
-    // Date par défaut = aujourd'hui
-    const today = new Date().toISOString().split('T')[0];
-    document.getElementById('field-date').value = today;
+  // Sélections globales (une seule valeur)
+  const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null, Zones: null };
 
+  // Lignes de tâches
+  let lignes = [];
+  let ligneCounter = 0;
+  let modalKey = null;
+  let modalLigneId = null;
+
+  async function loadTable(key) {
+    const { id, field } = TABLES[key];
     try {
-      const res = await fetch(
-        `https://api.baserow.io/api/database/fields/table/${TABLE_ID}/`,
-        { headers: HEADERS }
-      );
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`, { headers: HEADERS });
       const data = await res.json();
-      data.forEach(field => {
-        if (field.type === 'multiple_select' || field.type === 'single_select') {
-          fieldOptions[field.name] = field.select_options || [];
-          selected[field.name] = [];
-        }
-      });
-    } catch(e) {
-      console.error('Erreur chargement:', e);
-    }
-
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
+      tableData[key] = (data.results || []).map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
+    } catch(e) { tableData[key] = []; }
   }
 
-  // ============================================================
-  //  Modal multi-select
-  // ============================================================
-  function openModal(fieldName) {
-    currentField = fieldName;
-    document.getElementById('modal-title').textContent = fieldName;
-    renderOptions(fieldName);
+  async function init() {
+    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
+    await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
+    ajouterLigne();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+  }
+
+  function ajouterLigne() {
+    const id = ++ligneCounter;
+    lignes.push({ id, typeTache: null, sousTache: null, zone: null, heures: '', notes: '' });
+    renderLignes();
+  }
+
+  function supprimerLigne(id) {
+    if (lignes.length === 1) { alert('Il faut au moins une tâche.'); return; }
+    lignes = lignes.filter(l => l.id !== id);
+    renderLignes();
+  }
+
+  function renderLignes() {
+    const container = document.getElementById('lignes-container');
+    container.innerHTML = lignes.map((l, i) => `
+      <div class="ligne-card">
+        <div class="ligne-header">
+          <span class="ligne-num">Tâche ${i+1}</span>
+          <button class="btn-delete" onclick="supprimerLigne(${l.id})">🗑 Supprimer</button>
+        </div>
+        <div class="field">
+          <label>Type de tâche</label>
+          <div class="selector" onclick="openModal('TypeTaches', ${l.id})">
+            <span class="selector-value ${l.typeTache ? '' : 'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache ? l.typeTache.value : 'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Sous-tâche</label>
+          <div class="selector" onclick="openModal('SousTaches', ${l.id})">
+            <span class="selector-value ${l.sousTache ? '' : 'empty'}" id="val-SousTaches-${l.id}">${l.sousTache ? l.sousTache.value : 'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field" id="zone-field-${l.id}" style="display:${l.typeTache && l.typeTache.value === 'Pose' ? 'block' : 'none'}">
+          <label>Zone</label>
+          <div class="selector" onclick="openModal('Zones', ${l.id})">
+            <span class="selector-value ${l.zone ? '' : 'empty'}" id="val-Zones-${l.id}">${l.zone ? l.zone.value : 'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Heures</label>
+          <div class="hours-row">
+            <input type="number" placeholder="Ex: 3.5" step="0.5" min="0" value="${l.heures}"
+              oninput="updateHeures(${l.id}, this.value)" />
+            <div class="hours-suffix">h</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <textarea placeholder="Remarques…" oninput="updateNotes(${l.id}, this.value)">${l.notes || ''}</textarea>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function updateHeures(ligneId, val) {
+    const l = lignes.find(l => l.id === ligneId);
+    if (l) l.heures = val;
+  }
+
+  function updateNotes(ligneId, val) {
+    const l = lignes.find(l => l.id === ligneId);
+    if (l) l.notes = val;
+  }
+
+  function openModal(key, ligneId) {
+    modalKey = key;
+    modalLigneId = ligneId;
+    document.getElementById('modal-title').textContent = TABLES[key].label;
+    renderModalOptions();
     document.getElementById('modal').classList.add('open');
   }
 
   function closeModal() {
     document.getElementById('modal').classList.remove('open');
-    renderTags(currentField);
-    currentField = null;
+    modalKey = null; modalLigneId = null;
   }
 
-  function closeModalOutside(e) {
-    if (e.target === document.getElementById('modal')) closeModal();
+  function closeModalOutside(e) { if (e.target === document.getElementById('modal')) closeModal(); }
+
+  function getCurrentValue() {
+    if (modalLigneId !== null) {
+      const l = lignes.find(l => l.id === modalLigneId);
+      if (!l) return null;
+      return modalKey === 'TypeTaches' ? l.typeTache : l.sousTache;
+    }
+    return globalSelected[modalKey];
   }
 
-  function renderOptions(fieldName) {
-    const options = fieldOptions[fieldName] || [];
-    const sel = selected[fieldName] || [];
+  function renderModalOptions() {
+    const options = tableData[modalKey] || [];
+    const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-
     if (options.length === 0) {
       container.innerHTML = '<div style="padding:20px;color:#94a3b8;text-align:center">Aucune option trouvée</div>';
       return;
     }
-
     container.innerHTML = options.map(opt => {
-      const isSel = sel.find(s => s.id === opt.id);
-      return `
-        <div class="modal-option ${isSel ? 'selected' : ''}" onclick="toggleOption('${fieldName}', ${opt.id}, '${opt.value.replace(/'/g, "\\'")}')">
-          ${opt.value}
-          ${isSel ? '<span class="check">✓</span>' : ''}
-        </div>
-      `;
+      const isSel = current && current.id === opt.id;
+      return `<div class="modal-option ${isSel?'selected':''}" onclick="selectOption(${opt.id},'${String(opt.value).replace(/'/g,"\\'")}')">
+        ${opt.value}${isSel?'<span class="check">✓</span>':''}
+      </div>`;
     }).join('');
   }
 
-  function toggleOption(fieldName, id, value) {
-    if (!selected[fieldName]) selected[fieldName] = [];
-    const idx = selected[fieldName].findIndex(s => s.id === id);
-    if (idx >= 0) selected[fieldName].splice(idx, 1);
-    else selected[fieldName].push({ id, value });
-    renderOptions(fieldName);
-  }
-
-  function renderTags(fieldName) {
-    const tagsEl = document.getElementById(`tags-${fieldName}`);
-    if (!tagsEl) return;
-    const sel = selected[fieldName] || [];
-    if (sel.length === 0) {
-      tagsEl.innerHTML = '<span class="placeholder">Sélectionner…</span>';
+  function selectOption(id, value) {
+    const obj = { id, value };
+    if (modalLigneId !== null) {
+      const l = lignes.find(l => l.id === modalLigneId);
+      if (l) {
+        if (modalKey === 'TypeTaches') {
+          l.typeTache = obj;
+          // Affiche/cache le champ Zone selon si c'est "Pose"
+          const zoneField = document.getElementById(`zone-field-${modalLigneId}`);
+          if (zoneField) zoneField.style.display = value === 'Pose' ? 'block' : 'none';
+          if (value !== 'Pose') { l.zone = null; const zv = document.getElementById(`val-Zones-${modalLigneId}`); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
+        } else if (modalKey === 'SousTaches') l.sousTache = obj;
+        else if (modalKey === 'Zones') l.zone = obj;
+        const el = document.getElementById(`val-${modalKey}-${modalLigneId}`);
+        if (el) { el.textContent = value; el.classList.remove('empty'); }
+      }
     } else {
-      tagsEl.innerHTML = sel.map(s => `<span class="tag">${s.value}</span>`).join('');
+      globalSelected[modalKey] = obj;
+      const el = document.getElementById(`val-${modalKey}`);
+      if (el) { el.textContent = value; el.classList.remove('empty'); }
     }
+    closeModal();
   }
 
-  // ============================================================
-  //  Envoi du formulaire
-  // ============================================================
   async function submitForm() {
-    const heures = document.getElementById('field-heures').value;
-    if (!heures) {
-      alert('Veuillez saisir les heures normales.');
-      return;
-    }
+    if (!globalSelected.Collaborateur) { alert('Veuillez sélectionner un collaborateur.'); return; }
+    if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
+    const totalH = lignes.reduce((s, l) => s + (parseFloat(l.heures)||0), 0);
+    if (totalH === 0) { alert('Veuillez saisir les heures pour au moins une tâche.'); return; }
 
     const btn = document.getElementById('btn-submit');
-    btn.disabled = true;
-    btn.textContent = 'Envoi en cours…';
+    btn.disabled = true; btn.textContent = 'Envoi en cours…';
 
-    const payload = {
-      Date: document.getElementById('field-date').value || null,
-      Collaborateur: (selected['Collaborateur'] || []).map(o => o.id),
-      Véhicules: (selected['Véhicules'] || []).map(o => o.id),
-      Chantiers: (selected['Chantiers'] || []).map(o => o.id),
-      Poste: (selected['Poste'] || []).map(o => o.id),
-      'Type de taches': (selected['Type de taches'] || []).map(o => o.id),
-      'Sous Taches': (selected['Sous Taches'] || []).map(o => o.id),
-      Zones: (selected['Zones'] || []).map(o => o.id),
-      'Heures Normales': parseFloat(heures) || 0,
-      Notes: document.getElementById('field-notes').value || '',
-    };
+    const promises = lignes.map(l => {
+      const payload = {
+        Date: document.getElementById('field-date').value || null,
+        Collaborateur: globalSelected.Collaborateur ? [globalSelected.Collaborateur.id] : [],
+        'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
+        Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
+        Zones: l.zone ? [l.zone.id] : [],
+        'Type de taches': l.typeTache ? [l.typeTache.id] : [],
+        'Sous Taches': l.sousTache ? [l.sousTache.id] : [],
+        'Heures Normales': parseFloat(l.heures) || 0,
+        Notes: l.notes || '',
+      };
+      return fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true`,
+        { method:'POST', headers:HEADERS, body:JSON.stringify(payload) });
+    });
 
     try {
-      const res = await fetch(
-        `https://api.baserow.io/api/database/rows/table/${TABLE_ID}/?user_field_names=true`,
-        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) }
-      );
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(JSON.stringify(err));
+      const results = await Promise.all(promises);
+      for (const r of results) {
+        if (!r.ok) { const err = await r.json(); throw new Error(JSON.stringify(err)); }
       }
+      // Remplir le résumé
+      const now = new Date();
+      document.getElementById('sum-date').textContent = document.getElementById('field-date').value || '—';
+      document.getElementById('sum-collab').textContent = globalSelected.Collaborateur ? globalSelected.Collaborateur.value : '—';
+      document.getElementById('sum-vehicule').textContent = globalSelected.Vehicules ? globalSelected.Vehicules.value : '—';
+      document.getElementById('sum-chantier').textContent = globalSelected.Chantiers ? globalSelected.Chantiers.value : '—';
+      document.getElementById('sum-time').textContent = 'Le ' + now.toLocaleDateString('fr-FR') + ' à ' + now.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      
+      let totalH = 0;
+      const tachesHTML = lignes.map((l, i) => {
+        const h = parseFloat(l.heures) || 0;
+        totalH += h;
+        return `<div class="summary-tache">
+          <div class="summary-tache-title">Tâche ${i+1}</div>
+          ${l.typeTache ? `<div class="summary-tache-row"><span>Type</span><span>${l.typeTache.value}</span></div>` : ''}
+          ${l.sousTache ? `<div class="summary-tache-row"><span>Sous-tâche</span><span>${l.sousTache.value}</span></div>` : ''}
+          ${l.zone ? `<div class="summary-tache-row"><span>Zone</span><span>${l.zone.value}</span></div>` : ''}
+          ${l.notes ? `<div class="summary-tache-row"><span>Notes</span><span>${l.notes}</span></div>` : ''}
+          <div class="summary-tache-row"><span>Heures</span><span><strong>${h}h</strong></span></div>
+        </div>`;
+      }).join('');
+      document.getElementById('sum-taches').innerHTML = tachesHTML;
+      document.getElementById('sum-total-h').textContent = totalH + 'h';
 
-      // Succès
-      document.querySelector('.form').style.display = 'none';
+      document.getElementById('main').style.display = 'none';
       document.getElementById('success').classList.add('show');
-      setTimeout(() => {
-        document.getElementById('success').classList.remove('show');
-        document.querySelector('.form').style.display = 'block';
-        // Reset
-        document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
-        document.getElementById('field-heures').value = '';
-        document.getElementById('field-notes').value = '';
-        Object.keys(selected).forEach(k => {
-          selected[k] = [];
-          renderTags(k);
-        });
-        btn.disabled = false;
-        btn.innerHTML = '☁️ Envoyer dans Baserow';
-      }, 2500);
-
+      document.getElementById('success').style.display = 'flex';
+      btn.disabled = false; btn.innerHTML = '✅ Valider la saisie';
     } catch(e) {
-      alert("Erreur lors de l'envoi. Vérifiez votre connexion et votre token API.\n\n" + e.message);
-      btn.disabled = false;
-      btn.innerHTML = '☁️ Envoyer dans Baserow';
+      alert("Erreur : " + e.message);
+      btn.disabled = false; btn.innerHTML = '✅ Valider la saisie';
     }
+  }
+
+  function nouvelleSession() {
+    document.getElementById('success').classList.remove('show');
+    document.getElementById('success').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
+    Object.keys(globalSelected).forEach(k => { globalSelected[k] = null; });
+    ['Collaborateur','Vehicules','Chantiers'].forEach(k => {
+      const el = document.getElementById(`val-${k}`);
+      if (el) { el.textContent = 'Sélectionner…'; el.classList.add('empty'); }
+    });
+    lignes = []; ligneCounter = 0; ajouterLigne();
+    window.scrollTo(0, 0);
   }
 
   init();
