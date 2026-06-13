@@ -774,10 +774,13 @@
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
         const data = await res.json();
         const chantierId = parseInt(creneauChantier.id);
-        tableData[key] = (data.results || []).map(row => ({
+        const allRows = (data.results || []).map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id)
-        })).filter(opt => opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
+        }));
+        const filtered = allRows.filter(opt => opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
+        console.log('Fetch', key, '- total:', allRows.length, '- avecLien:', allRows.filter(o=>o.chantiersIds.length>0).length, '- filtré:', filtered.length, '- chantierId:', chantierId, '- ex lien:', allRows.find(o=>o.chantiersIds.length>0)?.chantiersIds);
+        tableData[key] = filtered;
       } catch(e) { console.log('Erreur', key, e); }
     }
     renderModalOptions();
