@@ -764,11 +764,21 @@
     showPage('page-login');
   }
 
-  function openModal(key, ligneId) {
+  async function openModal(key, ligneId) {
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
-
+    if ((key === 'TypeTaches' || key === 'SousTaches') && creneauChantier) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const data = await res.json();
+        const chantierId = parseInt(creneauChantier.id);
+        tableData[key] = (data.results || []).map(row => ({
+          id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
+          chantiersIds: (row['lien vers chantier'] || []).map(c => c.id)
+        })).filter(opt => opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
+      } catch(e) {}
+    }
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
@@ -810,7 +820,11 @@
     const options = getOptionsFiltrees(modalKey);
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-
+    // Afficher nb options dans le titre pour debug
+    const titleEl = document.getElementById('modal-title');
+    if (titleEl && (modalKey === 'SousTaches' || modalKey === 'TypeTaches')) {
+      titleEl.textContent = TABLES[modalKey].label + ' (' + options.length + '/' + (tableData[modalKey]||[]).length + ')';
+    }
     if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
     container.innerHTML = options.map(opt => {
       const isSel = current && current.id === opt.id;
@@ -1751,14 +1765,11 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    // Supprimer TOUS les service workers définitivement
+    // Désinscrire tous les SW existants puis réinscrire
     navigator.serviceWorker.getRegistrations().then(regs => {
       regs.forEach(r => r.unregister());
+      navigator.serviceWorker.register('sw.js').catch(() => {});
     });
-    // Vider tous les caches
-    if (window.caches) {
-      caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
-    }
   }
 </script>
 </body>
