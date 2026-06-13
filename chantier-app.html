@@ -750,8 +750,12 @@
   function getOptionsFiltrees(key) {
     const options = tableData[key] || [];
     if ((key !== 'TypeTaches' && key !== 'SousTaches') || !globalSelected.Chantiers) return options;
-    const chantierId = globalSelected.Chantiers.id;
-    return options.filter(opt => !opt.chantiersIds || opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
+    const chantierId = String(globalSelected.Chantiers.id);
+    const filtered = options.filter(opt => {
+      if (!opt.chantiersIds || opt.chantiersIds.length === 0) return true;
+      return opt.chantiersIds.map(String).includes(chantierId);
+    });
+    return filtered;
   }
 
   async function init() {
