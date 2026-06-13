@@ -773,10 +773,13 @@
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
         const data = await res.json();
         const chantierId = parseInt(creneauChantier.id);
-        tableData[key] = (data.results || []).map(row => ({
+        const allRows = (data.results || []).map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id)
-        })).filter(opt => opt.chantiersIds.includes(chantierId));
+        }));
+        const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
+        // Si aucune tâche liée à ce chantier, afficher tout
+        tableData[key] = linked.length > 0 ? linked : allRows;
       } catch(e) { console.log('Erreur', key, e); }
     }
     renderModalOptions();
