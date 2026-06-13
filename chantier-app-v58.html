@@ -768,6 +768,15 @@
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
+    // DEBUG
+    if (key === 'SousTaches' && globalSelected.Chantiers) {
+      const opts = tableData['SousTaches'] || [];
+      const avecNom = opts.filter(o => o.chantiersNoms && o.chantiersNoms.length > 0);
+      alert('Chantier: ' + globalSelected.Chantiers.value + 
+            '\nTotal ST: ' + opts.length + 
+            '\nST avec lien: ' + avecNom.length + 
+            '\nEx noms: ' + JSON.stringify(avecNom[0]?.chantiersNoms));
+    }
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
