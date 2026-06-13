@@ -740,7 +740,8 @@
         const obj = { id: row.id, value: row[field] || ('#' + row.id) };
         if (key === 'TypeTaches' || key === 'SousTaches') {
           const lien = row['lien vers chantier'] || row['Lien vers chantier'] || [];
-          obj.chantiersIds = Array.isArray(lien) ? lien.map(c => c.id) : [];
+          // Stocker les noms des chantiers liés (la valeur, pas l'ID de liaison)
+          obj.chantiersNoms = Array.isArray(lien) ? lien.map(c => c.value) : [];
         }
         return obj;
       });
@@ -750,12 +751,12 @@
   function getOptionsFiltrees(key) {
     const options = tableData[key] || [];
     if ((key !== 'TypeTaches' && key !== 'SousTaches') || !globalSelected.Chantiers) return options;
-    const chantierId = String(globalSelected.Chantiers.id);
-    const filtered = options.filter(opt => {
-      if (!opt.chantiersIds || opt.chantiersIds.length === 0) return true;
-      return opt.chantiersIds.map(String).includes(chantierId);
+    // Comparer par nom du chantier
+    const chantierNom = globalSelected.Chantiers.value;
+    return options.filter(opt => {
+      if (!opt.chantiersNoms || opt.chantiersNoms.length === 0) return true;
+      return opt.chantiersNoms.includes(chantierNom);
     });
-    return filtered;
   }
 
   async function init() {
