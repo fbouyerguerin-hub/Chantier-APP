@@ -768,6 +768,7 @@
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
+    console.log('openModal:', key, 'creneauChantier:', JSON.stringify(creneauChantier));
     if ((key === 'TypeTaches' || key === 'SousTaches') && creneauChantier) {
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
@@ -777,7 +778,7 @@
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id)
         })).filter(opt => opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
-      } catch(e) {}
+      } catch(e) { console.log('Erreur', key, e); }
     }
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
