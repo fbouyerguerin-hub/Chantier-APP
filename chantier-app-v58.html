@@ -1663,6 +1663,11 @@
     if (n === 2 && !globalSelected.Chantiers) {
       alert('Veuillez sélectionner un chantier.'); return;
     }
+    if (n === 2 && globalSelected.Chantiers) {
+      const ch = globalSelected.Chantiers;
+      const chData = (tableData['Chantiers'] || []).find(c => c.id === ch.id);
+      alert('Chantier: id=' + ch.id + ' value="' + ch.value + '"\nDans tableData: ' + JSON.stringify(chData));
+    }
     if (n === 3) {
       const dH = document.getElementById('creneau-debut-h').value;
       const fH = document.getElementById('creneau-fin-h').value;
