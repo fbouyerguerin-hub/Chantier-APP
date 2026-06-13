@@ -662,10 +662,35 @@
   function updateHeures(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.heures=val; }
   function updateNotes(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.notes=val; }
 
-  function openModal(key, ligneId) {
+  async function openModal(key, ligneId) {
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
+    const chantierSelectionne = globalSelected['Chantiers'];
+    if ((key === 'TypeTaches' || key === 'SousTaches') && chantierSelectionne) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const data = await res.json();
+        const chantierId = parseInt(chantierSelectionne.id);
+        const allRows = (data.results || []).map(row => ({
+          id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
+          chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
+          excludeIds: (row['exclure chantier'] || []).map(c => c.id),
+          typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
+        })).filter(opt => !opt.excludeIds.includes(chantierId));
+        const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
+        let rows = linked.length > 0 ? linked : allRows;
+        if (key === 'SousTaches' && modalLigneId !== null) {
+          const ligne = lignes.find(l => l.id === modalLigneId);
+          if (ligne && ligne.typeTache) {
+            const typeTacheId = parseInt(ligne.typeTache.id);
+            const linkedToType = rows.filter(opt => opt.typeTacheIds.includes(typeTacheId));
+            if (linkedToType.length > 0) rows = linkedToType;
+          }
+        }
+        tableData[key] = rows;
+      } catch(e) { console.log('Erreur filtre', key, e); }
+    }
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
