@@ -711,7 +711,7 @@
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
     Vehicules:     { id: '1017158', field: 'Immatriculation', label: 'Véhicule' },
-    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier', fieldPrimaire: 'Statue' },
+    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier' },
     TypeTaches:    { id: '1014444', field: 'Libellé',         label: 'Type de tâche' },
     SousTaches:    { id: '1015608', field: 'Libellé',         label: 'Sous-tâche' },
     Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
@@ -736,27 +736,8 @@
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`, { headers: HEADERS });
       const data = await res.json();
-      tableData[key] = (data.results || []).map(row => {
-        const obj = { id: row.id, value: row[field] || ('#' + row.id) };
-        if (key === 'Chantiers') {
-          obj.statue = row['Statue'] || '';
-        }
-        if (key === 'TypeTaches' || key === 'SousTaches') {
-          const lien = row['lien vers chantier'] || [];
-          obj.chantiersIds = Array.isArray(lien) ? lien.map(c => c.id) : [];
-        }
-        return obj;
-      });
+      tableData[key] = (data.results || []).map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
     } catch(e) { tableData[key] = []; }
-  }
-
-  function getOptionsFiltrees(key) {
-    const options = tableData[key] || [];
-    if ((key !== 'TypeTaches' && key !== 'SousTaches') || !creneauChantier) return options;
-    const chantierId = parseInt(creneauChantier.id);
-    return options.filter(opt =>
-      opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId)
-    );
   }
 
   async function init() {
@@ -768,7 +749,6 @@
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
-
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
@@ -792,7 +772,7 @@
 
   function filterOptions(query) {
     const q = query.toLowerCase().trim();
-    const options = getOptionsFiltrees(modalKey);
+    const options = tableData[modalKey] || [];
     const current = getCurrentValue();
     const filtered = q ? options.filter(o => o.value.toLowerCase().includes(q)) : options;
     const container = document.getElementById('modal-options');
@@ -807,14 +787,9 @@
   }
 
   function renderModalOptions() {
-    const options = getOptionsFiltrees(modalKey);
+    const options = tableData[modalKey] || [];
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-    // Compteur dans le titre
-    if (modalKey === 'SousTaches' || modalKey === 'TypeTaches') {
-      const t = document.getElementById('modal-title');
-      if (t) t.textContent = TABLES[modalKey].label + ' (' + options.length + '/' + (tableData[modalKey]||[]).length + ')';
-    }
     if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
     container.innerHTML = options.map(opt => {
       const isSel = current && current.id === opt.id;
@@ -835,16 +810,7 @@
       } else if (modalKey === 'SousTaches') creneauSousTache = obj;
       else if (modalKey === 'Zones') creneauZone = obj;
       else if (modalKey === 'Vehicules') globalSelected.Vehicules = obj;
-      else if (modalKey === 'Chantiers') {
-        creneauChantier = obj;
-        // Reset tâche et sous-tâche car elles dépendent du chantier
-        creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
-        ['TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
-          const el2 = document.getElementById('val-' + k);
-          if (el2) { el2.textContent = 'Sélectionner…'; el2.classList.add('empty'); }
-        });
-        document.getElementById('zone-field-creneau').style.display = 'none';
-      }
+      else if (modalKey === 'Chantiers') globalSelected.Chantiers = obj;
       const el = document.getElementById(`val-${modalKey}-creneau`);
       if (el) { el.textContent = value; el.classList.remove('empty'); }
     } else {
@@ -866,7 +832,6 @@
   let agendaDate = new Date();
   let agendaSaisies = [];
   let creneauDate = null;
-  let creneauChantier = null;
   let creneauTypeTache = null;
   let creneauSousTache = null;
   let creneauZone = null;
@@ -1026,8 +991,8 @@
     document.getElementById('creneau-fin-m').value = String(m === 0 ? 0 : m >= 45 ? 45 : m >= 30 ? 30 : 15).padStart(2,'0');
 
     // Reset sélecteurs et étapes
+    globalSelected.Chantiers = null;
     globalSelected.Vehicules = null;
-    creneauChantier = null;
     creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
     ['Vehicules-creneau','Chantiers-creneau','TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
       const el = document.getElementById(`val-${k}`);
@@ -1059,7 +1024,7 @@
     const debutM = document.getElementById('creneau-debut-m').value;
     const finH = document.getElementById('creneau-fin-h').value;
     const finM = document.getElementById('creneau-fin-m').value;
-    if (!creneauChantier) { alert('Veuillez sélectionner un chantier.'); return; }
+    if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
     if (!debutH || !finH) { alert('Veuillez saisir les heures.'); return; }
     const debut = `${debutH}:${debutM}`;
     const fin = `${finH}:${finM}`;
@@ -1086,7 +1051,7 @@
         'Heure fin': fin,
         Collaborateur: feuilleCollab ? [feuilleCollab.id] : [],
         'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
-        Chantiers: creneauChantier ? [creneauChantier.id] : [],
+        Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
         'Type de taches': creneauTypeTache ? [creneauTypeTache.id] : [],
         'Sous Taches': creneauSousTache ? [creneauSousTache.id] : [],
         Zones: creneauZone ? [creneauZone.id] : [],
@@ -1107,7 +1072,7 @@
       const fM2 = document.getElementById('creneau-fin-m').value;
       const notes2 = document.getElementById('creneau-notes').value;
       const recapMsg = '✅ Saisie enregistrée !\n\n'
-        + '🏗 ' + (creneauChantier?.value || '—') + '\n'
+        + '🏗 ' + (globalSelected.Chantiers?.value || '—') + '\n'
         + '⏰ ' + dH + 'h' + dM + ' → ' + fH2 + 'h' + fM2 + ' (' + duree + 'h)\n'
         + '🚗 ' + (globalSelected.Vehicules?.value || '—') + '\n'
         + '⚙️ ' + (creneauTypeTache?.value || '—') + ' › ' + (creneauSousTache?.value || '—')
@@ -1659,7 +1624,7 @@
 
   function goEtape(n) {
     // Validation avant de passer à l'étape suivante
-    if (n === 2 && !creneauChantier) {
+    if (n === 2 && !globalSelected.Chantiers) {
       alert('Veuillez sélectionner un chantier.'); return;
     }
     if (n === 3) {
@@ -1675,7 +1640,7 @@
       if (!creneauTypeTache) { alert('Veuillez sélectionner un type de tâche.'); return; }
       if (!creneauSousTache) { alert('Veuillez sélectionner une sous-tâche.'); return; }
       // Afficher récap
-      const chantier = creneauChantier?.value || '—';
+      const chantier = globalSelected.Chantiers?.value || '—';
       const dH = document.getElementById('creneau-debut-h').value;
       const dM = document.getElementById('creneau-debut-m').value;
       const fH = document.getElementById('creneau-fin-h').value;
@@ -1755,11 +1720,7 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    // Désinscrire tous les SW existants puis réinscrire
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      regs.forEach(r => r.unregister());
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    });
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 </script>
 </body>
