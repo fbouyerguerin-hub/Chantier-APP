@@ -776,7 +776,7 @@
         tableData[key] = (data.results || []).map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id)
-        })).filter(opt => opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId));
+        })).filter(opt => opt.chantiersIds.includes(chantierId));
       } catch(e) { console.log('Erreur', key, e); }
     }
     renderModalOptions();
