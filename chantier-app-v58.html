@@ -768,8 +768,7 @@
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
-    // DEBUG - toujours afficher
-    alert('openModal appelé: ' + key + ' | chantier: ' + (globalSelected.Chantiers ? globalSelected.Chantiers.value : 'NULL'));
+
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
@@ -1021,7 +1020,6 @@
     document.getElementById('creneau-fin-m').value = String(m === 0 ? 0 : m >= 45 ? 45 : m >= 30 ? 30 : 15).padStart(2,'0');
 
     // Reset sélecteurs et étapes
-    globalSelected.Chantiers = null;
     globalSelected.Vehicules = null;
     creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
     ['Vehicules-creneau','Chantiers-creneau','TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
