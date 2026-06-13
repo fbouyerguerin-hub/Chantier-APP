@@ -25,11 +25,11 @@
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--gris-clair); }
 
     /* HEADER */
-    .header { background: #1e2420; padding: 0; position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 4px rgba(0,0,0,0.2); display: none; }
-    .header-top { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; }
-    .header-logo { height: 36px; width: auto; filter: brightness(1.1); }
-    .header-title { font-size: 12px; font-weight: 600; color: #e0e0e0; text-align: right; letter-spacing: 0.3px; }
-    .header-bar { height: 2px; background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 100%); }
+    .header { background: linear-gradient(135deg, #2c2c2c 0%, #3a3a3a 60%, #4a5240 100%); padding: 0; position: sticky; top: 0; z-index: 10; box-shadow: 0 3px 12px rgba(0,0,0,0.35); display: none; }
+    .header-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; }
+    .header-logo { height: 78px; width: auto; filter: brightness(1.1); }
+    .header-title { font-size: 13px; font-weight: 700; color: #fff; text-align: right; letter-spacing: 0.3px; }
+    .header-bar { height: 4px; background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%); }
 
     /* SECTIONS */
     .section { background: #fff; border-radius: 16px; margin: 16px; padding: 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
@@ -118,12 +118,12 @@
     .login-card input:focus { border-color: var(--vert); background: #fff; }
 
     /* NAVIGATION BAS */
-    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #1e2420; display: none; z-index: 20; box-shadow: 0 -1px 0 rgba(255,255,255,0.05); padding-bottom: env(safe-area-inset-bottom); }
-    .nav-btn { flex: 1; padding: 10px 4px 12px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; border: none; background: none; color: #64748b; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; transition: color 0.2s; }
+    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2c2c2c; display: none; z-index: 20; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); }
+    .nav-btn { flex: 1; padding: 12px 8px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; border: none; background: none; color: #94a3b8; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
     .nav-btn.active { color: var(--beige); }
-    .nav-btn .nav-icon { font-size: 20px; }
-    .nav-bar { height: 2px; background: var(--beige); position: absolute; top: 0; transition: left 0.3s; width: 20%; }
-    body { padding-bottom: 65px; }
+    .nav-btn .nav-icon { font-size: 22px; }
+    .nav-bar { height: 3px; background: linear-gradient(90deg, var(--beige), var(--vert)); position: absolute; top: 0; transition: left 0.3s; width: 50%; }
+    body { padding-bottom: 70px; }
 
     /* FEUILLE D'HEURES */
     .mois-selector { display: flex; align-items: center; justify-content: space-between; background: #fff; margin: 16px; border-radius: 14px; padding: 14px 16px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); border-top: 3px solid var(--beige); }
@@ -191,40 +191,6 @@
     .planning-cell-vide { font-size: 11px; color: #ccc; font-style: italic; text-align: center; padding-top: 8px; }
     .planning-semaine-nav { display: flex; justify-content: space-between; align-items: center; background: #fff; margin: 0 16px 8px; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); }
     .planning-semaine-label { font-size: 13px; font-weight: 700; color: var(--gris); }
-
-    /* AGENDA */
-    .agenda-nav { display: flex; align-items: center; justify-content: space-between; background: #fff; margin: 8px 12px; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border-left: 3px solid var(--vert); }
-    .agenda-nav-btn { background: var(--vert-clair); border: none; border-radius: 6px; padding: 6px 12px; font-size: 16px; cursor: pointer; color: var(--vert); font-weight: 700; }
-    .agenda-semaine-label { font-size: 12px; font-weight: 700; color: var(--gris); }
-    .agenda-wrap { margin: 0 12px 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; overflow-y: auto; max-height: calc(100vh - 180px); border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); background: #fff; }
-    .agenda-grid { display: grid; min-width: 340px; position: relative; }
-    .agenda-header-row { display: grid; position: sticky; top: 0; z-index: 5; background: #fff; }
-    .agenda-time-col { width: 36px; min-width: 36px; }
-    .agenda-day-header { background: var(--vert); color: #fff; padding: 10px 2px; text-align: center; border-right: 1px solid rgba(255,255,255,0.15); }
-    .agenda-day-header.today { background: var(--beige); }
-    .agenda-day-nom { font-size: 12px; font-weight: 800; letter-spacing: 0.5px; }
-    .agenda-day-date { font-size: 11px; opacity: 0.85; margin-top: 2px; }
-    .agenda-body { display: grid; }
-    .agenda-row { display: grid; border-bottom: 1px solid #f0f0f0; min-height: 20px; }
-    .agenda-row.heure-pleine { border-bottom: 1px solid #ddd; }
-    .agenda-time-label { width: 36px; min-width: 36px; font-size: 9px; color: #bbb; padding: 2px 4px; text-align: right; font-weight: 600; line-height: 1; }
-    .agenda-cell { border-right: 1px solid #f0f0f0; cursor: pointer; position: relative; min-height: 20px; transition: background 0.15s; }
-    .agenda-cell:hover { background: #f0f7ef; }
-    .agenda-cell:active { background: var(--vert-clair); }
-    .agenda-cell.has-event { background: transparent; }
-    .agenda-event { position: absolute; left: 2px; right: 2px; background: var(--vert); border-radius: 4px; padding: 3px 5px; font-size: 10px; color: #fff; font-weight: 600; overflow: hidden; cursor: pointer; z-index: 3; box-shadow: 0 1px 3px rgba(74,124,63,0.3); }
-    .agenda-event-title { font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .agenda-event-time { font-size: 9px; opacity: 0.8; }
-    .agenda-now-line { position: absolute; left: 0; right: 0; height: 2px; background: #e74c3c; z-index: 4; pointer-events: none; }
-    .agenda-now-line::before { content: ''; position: absolute; left: 36px; top: -4px; width: 8px; height: 8px; background: #e74c3c; border-radius: 50%; }
-
-    /* ÉTAPES FORMULAIRE */
-    .etape-dot { flex: 1; height: 4px; border-radius: 2px; background: #e2e8f0; transition: background 0.3s; }
-    .etape-dot.active { background: var(--vert); }
-    .etape-dot.done { background: var(--beige); }
-    .etape-content { padding-bottom: 4px; }
-    .btn-etape-next { flex: 2; background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; border: none; border-radius: 12px; padding: 15px; font-size: 15px; font-weight: 700; cursor: pointer; }
-    .btn-etape-back { flex: 1; background: #f1f5f9; border: none; border-radius: 12px; padding: 15px; font-size: 15px; font-weight: 600; color: var(--gris-moyen); cursor: pointer; }
 
     /* IMPRESSION */
     .btn-print { background: rgba(255,255,255,0.15); border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: #fff; font-weight: 600; }
@@ -316,154 +282,42 @@
   </div>
 </div>
 
-<!-- PAGE FORMULAIRE AGENDA -->
+<!-- PAGE FORMULAIRE -->
 <div id="page-form" class="page">
 
-  <!-- Navigation semaine -->
-  <div class="agenda-nav">
-    <button class="agenda-nav-btn" onclick="changerSemaineAgenda(-1)">‹</button>
-    <div style="flex:1;text-align:center">
-      <div class="agenda-semaine-label" id="agenda-semaine-label">—</div>
+  <div class="section">
+    <div class="section-title">📋 Informations générales</div>
+    <div class="field">
+      <label>Date</label>
+      <input type="date" id="field-date" />
     </div>
-    <button class="agenda-nav-btn" onclick="changerSemaineAgenda(1)">›</button>
+
+    <div class="field">
+      <label>Véhicule</label>
+      <div class="selector" onclick="openModal('Vehicules', null)">
+        <span class="selector-value empty" id="val-Vehicules">Sélectionner…</span>
+        <span>▾</span>
+      </div>
+    </div>
+    <div class="field">
+      <label>Chantier</label>
+      <div class="selector" onclick="openModal('Chantiers', null)">
+        <span class="selector-value empty" id="val-Chantiers">Sélectionner…</span>
+        <span>▾</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Grille agenda -->
-  <div class="agenda-wrap">
-    <div class="agenda-grid" id="agenda-grid"></div>
+  <div class="section">
+    <div class="section-title">⚙️ Tâches</div>
+    <div id="lignes-container"></div>
+    <button class="btn-add-ligne" onclick="ajouterLigne()">+ Ajouter une tâche</button>
   </div>
 
-</div>
-
-<!-- MODAL SAISIE CRÉNEAU ÉTAPES -->
-<div class="modal-backdrop" id="modal-creneau" onclick="closeModalCreneau(event)">
-  <div class="modal-sheet">
-    <div class="modal-header">
-      <h3 id="modal-creneau-title">Nouvelle saisie</h3>
-      <button class="modal-close" onclick="closeModalCreneau()">✕</button>
-    </div>
-    <div style="display:flex;padding:0 20px 12px;gap:6px">
-      <div class="etape-dot active" id="dot-1"></div>
-      <div class="etape-dot" id="dot-2"></div>
-      <div class="etape-dot" id="dot-3"></div>
-      <div class="etape-dot" id="dot-4"></div>
-    </div>
-
-    <!-- ÉTAPE 1 : Chantier -->
-    <div id="etape-1">
-      <div style="text-align:center;padding:8px 20px 16px">
-        <div style="font-size:32px;margin-bottom:8px">🏗</div>
-        <div style="font-size:16px;font-weight:800;color:var(--gris)">Quel chantier ?</div>
-      </div>
-      <div style="padding:0 20px">
-        <div class="selector" onclick="openModal('Chantiers', 'creneau')">
-          <span class="selector-value empty" id="val-Chantiers-creneau">Sélectionner un chantier…</span>
-          <span>▾</span>
-        </div>
-      </div>
-      <div style="padding:16px 20px 20px;display:flex;gap:10px">
-        <button class="btn-etape-next" onclick="goEtape(2)">Suivant →</button>
-      </div>
-    </div>
-
-    <!-- ÉTAPE 2 : Heures -->
-    <div id="etape-2" style="display:none">
-      <div style="text-align:center;padding:8px 20px 16px">
-        <div style="font-size:32px;margin-bottom:8px">⏰</div>
-        <div style="font-size:16px;font-weight:800;color:var(--gris)">Quelle plage horaire ?</div>
-        <div style="font-size:12px;color:var(--gris-moyen);margin-top:4px" id="etape2-date"></div>
-      </div>
-      <div style="padding:0 20px">
-        <div class="field">
-          <label>Heure de début</label>
-          <div style="display:flex;gap:8px">
-            <select id="creneau-debut-h" style="flex:1;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none"><option value="">h</option><option value="07">7h</option><option value="08">8h</option><option value="09">9h</option><option value="10">10h</option><option value="11">11h</option><option value="12">12h</option><option value="13">13h</option><option value="14">14h</option><option value="15">15h</option><option value="16">16h</option><option value="17">17h</option><option value="18">18h</option><option value="19">19h</option></select>
-            <select id="creneau-debut-m" style="flex:1;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none"><option value="00">00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option></select>
-          </div>
-        </div>
-        <div class="field">
-          <label>Heure de fin</label>
-          <div style="display:flex;gap:8px">
-            <select id="creneau-fin-h" style="flex:1;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none"><option value="">h</option><option value="07">7h</option><option value="08">8h</option><option value="09">9h</option><option value="10">10h</option><option value="11">11h</option><option value="12">12h</option><option value="13">13h</option><option value="14">14h</option><option value="15">15h</option><option value="16">16h</option><option value="17">17h</option><option value="18">18h</option><option value="19">19h</option></select>
-            <select id="creneau-fin-m" style="flex:1;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none"><option value="00">00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option></select>
-          </div>
-        </div>
-      </div>
-      <div style="padding:8px 20px 20px;display:flex;gap:10px">
-        <button class="btn-etape-back" onclick="goEtape(1)">← Retour</button>
-        <button class="btn-etape-next" onclick="goEtape(3)">Suivant →</button>
-      </div>
-    </div>
-
-    <!-- ÉTAPE 3 : Véhicule + Tâche -->
-    <div id="etape-3" style="display:none">
-      <div style="text-align:center;padding:8px 20px 16px">
-        <div style="font-size:32px;margin-bottom:8px">⚙️</div>
-        <div style="font-size:16px;font-weight:800;color:var(--gris)">Détails de la saisie</div>
-      </div>
-      <div style="padding:0 20px;overflow-y:auto;max-height:45vh">
-        <div class="field">
-          <label>Véhicule</label>
-          <div class="selector" onclick="openModal('Vehicules', 'creneau')">
-            <span class="selector-value empty" id="val-Vehicules-creneau">Sélectionner…</span>
-            <span>▾</span>
-          </div>
-        </div>
-        <div class="field">
-          <label>Type de tâche</label>
-          <div class="selector" onclick="openModal('TypeTaches', 'creneau')">
-            <span class="selector-value empty" id="val-TypeTaches-creneau">Sélectionner…</span>
-            <span>▾</span>
-          </div>
-        </div>
-        <div class="field">
-          <label>Sous-tâche</label>
-          <div class="selector" onclick="openModal('SousTaches', 'creneau')">
-            <span class="selector-value empty" id="val-SousTaches-creneau">Sélectionner…</span>
-            <span>▾</span>
-          </div>
-        </div>
-        <div class="field" id="zone-field-creneau" style="display:none">
-          <label>Zone</label>
-          <div style="background:#fffbe6;border:1px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:11px;color:#7a6a3a;margin-bottom:8px;line-height:1.7">
-            Z1a → 0 à 5 km | Z1b → 5 à 10 km | Z2 → 10 à 20 km | Z3 → 20 à 30 km<br>
-            Z4 → 30 à 40 km | Z5 → 40 à 50 km | Z6 → 50 à 65 km | Z7 → 65 à 80 km
-          </div>
-          <div class="selector" onclick="openModal('Zones', 'creneau')">
-            <span class="selector-value empty" id="val-Zones-creneau">Sélectionner…</span>
-            <span>▾</span>
-          </div>
-        </div>
-      </div>
-      <div style="padding:8px 20px 20px;display:flex;gap:10px">
-        <button class="btn-etape-back" onclick="goEtape(2)">← Retour</button>
-        <button class="btn-etape-next" onclick="goEtape(4)">Suivant →</button>
-      </div>
-    </div>
-
-    <!-- ÉTAPE 4 : Récap + Notes -->
-    <div id="etape-4" style="display:none">
-      <div style="text-align:center;padding:8px 20px 16px">
-        <div style="font-size:32px;margin-bottom:8px">✅</div>
-        <div style="font-size:16px;font-weight:800;color:var(--gris)">Confirmation</div>
-      </div>
-      <div style="padding:0 20px">
-        <div style="background:var(--vert-clair);border-radius:12px;padding:14px;margin-bottom:16px;border-left:4px solid var(--vert)">
-          <div style="font-size:11px;color:var(--vert);font-weight:700;margin-bottom:6px">RÉCAPITULATIF</div>
-          <div id="recap-saisie" style="font-size:13px;color:var(--gris);line-height:1.8"></div>
-        </div>
-        <div class="field">
-          <label>Notes (optionnel)</label>
-          <textarea id="creneau-notes" placeholder="Remarques…" style="min-height:60px"></textarea>
-        </div>
-      </div>
-      <div style="padding:8px 20px 20px;display:flex;gap:10px">
-        <button class="btn-etape-back" onclick="goEtape(3)">← Retour</button>
-        <button class="btn-etape-next" id="btn-creneau" onclick="validerCreneau()">✅ Enregistrer</button>
-      </div>
-    </div>
-
+  <div style="padding: 0 16px">
+    <button class="btn-submit" id="btn-submit" onclick="submitForm()">✅ Valider la saisie</button>
   </div>
+
 </div>
 
 <!-- PAGE RÉSUMÉ -->
@@ -705,19 +559,17 @@
     // Afficher la nav
     document.querySelector('.bottom-nav').style.display = 'flex';
     showPage('page-form');
-    renderAgenda();
     chargerMessage();
   }
 
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
     Vehicules:     { id: '1017158', field: 'Immatriculation', label: 'Véhicule' },
-    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier', fieldPrimaire: 'Statue' },
+    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier' },
     TypeTaches:    { id: '1014444', field: 'Libellé',         label: 'Type de tâche' },
     SousTaches:    { id: '1015608', field: 'Libellé',         label: 'Sous-tâche' },
     Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
   };
-  const ZONE_DESC = { 'Z1a': '0 à 5 km', 'Z1b': '5 à 10 km', 'Z2': '10 à 20 km', 'Z3': '20 à 30 km', 'Z4': '30 à 40 km', 'Z5': '40 à 50 km', 'Z6': '50 à 65 km', 'Z7': '65 à 80 km' };
   const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
   const tableData = {};
   const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null };
@@ -737,63 +589,83 @@
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`, { headers: HEADERS });
       const data = await res.json();
-      tableData[key] = (data.results || []).map(row => {
-        const obj = { id: row.id, value: row[field] || ('#' + row.id) };
-        if (key === 'Chantiers') {
-          obj.statue = row['Statue'] || '';
-        }
-        if (key === 'TypeTaches' || key === 'SousTaches') {
-          const lien = row['lien vers chantier'] || [];
-          obj.chantiersIds = Array.isArray(lien) ? lien.map(c => c.id) : [];
-        }
-        return obj;
-      });
+      tableData[key] = (data.results || []).map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
     } catch(e) { tableData[key] = []; }
   }
 
-  function getOptionsFiltrees(key) {
-    const options = tableData[key] || [];
-    if ((key !== 'TypeTaches' && key !== 'SousTaches') || !creneauChantier) return options;
-    const chantierId = parseInt(creneauChantier.id);
-    return options.filter(opt =>
-      opt.chantiersIds.length === 0 || opt.chantiersIds.includes(chantierId)
-    );
-  }
-
   async function init() {
+    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
     await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
+    ajouterLigne();
     showPage('page-login');
   }
 
-  async function openModal(key, ligneId) {
+  function ajouterLigne() {
+    const id = ++ligneCounter;
+    lignes.push({ id, typeTache: null, sousTache: null, zone: null, heures: '', notes: '' });
+    renderLignes();
+  }
+
+  function supprimerLigne(id) {
+    if (lignes.length === 1) { alert('Il faut au moins une tâche.'); return; }
+    lignes = lignes.filter(l => l.id !== id);
+    renderLignes();
+  }
+
+  function renderLignes() {
+    document.getElementById('lignes-container').innerHTML = lignes.map((l, i) => `
+      <div class="ligne-card">
+        <div class="ligne-header">
+          <span class="ligne-num">Tâche ${i+1}</span>
+          <button class="btn-delete" onclick="supprimerLigne(${l.id})">🗑 Supprimer</button>
+        </div>
+        <div class="field">
+          <label>Type de tâche</label>
+          <div class="selector" onclick="openModal('TypeTaches',${l.id})">
+            <span class="selector-value ${l.typeTache?'':'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache?l.typeTache.value:'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Sous-tâche</label>
+          <div class="selector" onclick="openModal('SousTaches',${l.id})">
+            <span class="selector-value ${l.sousTache?'':'empty'}" id="val-SousTaches-${l.id}">${l.sousTache?l.sousTache.value:'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field" id="zone-field-${l.id}" style="display:${l.typeTache&&l.typeTache.value==='Pose'?'block':'none'}">
+          <label>Zone</label>
+          <div style="background:#fffbe6;border:1px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:11px;color:#7a6a3a;margin-bottom:8px;line-height:1.7">
+            Z1a → 0 à 5 km &nbsp;|&nbsp; Z1b → 5 à 10 km &nbsp;|&nbsp; Z2 → 10 à 20 km &nbsp;|&nbsp; Z3 → 20 à 30 km<br>
+            Z4 → 30 à 40 km &nbsp;|&nbsp; Z5 → 40 à 50 km &nbsp;|&nbsp; Z6 → 50 à 65 km &nbsp;|&nbsp; Z7 → 65 à 80 km
+          </div>
+          <div class="selector" onclick="openModal('Zones',${l.id})">
+            <span class="selector-value ${l.zone?'':'empty'}" id="val-Zones-${l.id}">${l.zone?l.zone.value:'Sélectionner…'}</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Heures</label>
+          <div class="hours-row">
+            <input type="number" placeholder="Ex: 3.5" step="0.5" min="0" value="${l.heures}" oninput="updateHeures(${l.id},this.value)" />
+            <div class="hours-suffix">h</div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <textarea placeholder="Remarques…" oninput="updateNotes(${l.id},this.value)">${l.notes||''}</textarea>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function updateHeures(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.heures=val; }
+  function updateNotes(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.notes=val; }
+
+  function openModal(key, ligneId) {
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
     document.getElementById('modal-search-input').value = '';
-    if ((key === 'TypeTaches' || key === 'SousTaches') && creneauChantier) {
-      try {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
-        const data = await res.json();
-        const chantierId = parseInt(creneauChantier.id);
-        const allRows = (data.results || []).map(row => ({
-          id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
-          chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
-          excludeIds: (row['exclure chantier'] || []).map(c => c.id),
-          typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
-        }));
-        // Filtre chantier : exclure les tâches dont ce chantier est dans "exclure chantier"
-        let rows = allRows.filter(opt => !opt.excludeIds.includes(chantierId));
-        // Filtre lien chantier : si des tâches ont un lien explicite vers ce chantier
-        const linked = rows.filter(opt => opt.chantiersIds.includes(chantierId));
-        if (linked.length > 0) rows = linked;
-        // Filtre type de tâche : pour SousTaches, filtrer par type de tâche sélectionné
-        if (key === 'SousTaches' && creneauTypeTache) {
-          const typeTacheId = parseInt(creneauTypeTache.id);
-          const linkedToType = rows.filter(opt => opt.typeTacheIds.includes(typeTacheId));
-          if (linkedToType.length > 0) rows = linkedToType;
-        }
-        tableData[key] = rows;
-      } catch(e) { console.log('Erreur', key, e); }
-    }
     renderModalOptions();
     document.getElementById('modal').classList.add('open');
     setTimeout(() => document.getElementById('modal-search-input').focus(), 300);
@@ -807,17 +679,19 @@
   function closeModalOutside(e) { if(e.target===document.getElementById('modal')) closeModal(); }
 
   function getCurrentValue() {
-    if (modalLigneId === 'creneau') {
-      if (modalKey === 'TypeTaches') return creneauTypeTache;
-      if (modalKey === 'SousTaches') return creneauSousTache;
-      if (modalKey === 'Zones') return creneauZone;
+    if (modalLigneId !== null) {
+      const l = lignes.find(l=>l.id===modalLigneId);
+      if (!l) return null;
+      if (modalKey==='TypeTaches') return l.typeTache;
+      if (modalKey==='SousTaches') return l.sousTache;
+      if (modalKey==='Zones') return l.zone;
     }
     return globalSelected[modalKey];
   }
 
   function filterOptions(query) {
     const q = query.toLowerCase().trim();
-    const options = getOptionsFiltrees(modalKey);
+    const options = tableData[modalKey] || [];
     const current = getCurrentValue();
     const filtered = q ? options.filter(o => o.value.toLowerCase().includes(q)) : options;
     const container = document.getElementById('modal-options');
@@ -832,14 +706,9 @@
   }
 
   function renderModalOptions() {
-    const options = getOptionsFiltrees(modalKey);
+    const options = tableData[modalKey] || [];
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-    // Afficher nb options dans le titre pour debug
-    const titleEl = document.getElementById('modal-title');
-    if (titleEl && (modalKey === 'SousTaches' || modalKey === 'TypeTaches')) {
-      titleEl.textContent = TABLES[modalKey].label + ' (' + options.length + '/' + (tableData[modalKey]||[]).length + ')';
-    }
     if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
     container.innerHTML = options.map(opt => {
       const isSel = current && current.id === opt.id;
@@ -851,27 +720,19 @@
 
   function selectOption(id, value) {
     const obj = { id, value };
-    if (modalLigneId === 'creneau') {
-      if (modalKey === 'TypeTaches') {
-        creneauTypeTache = obj;
-        const zf = document.getElementById('zone-field-creneau');
-        if (zf) zf.style.display = value === 'Pose' ? 'block' : 'none';
-        if (value !== 'Pose') { creneauZone = null; const zv = document.getElementById('val-Zones-creneau'); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
-      } else if (modalKey === 'SousTaches') creneauSousTache = obj;
-      else if (modalKey === 'Zones') creneauZone = obj;
-      else if (modalKey === 'Vehicules') globalSelected.Vehicules = obj;
-      else if (modalKey === 'Chantiers') {
-        creneauChantier = obj;
-        // Reset tâche et sous-tâche car elles dépendent du chantier
-        creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
-        ['TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
-          const el2 = document.getElementById('val-' + k);
-          if (el2) { el2.textContent = 'Sélectionner…'; el2.classList.add('empty'); }
-        });
-        document.getElementById('zone-field-creneau').style.display = 'none';
+    if (modalLigneId !== null) {
+      const l = lignes.find(l=>l.id===modalLigneId);
+      if (l) {
+        if (modalKey==='TypeTaches') {
+          l.typeTache = obj;
+          const zf = document.getElementById(`zone-field-${modalLigneId}`);
+          if (zf) zf.style.display = value==='Pose' ? 'block' : 'none';
+          if (value!=='Pose') { l.zone=null; const zv=document.getElementById(`val-Zones-${modalLigneId}`); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
+        } else if (modalKey==='SousTaches') l.sousTache = obj;
+        else if (modalKey==='Zones') l.zone = obj;
+        const el = document.getElementById(`val-${modalKey}-${modalLigneId}`);
+        if (el) { el.textContent = value; el.classList.remove('empty'); }
       }
-      const el = document.getElementById(`val-${modalKey}-creneau`);
-      if (el) { el.textContent = value; el.classList.remove('empty'); }
     } else {
       globalSelected[modalKey] = obj;
       const el = document.getElementById(`val-${modalKey}`);
@@ -880,279 +741,61 @@
     closeModal();
   }
 
-  // ── AGENDA ──
-  const AGENDA_START = 7; // 7h
-  const AGENDA_END = 19;  // 19h
-  const SLOT_MIN = 30;    // 30 min
-  const SLOTS_PER_HOUR = 60 / SLOT_MIN;
-  const TOTAL_SLOTS = (AGENDA_END - AGENDA_START) * SLOTS_PER_HOUR;
-  const SLOT_HEIGHT = 30; // px
+  async function submitForm() {
+    if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
+    const totalH = lignes.reduce((s,l) => s+(parseFloat(l.heures)||0), 0);
+    if (totalH===0) { alert('Veuillez saisir les heures pour au moins une tâche.'); return; }
 
-  let agendaDate = new Date();
-  let agendaSaisies = [];
-  let creneauDate = null;
-  let creneauChantier = null;
-  let creneauTypeTache = null;
-  let creneauSousTache = null;
-  let creneauZone = null;
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true; btn.textContent = 'Envoi en cours…';
 
-  function getLundiAgenda(date) {
-    const d = new Date(date);
-    const day = d.getDay();
-    d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-    d.setHours(12,0,0,0);
-    return d;
-  }
-
-  function changerSemaineAgenda(delta) {
-    agendaDate.setDate(agendaDate.getDate() + delta * 7);
-    renderAgenda();
-  }
-
-  async function renderAgenda() {
-    const lundi = getLundiAgenda(agendaDate);
-    const jours = [];
-    for (let i = 0; i < 5; i++) {
-      const j = new Date(lundi); j.setDate(lundi.getDate() + i);
-      jours.push(j);
-    }
-    const dateDebut = jours[0].toISOString().split('T')[0];
-    const dateFin = jours[4].toISOString().split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
-    const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
-
-    // Label semaine
-    const opts = { day: 'numeric', month: 'long' };
-    const optsY = { day: 'numeric', month: 'long', year: 'numeric' };
-    document.getElementById('agenda-semaine-label').textContent =
-      'Du ' + jours[0].toLocaleDateString('fr-FR', opts) + ' au ' + jours[4].toLocaleDateString('fr-FR', optsY);
-
-    // Charger saisies de la semaine
     try {
-      if (!feuilleCollab || !feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
+      for (const l of lignes) {
+        const payload = {
+          Date: document.getElementById('field-date').value || null,
+          Collaborateur: feuilleCollab ? [feuilleCollab.id] : [],
+          'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
+          Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
+          Zones: l.zone ? [l.zone.id] : [],
+          'Type de taches': l.typeTache ? [l.typeTache.id] : [],
+          'Sous Taches': l.sousTache ? [l.sousTache.id] : [],
+          'Heures Normales': parseFloat(l.heures) || 0,
+          Notes: l.notes || '',
+        };
+        const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true`,
+          { method:'POST', headers:HEADERS, body:JSON.stringify(payload) });
+        if (!res.ok) { const err = await res.json(); throw new Error(JSON.stringify(err)); }
       }
-      const viewParam = connectedViewId ? `&view_id=${connectedViewId}` : '';
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${viewParam}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
-      const res = await fetch(url, { headers: HEADERS });
-      const data = await res.json();
-      agendaSaisies = data.results || [];
-    } catch(e) { agendaSaisies = []; }
 
-    // Construire la grille
-    const nbCols = 6; // 1 col heure + 5 jours
-    const colTemplate = `36px repeat(5, 1fr)`;
+      // Remplir la page résumé
+      const now = new Date();
+      document.getElementById('res-date').textContent = document.getElementById('field-date').value || '—';
+      document.getElementById('res-collab').textContent = globalSelected.Collaborateur?.value || '—';
+      document.getElementById('res-vehicule').textContent = globalSelected.Vehicules?.value || '—';
+      document.getElementById('res-chantier').textContent = globalSelected.Chantiers?.value || '—';
+      document.getElementById('res-time').textContent = 'Le ' + now.toLocaleDateString('fr-FR') + ' à ' + now.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
 
-    let html = `<div style="display:grid;grid-template-columns:${colTemplate};position:sticky;top:0;z-index:5;background:#fff">`;
-    html += `<div style="background:#1e2420"></div>`;
-    jours.forEach((j, i) => {
-      const dateStr = j.toISOString().split('T')[0];
-      const isToday = dateStr === today;
-      const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-      html += `<div class="agenda-day-header ${isToday ? 'today' : ''}">
-        <div class="agenda-day-nom">${joursNoms[i]}</div>
-        <div class="agenda-day-date">${dateLabel}</div>
-      </div>`;
-    });
-    html += `</div>`;
-
-    // Corps de la grille
-    html += `<div style="display:grid;grid-template-columns:${colTemplate};position:relative">`;
-
-    // Ligne heure courante
-    const now = new Date();
-    if (now >= jours[0] && now <= jours[4]) {
-      const nowMins = (now.getHours() - AGENDA_START) * 60 + now.getMinutes();
-      const nowPct = nowMins / ((AGENDA_END - AGENDA_START) * 60) * 100;
-      const nowPx = nowMins / SLOT_MIN * SLOT_HEIGHT;
-      if (nowPx > 0) {
-        html += `<div class="agenda-now-line" style="top:${nowPx}px;left:36px"></div>`;
-      }
-    }
-
-    // Slots horaires
-    for (let slot = 0; slot < TOTAL_SLOTS; slot++) {
-      const totalMins = AGENDA_START * 60 + slot * SLOT_MIN;
-      const h = Math.floor(totalMins / 60);
-      const m = totalMins % 60;
-      const isHeurePleine = m === 0;
-      const label = isHeurePleine ? `${h}h` : '';
-
-      html += `<div class="agenda-time-label" style="height:${SLOT_HEIGHT}px;line-height:${SLOT_HEIGHT}px">${label}</div>`;
-
-      jours.forEach((j, ji) => {
-        const dateStr = j.toISOString().split('T')[0];
-        const heureDebut = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-        html += `<div class="agenda-cell ${isHeurePleine ? 'heure-pleine' : ''}" 
-          style="height:${SLOT_HEIGHT}px;border-bottom:1px solid ${isHeurePleine ? '#ddd' : '#f5f5f5'}"
-          onclick="ouvrirModalCreneau('${dateStr}', '${heureDebut}')">
+      let total = 0;
+      document.getElementById('res-taches').innerHTML = lignes.map((l,i) => {
+        const h = parseFloat(l.heures)||0; total += h;
+        return `<div class="tache-card">
+          <div class="tache-card-title">Tâche ${i+1}</div>
+          ${l.typeTache ? `<div class="tache-row"><span>Type</span><span>${l.typeTache.value}</span></div>` : ''}
+          ${l.sousTache ? `<div class="tache-row"><span>Sous-tâche</span><span>${l.sousTache.value}</span></div>` : ''}
+          ${l.zone ? `<div class="tache-row"><span>Zone</span><span>${l.zone.value}</span></div>` : ''}
+          <div class="tache-row"><span>Heures</span><span>${h}h</span></div>
+          ${l.notes ? `<div class="tache-row"><span>Notes</span><span>${l.notes}</span></div>` : ''}
         </div>`;
-      });
-    }
-    html += `</div>`;
+      }).join('');
+      document.getElementById('res-total').textContent = total + 'h';
 
-    document.getElementById('agenda-grid').innerHTML = html;
-
-    // Placer les événements
-    agendaSaisies.forEach(s => {
-      const dateStr = s['Date'];
-      const heureDebut = s['Heure debut'] || '';
-      const heureFin = s['Heure fin'] || '';
-      if (!heureDebut || !heureFin || !dateStr) return;
-
-      const jourIdx = jours.findIndex(j => j.toISOString().split('T')[0] === dateStr);
-      if (jourIdx < 0) return;
-
-      const [hD, mD] = heureDebut.split(':').map(Number);
-      const [hF, mF] = heureFin.split(':').map(Number);
-      const startSlot = (hD - AGENDA_START) * SLOTS_PER_HOUR + mD / SLOT_MIN;
-      const endSlot = (hF - AGENDA_START) * SLOTS_PER_HOUR + mF / SLOT_MIN;
-      const topPx = startSlot * SLOT_HEIGHT;
-      const heightPx = Math.max((endSlot - startSlot) * SLOT_HEIGHT, SLOT_HEIGHT);
-
-      const chantier = (s['Chantiers'] || [])[0]?.value || '—';
-      const heureLabel = `${heureDebut} - ${heureFin}`;
-      const nbCols = 6;
-      const colWidth = `calc((100% - 48px) / 5)`;
-      const leftPx = `calc(48px + ${jourIdx} * (100% - 48px) / 5 + 2px)`;
-
-      const tache = (s['Type de taches'] || [])[0]?.value || '';
-      const sousTache = (s['Sous Taches'] || [])[0]?.value || '';
-      const tacheStr = [tache, sousTache].filter(Boolean).join(' › ');
-
-      const eventEl = document.createElement('div');
-      eventEl.className = 'agenda-event';
-      eventEl.style.cssText = `top:${topPx}px;height:${heightPx}px;position:absolute;left:calc(36px + ${jourIdx} * (100% - 36px) / 5 + 2px);width:calc((100% - 36px) / 5 - 4px)`;
-      eventEl.innerHTML = `<div class="agenda-event-title">🏗 ${chantier}</div><div class="agenda-event-time">${heureLabel}</div>${tacheStr ? `<div class="agenda-event-time" style="opacity:0.75">⚙️ ${tacheStr}</div>` : ''}`;
-      eventEl.onclick = (e) => { e.stopPropagation(); supprimerSaisie(s.id, chantier); };
-
-      const gridBody = document.getElementById('agenda-grid').querySelector('div:last-child');
-      if (gridBody) gridBody.appendChild(eventEl);
-    });
-  }
-
-  function ouvrirModalCreneau(dateStr, heureDebut) {
-    creneauDate = dateStr;
-    creneauTypeTache = null;
-    creneauSousTache = null;
-    creneauZone = null;
-
-    const jourDate = new Date(dateStr + 'T12:00:00');
-    document.getElementById('modal-creneau-title').textContent =
-      jourDate.toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' });
-
-    const [h, m] = heureDebut.split(':').map(Number);
-    document.getElementById('creneau-debut-h').value = String(h).padStart(2,'0');
-    document.getElementById('creneau-debut-m').value = String(m === 0 ? 0 : m >= 45 ? 45 : m >= 30 ? 30 : 15).padStart(2,'0');
-    const finH = Math.min(h + 1, 19);
-    document.getElementById('creneau-fin-h').value = String(finH).padStart(2,'0');
-    document.getElementById('creneau-fin-m').value = String(m === 0 ? 0 : m >= 45 ? 45 : m >= 30 ? 30 : 15).padStart(2,'0');
-
-    // Reset sélecteurs et étapes
-    globalSelected.Vehicules = null;
-    creneauChantier = null;
-    creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
-    ['Vehicules-creneau','Chantiers-creneau','TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
-      const el = document.getElementById(`val-${k}`);
-      if (el) { el.textContent = k === 'Chantiers-creneau' ? 'Sélectionner un chantier…' : 'Sélectionner…'; el.classList.add('empty'); }
-    });
-    document.getElementById('zone-field-creneau').style.display = 'none';
-    document.getElementById('creneau-notes').value = '';
-    // Reset étapes
-    for (let i = 1; i <= 4; i++) {
-      const el = document.getElementById(`etape-${i}`);
-      if (el) el.style.display = i === 1 ? 'block' : 'none';
-      const dot = document.getElementById(`dot-${i}`);
-      if (dot) { dot.classList.remove('active','done'); if(i===1) dot.classList.add('active'); }
-    }
-    etapeCourante = 1;
-    const el2 = document.getElementById('etape2-date');
-    if (el2) el2.textContent = jourDate.toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' });
-    document.getElementById('modal-creneau').classList.add('open');
-  }
-
-  function closeModalCreneau(e) {
-    if (!e || e.target === document.getElementById('modal-creneau')) {
-      document.getElementById('modal-creneau').classList.remove('open');
-    }
-  }
-
-  async function validerCreneau() {
-    const debutH = document.getElementById('creneau-debut-h').value;
-    const debutM = document.getElementById('creneau-debut-m').value;
-    const finH = document.getElementById('creneau-fin-h').value;
-    const finM = document.getElementById('creneau-fin-m').value;
-    if (!creneauChantier) { alert('Veuillez sélectionner un chantier.'); return; }
-    if (!debutH || !finH) { alert('Veuillez saisir les heures.'); return; }
-    const debut = `${debutH}:${debutM}`;
-    const fin = `${finH}:${finM}`;
-    if (fin <= debut) { alert('L\'heure de fin doit être après le début.'); return; }
-
-    // Calculer durée en heures
-    const [hD, mD] = debut.split(':').map(Number);
-    const [hF, mF] = fin.split(':').map(Number);
-    const duree = ((hF * 60 + mF) - (hD * 60 + mD)) / 60;
-
-    const btn = document.getElementById('btn-creneau');
-    btn.disabled = true; btn.textContent = 'Envoi…';
-
-    try {
-      if (!feuilleCollab || !feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
-      }
-
-      const payload = {
-        Date: creneauDate,
-        'Heure debut': debut,
-        'Heure fin': fin,
-        Collaborateur: feuilleCollab ? [feuilleCollab.id] : [],
-        'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
-        Chantiers: creneauChantier ? [creneauChantier.id] : [],
-        'Type de taches': creneauTypeTache ? [creneauTypeTache.id] : [],
-        'Sous Taches': creneauSousTache ? [creneauSousTache.id] : [],
-        Zones: creneauZone ? [creneauZone.id] : [],
-        'Heures Normales': duree,
-        Notes: document.getElementById('creneau-notes').value || '',
-      };
-
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true`,
-        { method:'POST', headers:HEADERS, body:JSON.stringify(payload) });
-      if (!res.ok) { const err = await res.json(); throw new Error(JSON.stringify(err)); }
-
-      document.getElementById('modal-creneau').classList.remove('open');
-
-      // Afficher récapitulatif
-      const dH = document.getElementById('creneau-debut-h').value;
-      const dM = document.getElementById('creneau-debut-m').value;
-      const fH2 = document.getElementById('creneau-fin-h').value;
-      const fM2 = document.getElementById('creneau-fin-m').value;
-      const notes2 = document.getElementById('creneau-notes').value;
-      const recapMsg = '✅ Saisie enregistrée !\n\n'
-        + '🏗 ' + (creneauChantier?.value || '—') + '\n'
-        + '⏰ ' + dH + 'h' + dM + ' → ' + fH2 + 'h' + fM2 + ' (' + duree + 'h)\n'
-        + '🚗 ' + (globalSelected.Vehicules?.value || '—') + '\n'
-        + '⚙️ ' + (creneauTypeTache?.value || '—') + ' › ' + (creneauSousTache?.value || '—')
-        + (creneauZone ? '\n📍 ' + creneauZone.value : '')
-        + (notes2 ? '\n📝 ' + notes2 : '');
-      alert(recapMsg);
-
-      await renderAgenda();
+      showPage('page-resume');
 
     } catch(e) {
-      alert('Erreur : ' + e.message);
+      alert("Erreur : " + e.message);
     } finally {
-      btn.disabled = false; btn.textContent = '✅ Enregistrer';
+      btn.disabled = false; btn.textContent = '✅ Valider la saisie';
     }
-  }
-
-  async function supprimerSaisie(id, chantier) {
-    if (!confirm(`Supprimer la saisie "${chantier}" ?`)) return;
-    await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${id}/`, { method:'DELETE', headers:HEADERS });
-    await renderAgenda();
   }
 
   // ── NAVIGATION ──
@@ -1333,13 +976,14 @@
   }
 
   function nouvelleSession() {
+    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
     Object.keys(globalSelected).forEach(k => { globalSelected[k] = null; });
     ['Vehicules','Chantiers'].forEach(k => {
       const el = document.getElementById(`val-${k}`);
       if (el) { el.textContent = 'Sélectionner…'; el.classList.add('empty'); }
     });
+    lignes = []; ligneCounter = 0; ajouterLigne();
     showPage('page-form');
-    renderAgenda();
   }
 
   // ── CONGÉS ──
@@ -1570,10 +1214,7 @@
         (dataSaisies.results || []).forEach(r => {
           const d = r['Date'];
           if (!byDate[d]) byDate[d] = [];
-          const tache = (r['Type de taches'] || [])[0]?.value || '';
-          const sousTache = (r['Sous Taches'] || [])[0]?.value || '';
-          const tacheStr = [tache, sousTache].filter(Boolean).join(' › ');
-          byDate[d].push({ chantier: (r['Chantiers'] || [])[0]?.value || '—', notes: r['Notes'] || '', heures: r['Heures Normales'] || '', tache: tacheStr, isSaisie: true });
+          byDate[d].push({ chantier: (r['Chantiers'] || [])[0]?.value || '—', notes: r['Notes'] || '', heures: r['Heures Normales'] || '', isSaisie: true });
         });
       } else {
         // Semaine future/courante → charger le planning prévu
@@ -1614,8 +1255,7 @@
         } else if (byDate[dateStr] && byDate[dateStr].length > 0) {
           cellHTML = byDate[dateStr].map(r => {
             const heuresLabel = r.isSaisie && r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : '';
-            const tacheLabel = r.tache ? `<div class="planning-cell-notes">⚙️ ${r.tache}</div>` : '';
-            return `<div class="planning-cell-chantier">🏗 ${r.chantier}${heuresLabel}${tacheLabel}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`;
+            return `<div class="planning-cell-chantier">🏗 ${r.chantier}${heuresLabel}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`;
           }).join('');
         } else {
           cellHTML = `<div class="planning-cell-vide">—</div>`;
@@ -1679,52 +1319,6 @@
     document.getElementById('modal-message').classList.remove('open');
   }
 
-  // ── ÉTAPES FORMULAIRE ──
-  let etapeCourante = 1;
-
-  function goEtape(n) {
-    // Validation avant de passer à l'étape suivante
-    if (n === 2 && !creneauChantier) {
-      alert('Veuillez sélectionner un chantier.'); return;
-    }
-    if (n === 3) {
-      const dH = document.getElementById('creneau-debut-h').value;
-      const fH = document.getElementById('creneau-fin-h').value;
-      if (!dH || !fH) { alert('Veuillez saisir les heures.'); return; }
-      const debut = `${dH}:${document.getElementById('creneau-debut-m').value}`;
-      const fin = `${fH}:${document.getElementById('creneau-fin-m').value}`;
-      if (fin <= debut) { alert('L\'heure de fin doit être après le début.'); return; }
-    }
-    if (n === 4) {
-      if (!globalSelected.Vehicules) { alert('Veuillez sélectionner un véhicule.'); return; }
-      if (!creneauTypeTache) { alert('Veuillez sélectionner un type de tâche.'); return; }
-      if (!creneauSousTache) { alert('Veuillez sélectionner une sous-tâche.'); return; }
-      // Afficher récap
-      const chantier = creneauChantier?.value || '—';
-      const dH = document.getElementById('creneau-debut-h').value;
-      const dM = document.getElementById('creneau-debut-m').value;
-      const fH = document.getElementById('creneau-fin-h').value;
-      const fM = document.getElementById('creneau-fin-m').value;
-      const vehicule = globalSelected.Vehicules?.value || '—';
-      const tache = creneauTypeTache?.value || '—';
-      const sousTache = creneauSousTache?.value || '—';
-      const zone = creneauZone?.value || '';
-      document.getElementById('recap-saisie').innerHTML =
-        `🏗 <b>${chantier}</b><br>⏰ ${dH}h${dM} → ${fH}h${fM}<br>🚗 ${vehicule}<br>⚙️ ${tache} › ${sousTache}${zone ? '<br>📍 ' + zone : ''}`;
-    }
-
-    // Masquer étape courante
-    document.getElementById(`etape-${etapeCourante}`).style.display = 'none';
-    document.getElementById(`dot-${etapeCourante}`).classList.remove('active');
-    document.getElementById(`dot-${etapeCourante}`).classList.add('done');
-
-    // Afficher nouvelle étape
-    etapeCourante = n;
-    document.getElementById(`etape-${n}`).style.display = 'block';
-    document.getElementById(`dot-${n}`).classList.add('active');
-    document.getElementById(`dot-${n}`).classList.remove('done');
-  }
-
   function toggleSemaine(id) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1780,11 +1374,7 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    // Désinscrire tous les SW existants puis réinscrire
-    navigator.serviceWorker.getRegistrations().then(regs => {
-      regs.forEach(r => r.unregister());
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    });
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 </script>
 </body>
