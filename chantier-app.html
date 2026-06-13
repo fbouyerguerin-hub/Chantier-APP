@@ -810,11 +810,7 @@
     const options = getOptionsFiltrees(modalKey);
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
-    // Afficher nb options dans le titre pour debug
-    const titleEl = document.getElementById('modal-title');
-    if (titleEl && (modalKey === 'SousTaches' || modalKey === 'TypeTaches')) {
-      titleEl.textContent = TABLES[modalKey].label + ' (' + options.length + '/' + (tableData[modalKey]||[]).length + ')';
-    }
+
     if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
     container.innerHTML = options.map(opt => {
       const isSel = current && current.id === opt.id;

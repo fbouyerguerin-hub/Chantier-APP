@@ -1,4 +1,4 @@
-const CACHE_NAME = 'chantier-app-v63';
+const CACHE_NAME = 'chantier-app-v64';
 const ASSETS = [
   '/Chantier-APP/chantier-app.html',
   '/Chantier-APP/manifest.json',
