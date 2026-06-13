@@ -738,7 +738,6 @@
       const data = await res.json();
       tableData[key] = (data.results || []).map(row => {
         const obj = { id: row.id, value: row[field] || ('#' + row.id) };
-        // Pour Chantiers, stocker aussi la valeur du champ primaire (Statue)
         if (key === 'Chantiers') {
           obj.statue = row['Statue'] || '';
         }
@@ -756,12 +755,11 @@
   function getOptionsFiltrees(key) {
     const options = tableData[key] || [];
     if ((key !== 'TypeTaches' && key !== 'SousTaches') || !creneauChantier) return options;
-    // Récupérer la valeur Statue du chantier sélectionné (champ primaire Baserow)
-    const chantierData = (tableData['Chantiers'] || []).find(c => c.id === creneauChantier.id);
-    const chantierStatue = chantierData ? chantierData.statue : '';
+    // Comparer par ID : lien vers chantier retourne {id, value} où id = ID de la ligne Chantiers
+    const chantierId = creneauChantier.id;
     return options.filter(opt => {
-      if (!opt.chantiersNoms || opt.chantiersNoms.length === 0) return true;
-      return opt.chantiersNoms.includes(creneauChantier.value) || opt.chantiersNoms.includes(chantierStatue);
+      if (!opt.chantiersRowIds || opt.chantiersRowIds.length === 0) return true;
+      return opt.chantiersRowIds.includes(String(chantierId));
     });
   }
 
