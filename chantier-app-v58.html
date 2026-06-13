@@ -755,17 +755,10 @@
   function getOptionsFiltrees(key) {
     const options = tableData[key] || [];
     if ((key !== 'TypeTaches' && key !== 'SousTaches') || !creneauChantier) return options;
-    const chantierId = creneauChantier.id;
-    const avecLien = options.filter(o => o.chantiersRowIds && o.chantiersRowIds.length > 0);
-    if (key === 'SousTaches') {
-      alert('creneauChantier.id=' + chantierId + ' (type:' + typeof chantierId + ')' +
-        '\nST avec lien: ' + avecLien.length +
-        '\nEx chantiersRowIds: ' + JSON.stringify(avecLien[0]?.chantiersRowIds) +
-        '\n(type item: ' + typeof avecLien[0]?.chantiersRowIds?.[0] + ')');
-    }
+    const chantierId = String(creneauChantier.id);
     return options.filter(opt => {
       if (!opt.chantiersRowIds || opt.chantiersRowIds.length === 0) return true;
-      return opt.chantiersRowIds.includes(String(chantierId));
+      return opt.chantiersRowIds.includes(chantierId);
     });
   }
 
