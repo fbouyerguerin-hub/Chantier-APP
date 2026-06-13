@@ -755,15 +755,13 @@
 
   function getOptionsFiltrees(key) {
     const options = tableData[key] || [];
-    if ((key !== 'TypeTaches' && key !== 'SousTaches') || !globalSelected.Chantiers) return options;
-    const chantierNom = globalSelected.Chantiers.value;
+    if ((key !== 'TypeTaches' && key !== 'SousTaches') || !creneauChantier) return options;
     // Récupérer la valeur Statue du chantier sélectionné (champ primaire Baserow)
-    const chantierData = (tableData['Chantiers'] || []).find(c => c.id === globalSelected.Chantiers.id);
+    const chantierData = (tableData['Chantiers'] || []).find(c => c.id === creneauChantier.id);
     const chantierStatue = chantierData ? chantierData.statue : '';
     return options.filter(opt => {
       if (!opt.chantiersNoms || opt.chantiersNoms.length === 0) return true;
-      // Comparer par nom OU par valeur du champ primaire (Statue)
-      return opt.chantiersNoms.includes(chantierNom) || opt.chantiersNoms.includes(chantierStatue);
+      return opt.chantiersNoms.includes(creneauChantier.value) || opt.chantiersNoms.includes(chantierStatue);
     });
   }
 
@@ -839,7 +837,7 @@
       else if (modalKey === 'Zones') creneauZone = obj;
       else if (modalKey === 'Vehicules') globalSelected.Vehicules = obj;
       else if (modalKey === 'Chantiers') {
-        globalSelected.Chantiers = obj;
+        creneauChantier = obj;
         // Reset tâche et sous-tâche car elles dépendent du chantier
         creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
         ['TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
@@ -869,6 +867,7 @@
   let agendaDate = new Date();
   let agendaSaisies = [];
   let creneauDate = null;
+  let creneauChantier = null;
   let creneauTypeTache = null;
   let creneauSousTache = null;
   let creneauZone = null;
@@ -1029,6 +1028,7 @@
 
     // Reset sélecteurs et étapes
     globalSelected.Vehicules = null;
+    creneauChantier = null;
     creneauTypeTache = null; creneauSousTache = null; creneauZone = null;
     ['Vehicules-creneau','Chantiers-creneau','TypeTaches-creneau','SousTaches-creneau','Zones-creneau'].forEach(k => {
       const el = document.getElementById(`val-${k}`);
@@ -1060,7 +1060,7 @@
     const debutM = document.getElementById('creneau-debut-m').value;
     const finH = document.getElementById('creneau-fin-h').value;
     const finM = document.getElementById('creneau-fin-m').value;
-    if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
+    if (!creneauChantier) { alert('Veuillez sélectionner un chantier.'); return; }
     if (!debutH || !finH) { alert('Veuillez saisir les heures.'); return; }
     const debut = `${debutH}:${debutM}`;
     const fin = `${finH}:${finM}`;
@@ -1087,7 +1087,7 @@
         'Heure fin': fin,
         Collaborateur: feuilleCollab ? [feuilleCollab.id] : [],
         'Véhicules': globalSelected.Vehicules ? [globalSelected.Vehicules.id] : [],
-        Chantiers: globalSelected.Chantiers ? [globalSelected.Chantiers.id] : [],
+        Chantiers: creneauChantier ? [creneauChantier.id] : [],
         'Type de taches': creneauTypeTache ? [creneauTypeTache.id] : [],
         'Sous Taches': creneauSousTache ? [creneauSousTache.id] : [],
         Zones: creneauZone ? [creneauZone.id] : [],
@@ -1108,7 +1108,7 @@
       const fM2 = document.getElementById('creneau-fin-m').value;
       const notes2 = document.getElementById('creneau-notes').value;
       const recapMsg = '✅ Saisie enregistrée !\n\n'
-        + '🏗 ' + (globalSelected.Chantiers?.value || '—') + '\n'
+        + '🏗 ' + (creneauChantier?.value || '—') + '\n'
         + '⏰ ' + dH + 'h' + dM + ' → ' + fH2 + 'h' + fM2 + ' (' + duree + 'h)\n'
         + '🚗 ' + (globalSelected.Vehicules?.value || '—') + '\n'
         + '⚙️ ' + (creneauTypeTache?.value || '—') + ' › ' + (creneauSousTache?.value || '—')
@@ -1660,13 +1660,8 @@
 
   function goEtape(n) {
     // Validation avant de passer à l'étape suivante
-    if (n === 2 && !globalSelected.Chantiers) {
+    if (n === 2 && !creneauChantier) {
       alert('Veuillez sélectionner un chantier.'); return;
-    }
-    if (n === 2 && globalSelected.Chantiers) {
-      const ch = globalSelected.Chantiers;
-      const chData = (tableData['Chantiers'] || []).find(c => c.id === ch.id);
-      alert('Chantier: id=' + ch.id + ' value="' + ch.value + '"\nDans tableData: ' + JSON.stringify(chData));
     }
     if (n === 3) {
       const dH = document.getElementById('creneau-debut-h').value;
@@ -1681,7 +1676,7 @@
       if (!creneauTypeTache) { alert('Veuillez sélectionner un type de tâche.'); return; }
       if (!creneauSousTache) { alert('Veuillez sélectionner une sous-tâche.'); return; }
       // Afficher récap
-      const chantier = globalSelected.Chantiers?.value || '—';
+      const chantier = creneauChantier?.value || '—';
       const dH = document.getElementById('creneau-debut-h').value;
       const dM = document.getElementById('creneau-debut-m').value;
       const fH = document.getElementById('creneau-fin-h').value;
