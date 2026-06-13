@@ -968,7 +968,7 @@
       const nowPct = nowMins / ((AGENDA_END - AGENDA_START) * 60) * 100;
       const nowPx = nowMins / SLOT_MIN * SLOT_HEIGHT;
       if (nowPx > 0) {
-        html += `<div class="agenda-now-line" style="top:${nowPx}px;left:48px"></div>`;
+        html += `<div class="agenda-now-line" style="top:${nowPx}px;left:36px"></div>`;
       }
     }
 
@@ -1024,7 +1024,7 @@
 
       const eventEl = document.createElement('div');
       eventEl.className = 'agenda-event';
-      eventEl.style.cssText = `top:${topPx}px;height:${heightPx}px;position:absolute;left:calc(48px + ${jourIdx} * (100% - 48px) / 5 + 2px);width:calc((100% - 48px) / 5 - 4px)`;
+      eventEl.style.cssText = `top:${topPx}px;height:${heightPx}px;position:absolute;left:calc(36px + ${jourIdx} * (100% - 36px) / 5 + 2px);width:calc((100% - 36px) / 5 - 4px)`;
       eventEl.innerHTML = `<div class="agenda-event-title">🏗 ${chantier}</div><div class="agenda-event-time">${heureLabel}</div>${tacheStr ? `<div class="agenda-event-time" style="opacity:0.75">⚙️ ${tacheStr}</div>` : ''}`;
       eventEl.onclick = (e) => { e.stopPropagation(); supprimerSaisie(s.id, chantier); };
 
