@@ -711,7 +711,7 @@
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
     Vehicules:     { id: '1017158', field: 'Immatriculation', label: 'Véhicule' },
-    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier' },
+    Chantiers:     { id: '1014441', field: 'Nom du chantier', label: 'Chantier', fieldPrimaire: 'Statue' },
     TypeTaches:    { id: '1014444', field: 'Libellé',         label: 'Type de tâche' },
     SousTaches:    { id: '1015608', field: 'Libellé',         label: 'Sous-tâche' },
     Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
@@ -738,6 +738,10 @@
       const data = await res.json();
       tableData[key] = (data.results || []).map(row => {
         const obj = { id: row.id, value: row[field] || ('#' + row.id) };
+        // Pour Chantiers, stocker aussi la valeur du champ primaire (Statue)
+        if (key === 'Chantiers') {
+          obj.statue = row['Statue'] || '';
+        }
         if (key === 'TypeTaches' || key === 'SousTaches') {
           const lien = row['lien vers chantier'] || row['Lien vers chantier'] || [];
           // Stocker les noms ET les IDs des chantiers liés
@@ -753,11 +757,13 @@
     const options = tableData[key] || [];
     if ((key !== 'TypeTaches' && key !== 'SousTaches') || !globalSelected.Chantiers) return options;
     const chantierNom = globalSelected.Chantiers.value;
-    const chantierId = String(globalSelected.Chantiers.id);
+    // Récupérer la valeur Statue du chantier sélectionné (champ primaire Baserow)
+    const chantierData = (tableData['Chantiers'] || []).find(c => c.id === globalSelected.Chantiers.id);
+    const chantierStatue = chantierData ? chantierData.statue : '';
     return options.filter(opt => {
-      if ((!opt.chantiersNoms || opt.chantiersNoms.length === 0) && (!opt.chantiersRowIds || opt.chantiersRowIds.length === 0)) return true;
-      // Comparer par nom OU par ID de ligne Baserow
-      return opt.chantiersNoms.includes(chantierNom) || (opt.chantiersRowIds && opt.chantiersRowIds.includes(chantierId));
+      if (!opt.chantiersNoms || opt.chantiersNoms.length === 0) return true;
+      // Comparer par nom OU par valeur du champ primaire (Statue)
+      return opt.chantiersNoms.includes(chantierNom) || opt.chantiersNoms.includes(chantierStatue);
     });
   }
 
