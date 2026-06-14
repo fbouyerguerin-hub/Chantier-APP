@@ -220,6 +220,27 @@
     .modal-message-body { font-size: 14px; color: var(--gris-moyen); line-height: 1.6; margin-bottom: 20px; text-align: center; }
     .modal-message-btn { width: 100%; background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; }
 
+    .btn-export { background: #fff; border: 1.5px solid #ddd5c5; border-radius: 12px; padding: 14px 16px; font-size: 14px; font-weight: 600; color: var(--gris); cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    /* PLANNING ADMIN */
+    .planning-admin-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 16px 16px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .planning-admin-table { border-collapse: collapse; min-width: 600px; width: 100%; background: #fff; border-radius: 12px; overflow: hidden; }
+    .planning-admin-table th { padding: 8px 6px; font-size: 11px; font-weight: 700; color: #fff; background: var(--vert); text-align: center; border-right: 1px solid rgba(255,255,255,0.2); }
+    .planning-admin-table th.today { background: var(--beige); }
+    .planning-admin-table th.col-collab { background: #2c2c2c; text-align: left; padding-left: 10px; min-width: 90px; }
+    .planning-admin-table td { padding: 4px; vertical-align: top; border-right: 1px solid #f1ece3; border-bottom: 1px solid #f1ece3; min-width: 80px; }
+    .planning-admin-table td.col-collab-cell { padding: 6px 8px; background: #fafafa; border-right: 1px solid #e0e0e0; }
+    .collab-initiales { font-size: 11px; font-weight: 800; color: var(--vert); }
+    .collab-name { font-size: 10px; color: #666; line-height: 1.3; }
+    .aff-tag { background: var(--vert-clair); border-left: 2px solid var(--vert); border-radius: 4px; padding: 3px 5px 3px 5px; margin-bottom: 3px; font-size: 10px; color: var(--vert); font-weight: 600; position: relative; word-break: break-word; max-width: 100%; box-sizing: border-box; }
+    .aff-tag .btn-del-aff { position: absolute; right: 2px; top: 2px; background: none; border: none; font-size: 10px; cursor: pointer; color: #c0392b; padding: 0; line-height: 1; }
+    .aff-notes { font-size: 9px; color: #888; margin-top: 2px; word-break: break-word; white-space: normal; line-height: 1.3; }
+    .planning-admin-table td { padding: 4px; vertical-align: top; border-right: 1px solid #f1ece3; border-bottom: 1px solid #f1ece3; width: calc((100% - 90px) / 5); max-width: 120px; }
+    .conge-tag-admin { background: #fef3cd; border-left: 2px solid var(--beige); border-radius: 4px; padding: 3px 5px; font-size: 10px; color: #856404; font-weight: 600; }
+    .btn-add-aff-admin { background: #f0f7ef; border: 1px dashed var(--vert); border-radius: 4px; width: 100%; padding: 4px; font-size: 16px; cursor: pointer; color: var(--vert); margin-top: 2px; }
+    .semaine-nav-admin { display: flex; align-items: center; justify-content: space-between; margin: 0 16px 12px; background: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border-left: 3px solid var(--vert); }
+    .semaine-nav-btn { background: var(--vert-clair); border: none; border-radius: 6px; padding: 6px 12px; font-size: 16px; cursor: pointer; color: var(--vert); font-weight: 700; }
+    .semaine-label-admin { font-size: 11px; font-weight: 700; color: var(--gris); }
+    .btn-export:active { background: var(--vert-clair); }
     .loading { text-align: center; padding: 60px 20px; color: #64748b; }
     .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: var(--vert); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -428,6 +449,7 @@
     <div class="planning-nav">
       <button class="planning-nav-btn" onclick="changerMoisPlanning(-1)">‹</button>
       <button class="planning-nav-btn" onclick="changerMoisPlanning(1)">›</button>
+      <input type="week" id="input-semaine-planning" onchange="allerSemainePersonnel(this.value)" style="font-size:11px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:4px 6px;color:#fff;background:rgba(255,255,255,0.15);outline:none" />
       <button class="btn-print" onclick="imprimerPage('planning')">🖨️</button>
     </div>
   </div>
@@ -519,7 +541,7 @@
       }
 
       errEl.style.display = 'none';
-      seConnecter(user['Nom complet'], user['Vue ID']);
+      seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '');
 
     } catch(e) {
       errEl.textContent = '❌ Erreur de connexion. Réessayez.';
@@ -539,10 +561,12 @@
   // Collaborateur connecté
   let connectedCollab = null;
   let connectedViewId = null;
+  let connectedDroit = '';
 
-  function seConnecter(nom, viewId) {
+  function seConnecter(nom, viewId, droit) {
     connectedCollab = nom;
     connectedViewId = viewId;
+    connectedDroit = droit || '';
     // Chercher dans les données déjà chargées
     const collabData = tableData['Collaborateur'] || [];
     const found = collabData.find(c => c.value === nom);
@@ -558,6 +582,11 @@
     document.getElementById('header-collab-name').style.display = 'block';
     // Afficher la nav
     document.querySelector('.bottom-nav').style.display = 'flex';
+    // Afficher/masquer les onglets selon le droit
+    const navGestion = document.getElementById('nav-gestion');
+    if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
+    const navCollectif = document.getElementById('nav-collectif');
+    if (navCollectif) navCollectif.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'flex' : 'none';
     showPage('page-form');
     chargerMessage();
   }
@@ -841,6 +870,12 @@
     } else if (nav === 'planning') {
       showPage('page-planning');
       loadPlanning();
+    } else if (nav === 'collectif') {
+      showPage('page-collectif');
+      loadPlanningCollectif();
+    } else if (nav === 'gestion') {
+      showPage('page-gestion');
+      loadGestion();
     }
   }
 
@@ -1177,7 +1212,27 @@
 
   function changerMoisPlanning(delta) {
     planningDate.setDate(planningDate.getDate() + delta * 7);
+    updateInputSemainePersonnel();
     loadPlanning();
+  }
+
+  function allerSemainePersonnel(val) {
+    if (!val) return;
+    const [year, week] = val.split('-W').map(Number);
+    const d = new Date(year, 0, 1 + (week - 1) * 7);
+    const day = d.getDay();
+    d.setDate(d.getDate() + (day <= 4 ? 1 - day : 8 - day));
+    planningDate = d;
+    loadPlanning();
+  }
+
+  function updateInputSemainePersonnel() {
+    const lundi = getLundi(planningDate);
+    const year = lundi.getFullYear();
+    const startOfYear = new Date(year, 0, 1);
+    const week = Math.ceil(((lundi - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+    const input = document.getElementById('input-semaine-planning');
+    if (input) input.value = year + '-W' + String(week).padStart(2, '0');
   }
 
   function updatePlanningLabel() {
@@ -1188,6 +1243,7 @@
     document.getElementById('planning-semaine-label').textContent =
       'Du ' + lundi.toLocaleDateString('fr-FR', opts) + ' au ' + vendredi.toLocaleDateString('fr-FR', optsY);
     document.getElementById('planning-dates-label').textContent = 'Planning de la semaine';
+    updateInputSemainePersonnel();
   }
 
   const TABLE_PLANNING = '1023480';
@@ -1250,7 +1306,8 @@
         rows.forEach(r => {
           const d = r['Date'];
           if (!byDate[d]) byDate[d] = [];
-          byDate[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', isSaisie: false });
+          const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
+          byDate[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', isSaisie: false, periode });
         });
       }
 
@@ -1280,7 +1337,8 @@
         } else if (byDate[dateStr] && byDate[dateStr].length > 0) {
           cellHTML = byDate[dateStr].map(r => {
             const heuresLabel = r.isSaisie && r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : '';
-            return `<div class="planning-cell-chantier">🏗 ${r.chantier}${heuresLabel}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`;
+            const periodeLabel = !r.isSaisie && r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : '';
+            return `<div class="planning-cell-chantier">🏗 ${r.chantier}${periodeLabel}${heuresLabel}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`;
           }).join('');
         } else {
           cellHTML = `<div class="planning-cell-vide">—</div>`;
@@ -1350,8 +1408,1422 @@
     el.style.display = el.style.display === 'none' ? 'block' : 'none';
   }
 
+
+
+
+  // ── PLANNING COLLECTIF (Gestionnaires) ──
+  let semaineCollectif = new Date();
+  let chantiersCollectif = [];
+  let planningCollectifData = [];
+  let congesCollectifData = [];
+  let currentAffCollectif = null;
+  let selectedChantierCollectif = null;
+  let collectifLoaded = false;
+  let collaborateursFiltre = []; // liste filtrée selon poste
+
+  async function loadPlanningCollectif() {
+    if (!collectifLoaded) {
+      const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const dataC = await resC.json();
+      (dataC.results || []).forEach(r => {
+        const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
+        if (c) { c.collabId = r.id; c.poste = r['Poste / Métier'] || ''; }
+      });
+      // Créer les boutons filtres postes
+      const postes = new Set();
+      COLLABORATEURS_ADMIN.forEach(c => { if (c.poste) postes.add(c.poste); });
+      const filtreWrap = document.getElementById('filtre-poste-collectif');
+      if (filtreWrap && filtreWrap.children.length <= 1) {
+        [...postes].sort().forEach(p => {
+          const btn = document.createElement('button');
+          btn.textContent = p;
+          btn.dataset.poste = p;
+          btn.style.cssText = 'background:#f1f5f9;color:var(--gris);border:1.5px solid #ddd;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer';
+          btn.onclick = () => toggleFiltrePoste(btn, p);
+          filtreWrap.appendChild(btn);
+        });
+      }
+      collectifLoaded = true;
+    }
+
+    // Charger chantiers en cours
+    const resChantiers = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+    const dataChantiers = await resChantiers.json();
+    chantiersCollectif = (dataChantiers.results || [])
+      .filter(r => (r['Statue']?.value || r['Statue'] || '').toLowerCase().trim() === 'en cours')
+      .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id }));
+
+    const lundi = getLundiAdmin(semaineCollectif);
+    const jours = [];
+    for (let i = 0; i < 5; i++) {
+      const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+      jours.push(j);
+    }
+    const dateDebut = jours[0].toISOString().split('T')[0];
+    const dateFin = jours[4].toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+
+    document.getElementById('planning-collectif-loading').style.display = 'block';
+    document.getElementById('planning-collectif-grid').innerHTML = '';
+
+    const [resP, resConges] = await Promise.all([
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS })
+    ]);
+    planningCollectifData = (await resP.json()).results || [];
+    congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
+
+    document.getElementById('planning-collectif-loading').style.display = 'none';
+
+    // Construire les bulles collaborateurs disponibles
+    renderBullesCollabs(jours);
+
+    // Construire la grille
+    const table = document.getElementById('planning-collectif-grid');
+    const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
+
+    const thead = document.createElement('thead');
+    const trHead = document.createElement('tr');
+    const thChantier = document.createElement('th');
+    thChantier.className = 'col-collab';
+    thChantier.textContent = 'Chantier';
+    trHead.appendChild(thChantier);
+    jours.forEach((j, i) => {
+      const dateStr = j.toISOString().split('T')[0];
+      const th = document.createElement('th');
+      th.className = 'col-jour' + (dateStr === today ? ' today' : '');
+      th.innerHTML = '<div>' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) + '</div>';
+      trHead.appendChild(th);
+    });
+    thead.appendChild(trHead);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    chantiersCollectif.forEach(chantier => {
+      const tr = document.createElement('tr');
+      const tdNom = document.createElement('td');
+      tdNom.className = 'col-collab-cell';
+      tdNom.style.verticalAlign = 'middle';
+      tdNom.innerHTML = '<div class="collab-name"><strong style="font-size:10px">' + chantier.nom + '</strong></div>';
+      tr.appendChild(tdNom);
+
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const td = document.createElement('td');
+        td.style.padding = '0';
+
+        // Créer zone Matin et Après-midi
+        ['Matin', 'Après-midi'].forEach(periode => {
+          const zone = document.createElement('div');
+          zone.style.cssText = 'padding:4px;min-height:36px;' + (periode === 'Matin' ? 'border-bottom:1px dashed #e0e0e0;' : '');
+
+          // Label période
+          const label = document.createElement('div');
+          label.style.cssText = 'font-size:8px;color:#bbb;font-weight:700;margin-bottom:2px';
+          label.textContent = periode === 'Matin' ? '🌅 Matin' : '🌆 AM';
+          zone.appendChild(label);
+
+          // Vérifier si le collaborateur déposé est absent ce jour
+          zone.ondragover = (e) => {
+            const collabId = parseInt(e.dataTransfer.getData('collabId') || 0);
+            const absent = collabId && congesCollectifData.some(c =>
+              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
+              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+            );
+            if (absent) { zone.style.background = '#fde8e8'; return; }
+            e.preventDefault(); zone.style.background = '#e8f5e9';
+          };
+          zone.ondragleave = () => { zone.style.background = ''; };
+          zone.ondrop = (e) => {
+            e.preventDefault();
+            zone.style.background = '';
+            const collabId = parseInt(e.dataTransfer.getData('collabId'));
+            const collabNom = e.dataTransfer.getData('collabNom');
+            const existingAffId = e.dataTransfer.getData('existingAffId');
+            // Vérifier absence ce jour
+            const absent = congesCollectifData.some(c =>
+              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
+              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+            );
+            if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
+            affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId || null);
+          };
+
+          // Affectations existantes pour cette période
+          const affs = planningCollectifData.filter(p => {
+            if (p['Date'] !== dateStr) return false;
+            if (!(p['Chantier'] || []).some(c => c.id === chantier.id)) return false;
+            const p2 = Array.isArray(p['Periode']) ? p['Periode'].map(v => v.value || v).join('/') : p['Periode']?.value || p['Periode'] || 'Matin';
+            return p2 === periode;
+          });
+
+          affs.forEach(aff => {
+            const collabNom = (aff['Collaborateurs'] || [])[0]?.value || '—';
+            const collabId = (aff['Collaborateurs'] || [])[0]?.id;
+            const notes = aff['Notes'] || '';
+            const div = document.createElement('div');
+            div.className = 'aff-tag';
+            div.style.cssText = 'cursor:grab;margin-bottom:2px;' + (periode === 'Après-midi' ? 'background:#f0f7ef;border-color:#7ab870;' : '');
+            div.draggable = true;
+            div.innerHTML = '👷 ' + collabNom.split(' ')[0] + (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') + '<button class="btn-del-aff">✕</button>';
+            div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
+            div.onclick = () => modifierAffCollectifChantier(aff.id, chantier, collabNom, notes, periode, dateStr);
+            div.ondragstart = (e) => {
+              e.dataTransfer.setData('collabId', collabId);
+              e.dataTransfer.setData('collabNom', collabNom);
+              e.dataTransfer.setData('existingAffId', aff.id);
+              div.style.opacity = '0.5';
+            };
+            div.ondragend = () => { div.style.opacity = '1'; };
+            zone.appendChild(div);
+          });
+
+          td.appendChild(zone);
+        });
+
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    const lundi2 = getLundiAdmin(semaineCollectif);
+    const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate() + 4);
+    document.getElementById('semaine-label-collectif').textContent =
+      'Du ' + lundi2.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    updateInputSemaineCollectif();
+  }
+
+  const TYPES_ABSENCE = ['Congés payés', 'RTT', 'Formation', 'Maladie', 'Sans solde', 'Autre'];
+
+  function estAbsentJour(collabId, dateStr) {
+    return congesCollectifData.some(c =>
+      (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
+      dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+    );
+  }
+
+  function renderBullesCollabs(jours) {
+    const container = document.getElementById('bulles-collabs');
+    if (!container) return;
+    container.innerHTML = '';
+    const dateDebut = jours[0].toISOString().split('T')[0];
+    const dateFin = jours[4].toISOString().split('T')[0];
+
+    COLLABORATEURS_ADMIN.forEach(collab => {
+      if (!collab.collabId) return;
+      // Appliquer le filtre poste
+      if (postesSelectionnes.size > 0 && !postesSelectionnes.has(collab.poste)) return;
+      // Masquer seulement si absent TOUTE la semaine
+      const absentTouteSemaine = congesCollectifData.some(c => {
+        if (!(c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)) return false;
+        const debut = c['Date de début'] || '';
+        const fin = c['Date de fin journée (inclus)'] || '';
+        return debut <= dateDebut && fin >= dateFin;
+      });
+      if (absentTouteSemaine) return;
+
+      const bulle = document.createElement('div');
+      bulle.draggable = true;
+      bulle.style.cssText = 'background:var(--vert);color:#fff;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:grab;user-select:none;white-space:nowrap';
+      bulle.textContent = collab.nom.split(' ')[0] + ' ' + collab.nom.split(' ').slice(1).join(' ').charAt(0) + '.';
+      bulle.title = collab.nom + (collab.poste ? ' · ' + collab.poste : '');
+      bulle.ondragstart = (e) => {
+        e.dataTransfer.setData('collabId', collab.collabId);
+        e.dataTransfer.setData('collabNom', collab.nom);
+        bulle.style.opacity = '0.5';
+      };
+      bulle.ondragend = () => { bulle.style.opacity = '1'; };
+      container.appendChild(bulle);
+    });
+  }
+
+  let pendingAff = null;
+
+  function affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId) {
+    // Vérifier si déjà affecté ce jour sur cette période (sauf si c'est un déplacement)
+    if (!existingAffId) {
+      const dejaAffecte = planningCollectifData.find(p => {
+        if (p['Date'] !== dateStr) return false;
+        if (!(p['Collaborateurs'] || []).some(cc => cc.id === parseInt(collabId))) return false;
+        const pPeriode = Array.isArray(p['Periode']) ? p['Periode'].map(v => v.value || v).join('/') : p['Periode']?.value || p['Periode'] || 'Matin';
+        return pPeriode === periode;
+      });
+      if (dejaAffecte) {
+        const chantierExist = (dejaAffecte['Chantier'] || [])[0]?.value || '—';
+        const msg = '⚠️ ' + collabNom.split(' ')[0] + ' est déjà affecté ce jour sur ce créneau sur le chantier : ' + chantierExist + '\n\nVoulez-vous quand même affecter ?';
+        if (!confirm(msg)) return;
+      }
+    }
+    // Stocker et ouvrir modal notes
+    pendingAff = { collabId: parseInt(collabId), collabNom, chantier, dateStr, periode, existingAffId: existingAffId || null };
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-notes-drop-title').textContent =
+      '👷 ' + collabNom.split(' ')[0] + ' → ' + chantier.nom + ' · ' + (periode === 'Matin' ? '🌅' : '🌆') + ' ' + periode;
+    document.getElementById('notes-drop-input').value = '';
+    document.getElementById('modal-notes-drop').classList.add('open');
+    setTimeout(() => document.getElementById('notes-drop-input').focus(), 300);
+  }
+
+  function closeModalNotesDrop(e) {
+    if (!e || e.target === document.getElementById('modal-notes-drop')) {
+      document.getElementById('modal-notes-drop').classList.remove('open');
+      pendingAff = null;
+    }
+  }
+
+  async function confirmerAvecNotes() {
+    document.getElementById('modal-notes-drop').classList.remove('open');
+    if (!pendingAff) return;
+    const notes = document.getElementById('notes-drop-input').value || '';
+    try {
+      if (pendingAff.existingAffId) {
+        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
+      }
+      const payload = {
+        Collaborateurs: [pendingAff.collabId],
+        Chantier: [parseInt(pendingAff.chantier.id)],
+        Date: pendingAff.dateStr,
+        Periode: [pendingAff.periode],
+        Notes: notes,
+      };
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      pendingAff = null;
+      await loadPlanningCollectif();
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
+  function ouvrirModalPeriode(collabNom, chantierNom, dateStr) {
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-periode-title').textContent =
+      collabNom.split(' ')[0] + ' → ' + chantierNom + ' · ' + d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+    document.getElementById('modal-periode-collectif').classList.add('open');
+  }
+
+  function closeModalPeriodeCollectif(e) {
+    if (!e || e.target === document.getElementById('modal-periode-collectif')) {
+      document.getElementById('modal-periode-collectif').classList.remove('open');
+      pendingAff = null;
+    }
+  }
+
+  async function confirmerAffectation(periode) {
+    document.getElementById('modal-periode-collectif').classList.remove('open');
+    if (!pendingAff) return;
+    try {
+      const collabId = parseInt(pendingAff.collabId);
+      const chantierId = parseInt(pendingAff.chantier.id);
+      const payload = {
+        Collaborateurs: [collabId],
+        Chantier: [chantierId],
+        Date: pendingAff.dateStr,
+        Periode: [periode],
+        Notes: '',
+      };
+      // Si déplacement depuis une cellule existante, supprimer l'ancienne
+      if (pendingAff.existingAffId) {
+        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
+      }
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      pendingAff = null;
+      await loadPlanningCollectif();
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
+
+  let postesSelectionnes = new Set();
+
+  function filtrerTousPostes() {
+    postesSelectionnes.clear();
+    document.querySelectorAll('#filtre-poste-collectif button').forEach(b => {
+      if (b.id === 'btn-tous-postes') {
+        b.style.background = 'var(--vert)'; b.style.color = '#fff';
+      } else {
+        b.style.background = '#f1f5f9'; b.style.color = 'var(--gris)';
+      }
+    });
+    const lundi = getLundiAdmin(semaineCollectif);
+    const jours = [];
+    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(j); }
+    renderBullesCollabs(jours);
+  }
+
+  function toggleFiltrePoste(btn, poste) {
+    if (postesSelectionnes.has(poste)) {
+      postesSelectionnes.delete(poste);
+      btn.style.background = '#f1f5f9'; btn.style.color = 'var(--gris)';
+    } else {
+      postesSelectionnes.add(poste);
+      btn.style.background = 'var(--vert)'; btn.style.color = '#fff';
+    }
+    const btnTous = document.getElementById('btn-tous-postes');
+    if (btnTous) {
+      btnTous.style.background = postesSelectionnes.size > 0 ? '#f1f5f9' : 'var(--vert)';
+      btnTous.style.color = postesSelectionnes.size > 0 ? 'var(--gris)' : '#fff';
+    }
+    const lundi = getLundiAdmin(semaineCollectif);
+    const jours = [];
+    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(j); }
+    renderBullesCollabs(jours);
+  }
+
+  function changerSemaineCollectif(delta) {
+    semaineCollectif.setDate(semaineCollectif.getDate() + delta * 7);
+    updateInputSemaineCollectif();
+    loadPlanningCollectif();
+  }
+
+  function allerSemaineCollectif(val) {
+    if (!val) return;
+    // val = "2026-W24"
+    const [year, week] = val.split('-W').map(Number);
+    const d = new Date(year, 0, 1 + (week - 1) * 7);
+    const day = d.getDay();
+    d.setDate(d.getDate() + (day <= 4 ? 1 - day : 8 - day));
+    semaineCollectif = d;
+    loadPlanningCollectif();
+  }
+
+  function updateInputSemaineCollectif() {
+    const lundi = getLundiAdmin(semaineCollectif);
+    const year = lundi.getFullYear();
+    const startOfYear = new Date(year, 0, 1);
+    const week = Math.ceil(((lundi - startOfYear) / 86400000 + startOfYear.getDay() + 1) / 7);
+    const input = document.getElementById('input-semaine-collectif');
+    if (input) input.value = year + '-W' + String(week).padStart(2, '0');
+  }
+
+  function ouvrirModalAffChantier(chantier, dateStr) {
+    currentAffCollectif = { chantier, dateStr, editId: null };
+    selectedChantierCollectif = chantier;
+    document.getElementById('modal-aff-collectif-title').textContent = '👷 Affecter à ' + chantier.nom;
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-aff-collectif-sub').textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('val-chantier-collectif').textContent = chantier.nom;
+    document.getElementById('val-chantier-collectif').classList.remove('empty');
+    document.getElementById('modal-aff-collectif-notes').value = '';
+    // Afficher select collaborateur
+    renderSelectCollaborateur(null);
+    document.getElementById('modal-aff-collectif').classList.add('open');
+  }
+
+  function modifierAffCollectifChantier(affId, chantier, collabNom, notes, periode, dateStr) {
+    currentAffCollectif = { chantier, dateStr, editId: affId };
+    document.getElementById('modal-aff-collectif-title').textContent = '✏️ Modifier affectation';
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-aff-collectif-sub').textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('val-chantier-collectif').textContent = chantier.nom;
+    const fc = document.getElementById('field-collab-collectif');
+    if (fc) fc.innerHTML = '<div style="background:var(--vert-clair);border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;color:var(--vert)">👷 ' + collabNom + '</div>';
+    const sel = document.getElementById('select-periode-modal');
+    if (sel) { [...sel.options].forEach(o => { if (o.value === periode) o.selected = true; }); }
+    document.getElementById('modal-aff-collectif-notes').value = notes || '';
+    document.getElementById('modal-aff-collectif').classList.add('open');
+  }
+
+  function renderSelectCollaborateur(selectedNom, selectedPeriode) {
+    // Remplacer le sélecteur chantier par un sélecteur collaborateur dans ce modal
+    const selWrap = document.getElementById('val-chantier-collectif').parentElement;
+    selWrap.style.display = 'none'; // Cacher le sélecteur chantier
+
+    // Créer/mettre à jour le select collaborateur
+    let selCollab = document.getElementById('select-collab-modal');
+    if (!selCollab) {
+      selCollab = document.createElement('select');
+      selCollab.id = 'select-collab-modal';
+      selCollab.style.cssText = 'width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none';
+      selWrap.parentElement.insertBefore(selCollab, selWrap);
+    }
+    selCollab.innerHTML = '<option value="">-- Choisir un collaborateur --</option>';
+    const poste = document.getElementById('filtre-poste-collectif')?.value || '';
+    const collabs = COLLABORATEURS_ADMIN.filter(c => c.collabId && (!poste || c.poste === poste));
+    collabs.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.collabId;
+      opt.textContent = c.nom + (c.poste ? ' (' + c.poste + ')' : '');
+      if (c.nom === selectedNom) opt.selected = true;
+      selCollab.appendChild(opt);
+    });
+    selCollab.style.display = 'block';
+
+    // Select période
+    let selPeriode = document.getElementById('select-periode-modal');
+    if (!selPeriode) {
+      selPeriode = document.createElement('select');
+      selPeriode.id = 'select-periode-modal';
+      selPeriode.style.cssText = 'width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none;margin-top:10px';
+      selCollab.after(selPeriode);
+    }
+    selPeriode.innerHTML = '<option value="Matin">🌅 Matin</option><option value="Après-midi">🌆 Après-midi</option>';
+    if (selectedPeriode) {
+      [...selPeriode.options].forEach(o => { if (o.value === selectedPeriode) o.selected = true; });
+    }
+    selPeriode.style.display = 'block';
+  }
+
+  function ouvrirModalAffCollectif(btn) {
+    const collabNom = btn.dataset.nom;
+    const collabId = parseInt(btn.dataset.id);
+    const dateStr = btn.dataset.date;
+    const periode = btn.dataset.periode || 'Matin';
+    currentAffCollectif = { collabId, collabNom, dateStr, periode };
+    selectedChantierCollectif = null;
+    const periodeLabel = periode === 'Après-midi' ? '🌆 Après-midi' : '🌅 Matin';
+    document.getElementById('modal-aff-collectif-title').textContent = 'Affecter ' + collabNom.split(' ')[0];
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-aff-collectif-sub').textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) + ' — ' + periodeLabel;
+    document.getElementById('val-chantier-collectif').textContent = 'Sélectionner…';
+    document.getElementById('val-chantier-collectif').classList.add('empty');
+    document.getElementById('modal-aff-collectif-notes').value = '';
+    document.getElementById('modal-aff-collectif').classList.add('open');
+  }
+
+  function modifierAffCollectif(affId, chantierNom, notes, collabId, dateStr, periode) {
+    currentAffCollectif = { collabId, dateStr, periode, editId: affId };
+    // Trouver le chantier dans la liste
+    const chantier = chantiersCollectif.find(c => c.nom === chantierNom);
+    selectedChantierCollectif = chantier || null;
+    const periodeLabel = periode === 'Après-midi' ? '🌆 Après-midi' : '🌅 Matin';
+    document.getElementById('modal-aff-collectif-title').textContent = '✏️ Modifier affectation';
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-aff-collectif-sub').textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) + ' — ' + periodeLabel;
+    const el = document.getElementById('val-chantier-collectif');
+    el.textContent = chantierNom; el.classList.remove('empty');
+    document.getElementById('modal-aff-collectif-notes').value = notes || '';
+    document.getElementById('modal-aff-collectif').classList.add('open');
+  }
+
+  function closeModalAffCollectif(e) {
+    if (!e || e.target === document.getElementById('modal-aff-collectif')) {
+      document.getElementById('modal-aff-collectif').classList.remove('open');
+    }
+  }
+
+  async function validerAffCollectif() {
+    const selPeriode = document.getElementById('select-periode-modal');
+    const periode = selPeriode ? selPeriode.value : 'Matin';
+    const btn = document.getElementById('btn-valider-aff-collectif');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const payload = {
+        Chantier: [currentAffCollectif.chantier.id],
+        Date: currentAffCollectif.dateStr,
+        Periode: [periode],
+        Notes: document.getElementById('modal-aff-collectif-notes').value || '',
+      };
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentAffCollectif.editId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      document.getElementById('modal-aff-collectif').classList.remove('open');
+      await loadPlanningCollectif();
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
+  }
+
+  async function supprimerAffCollectif(id) {
+    if (!confirm('Supprimer cette affectation ?')) return;
+    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
+    await loadPlanningCollectif();
+  }
+
+  function openOptionsChantierCollectif() {
+    document.getElementById('modal-chantiers-collectif').classList.add('open');
+    document.getElementById('search-chantier-collectif').value = '';
+    renderChantiersCollectif(chantiersCollectif);
+    setTimeout(() => document.getElementById('search-chantier-collectif').focus(), 300);
+  }
+
+  function closeOptionsChantierCollectif() {
+    document.getElementById('modal-chantiers-collectif').classList.remove('open');
+  }
+
+  function filterChantiersCollectif(q) {
+    renderChantiersCollectif(q ? chantiersCollectif.filter(c => c.nom.toLowerCase().includes(q.toLowerCase())) : chantiersCollectif);
+  }
+
+  function renderChantiersCollectif(list) {
+    const container = document.getElementById('liste-chantiers-collectif');
+    container.innerHTML = '';
+    list.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'modal-option';
+      div.textContent = c.nom;
+      div.onclick = () => selectChantierCollectif(c.id, c.nom);
+      container.appendChild(div);
+    });
+  }
+
+  function selectChantierCollectif(id, nom) {
+    selectedChantierCollectif = { id, nom };
+    const el = document.getElementById('val-chantier-collectif');
+    el.textContent = nom; el.classList.remove('empty');
+    closeOptionsChantierCollectif();
+  }
+
+  async function exportExcelCollectif() {
+    const lundi = getLundiAdmin(semaineCollectif);
+    const jours = [];
+    for (let i = 0; i < 5; i++) {
+      const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+      jours.push(j);
+    }
+    const joursNoms = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+    const headers = ['Collaborateur', ...jours.map((j, i) =>
+      joursNoms[i] + ' ' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+    )];
+    const rows = [headers];
+    COLLABORATEURS_ADMIN.forEach(collab => {
+      const row = [collab.nom];
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const conge = congesCollectifData.find(c =>
+          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+        );
+        if (conge) { row.push('Congé - ' + (conge['Type de demande']?.value || 'Absence')); return; }
+        const affs = planningCollectifData.filter(p =>
+          p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
+        );
+        row.push(affs.length > 0 ? affs.map(a => (a['Chantier'] || [])[0]?.value || '-').join(' / ') : '');
+      });
+      rows.push(row);
+    });
+    const csv = '\uFEFF' + rows.map(r => r.join(';')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'Planning_collectif_' + lundi.toISOString().split('T')[0] + '.csv';
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+  // ── PLANNING ADMIN ──
+  const TABLE_PLANNING_ADMIN = '1023480';
+  const TABLE_CHANTIERS_ADMIN = '1014441';
+  const TABLE_CONGES_PLANNING = '1022869';
+  const TABLE_COLLABS_ADMIN = '1014431';
+
+  const COLLABORATEURS_ADMIN = [
+    { nom: 'Karine Bouyer', initiales: 'KB', collabId: null },
+    { nom: 'Mehdi Bonnaud', initiales: 'MB', collabId: null },
+    { nom: 'Freddy Kreb', initiales: 'FK', collabId: null },
+    { nom: 'Romain Bonnaud', initiales: 'RB', collabId: null },
+    { nom: 'Loic Robineau', initiales: 'LR', collabId: null },
+    { nom: 'Nathalie Lurel', initiales: 'NL', collabId: null },
+    { nom: 'Louise Boissinot', initiales: 'LB', collabId: null },
+    { nom: 'Valentin Boudard', initiales: 'VB', collabId: null },
+    { nom: 'Frédéric Bouyer', initiales: 'FB', collabId: null },
+    { nom: 'Yohan Brusselle', initiales: 'YB', collabId: null },
+    { nom: 'Jocelyn Chapleau', initiales: 'JC', collabId: null },
+    { nom: 'Jerome Chauvet', initiales: 'JC', collabId: null },
+    { nom: 'Christophe Michenaud', initiales: 'CM', collabId: null },
+    { nom: 'Cedric Fradin', initiales: 'CF', collabId: null },
+    { nom: 'Fabrice Glard', initiales: 'FG', collabId: null },
+    { nom: 'Olivier Guilbaud', initiales: 'OG', collabId: null },
+    { nom: 'Samuel Herbreteau', initiales: 'SH', collabId: null },
+    { nom: 'Philippe Kreb', initiales: 'PK', collabId: null },
+    { nom: 'Stephane Lunais', initiales: 'SL', collabId: null },
+    { nom: 'Sebastien Lurel', initiales: 'SL', collabId: null },
+    { nom: 'Benjamin Martineau', initiales: 'BM', collabId: null },
+    { nom: 'Cedric Morin', initiales: 'CM', collabId: null },
+    { nom: 'Nael Hardouin', initiales: 'NH', collabId: null },
+    { nom: 'Yann Poupet', initiales: 'YP', collabId: null },
+    { nom: 'Robin Airieau', initiales: 'RA', collabId: null },
+    { nom: 'Fredy Souzeau', initiales: 'FS', collabId: null },
+    { nom: 'Remi Thomas', initiales: 'RT', collabId: null },
+    { nom: 'Alexis Tricoire', initiales: 'AT', collabId: null },
+    { nom: 'Renaud Voisin', initiales: 'RV', collabId: null },
+    { nom: 'Bruno Techer', initiales: 'BT', collabId: null },
+    { nom: 'Philippe Pinto', initiales: 'PP', collabId: null },
+    { nom: 'Youenn Morin', initiales: 'YM', collabId: null },
+    { nom: 'Loukas Piveteau', initiales: 'LP', collabId: null },
+  ];
+
+  let semaineAdmin = new Date();
+  let chantiersAdmin = [];
+  let planningAdminData = [];
+  let congesAdminData = [];
+  let currentAffAdmin = null;
+  let selectedChantierAdmin = null;
+  let collabsAdminLoaded = false;
+
+  async function loadPlanningAdmin() {
+    if (!collabsAdminLoaded) {
+      const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const dataC = await resC.json();
+      (dataC.results || []).forEach(r => {
+        const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
+        if (c) c.collabId = r.id;
+      });
+      if (!chantiersAdmin.length) {
+        const resC2 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const dataC2 = await resC2.json();
+        chantiersAdmin = (dataC2.results || []).map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id }));
+      }
+      collabsAdminLoaded = true;
+    }
+
+    const lundi = getLundiAdmin(semaineAdmin);
+    const jours = [];
+    for (let i = 0; i < 5; i++) {
+      const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+      jours.push(j);
+    }
+    const dateDebut = jours[0].toISOString().split('T')[0];
+    const dateFin = jours[4].toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+
+    document.getElementById('planning-admin-loading').style.display = 'block';
+    document.getElementById('planning-admin-grid').innerHTML = '';
+
+    const [resP, resConges] = await Promise.all([
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS })
+    ]);
+    const dataP = await resP.json();
+    const dataConges = await resConges.json();
+    planningAdminData = dataP.results || [];
+    congesAdminData = (dataConges.results || []).filter(r => r['Statut']?.value !== 'Refusé');
+
+    document.getElementById('planning-admin-loading').style.display = 'none';
+
+    const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
+    let html = '<thead><tr><th class="col-collab">Collaborateur</th>';
+    jours.forEach((j, i) => {
+      const dateStr = j.toISOString().split('T')[0];
+      const isToday = dateStr === today;
+      const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+      html += '<th class="col-jour ' + (isToday ? 'today' : '') + '"><div class="th-jour-nom">' + joursNoms[i] + '</div><div class="th-jour-date">' + dateLabel + '</div></th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    COLLABORATEURS_ADMIN.forEach(collab => {
+      html += '<tr><td class="col-collab-cell"><div class="collab-initiales">' + collab.initiales + '</div><div class="collab-name">' + collab.nom.split(' ')[0] + '<br><strong>' + collab.nom.split(' ').slice(1).join(' ') + '</strong></div></td>';
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const conge = congesAdminData.find(c =>
+          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+        );
+        const affs = planningAdminData.filter(p =>
+          p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
+        );
+        html += '<td><div>';
+        if (conge) {
+          html += '<div class="conge-tag-admin">🏖️ ' + (conge['Type de demande']?.value || 'Absence') + '</div>';
+        } else {
+          affs.forEach(aff => {
+            const chantier = (aff['Chantier'] || [])[0]?.value || '—';
+            const notes = aff['Notes'] || '';
+            html += '<div class="aff-tag">🏗 ' + chantier + (notes ? '<div class="aff-notes">' + notes + '</div>' : '') + '<button class="btn-del-aff" onclick="supprimerAffAdmin(' + aff.id + ', event)">✕</button></div>';
+          });
+          html += '<button class="btn-add-aff-admin" onclick="ouvrirModalAffAdmin(' + JSON.stringify(collab.nom) + ',' + collab.collabId + ',\'' + dateStr + '\')"  >+</button>';
+        }
+        html += '</div></td>';
+      });
+      html += '</tr>';
+    });
+    html += '</tbody>';
+    document.getElementById('planning-admin-grid').innerHTML = html;
+    updateSemaineAdminLabel();
+  }
+
+  function getLundiAdmin(date) {
+    const d = new Date(date);
+    const day = d.getDay();
+    d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    d.setHours(12, 0, 0, 0);
+    return d;
+  }
+
+  function changerSemaineAdmin(delta) {
+    semaineAdmin.setDate(semaineAdmin.getDate() + delta * 7);
+    loadPlanningAdmin();
+  }
+
+  function updateSemaineAdminLabel() {
+    const lundi = getLundiAdmin(semaineAdmin);
+    const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+    document.getElementById('semaine-label-admin').textContent =
+      'Du ' + lundi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function ouvrirModalAffAdmin(collabNom, collabId, dateStr) {
+    currentAffAdmin = { collabId, collabNom, dateStr };
+    selectedChantierAdmin = null;
+    document.getElementById('modal-aff-admin-title').textContent = 'Affecter ' + collabNom.split(' ')[0];
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-aff-admin-sub').textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    document.getElementById('val-chantier-admin').textContent = 'Sélectionner…';
+    document.getElementById('val-chantier-admin').classList.add('empty');
+    document.getElementById('modal-aff-admin-notes').value = '';
+    document.getElementById('modal-aff-admin').classList.add('open');
+  }
+
+  function closeModalAffAdmin(e) {
+    if (!e || e.target === document.getElementById('modal-aff-admin')) {
+      document.getElementById('modal-aff-admin').classList.remove('open');
+    }
+  }
+
+  async function validerAffAdmin() {
+    if (!selectedChantierAdmin) { alert('Veuillez sélectionner un chantier.'); return; }
+    const btn = document.getElementById('btn-valider-aff-admin');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const payload = {
+        Collaborateurs: [currentAffAdmin.collabId],
+        Chantier: [selectedChantierAdmin.id],
+        Date: currentAffAdmin.dateStr,
+        Notes: document.getElementById('modal-aff-admin-notes').value || '',
+      };
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      document.getElementById('modal-aff-admin').classList.remove('open');
+      await loadPlanningAdmin();
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
+  }
+
+  async function supprimerAffAdmin(id, e) {
+    e.stopPropagation();
+    if (!confirm('Supprimer cette affectation ?')) return;
+    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
+    await loadPlanningAdmin();
+  }
+
+  function openOptionsChantierAdmin() {
+    document.getElementById('modal-chantiers-admin').classList.add('open');
+    document.getElementById('search-chantier-admin').value = '';
+    renderChantiersAdmin(chantiersAdmin);
+    setTimeout(() => document.getElementById('search-chantier-admin').focus(), 300);
+  }
+
+  function closeOptionsChantierAdmin() {
+    document.getElementById('modal-chantiers-admin').classList.remove('open');
+  }
+
+  function filterChantiersAdmin(q) {
+    renderChantiersAdmin(q ? chantiersAdmin.filter(c => c.nom.toLowerCase().includes(q.toLowerCase())) : chantiersAdmin);
+  }
+
+  function renderChantiersAdmin(list) {
+    document.getElementById('liste-chantiers-admin').innerHTML = list.map(c =>
+      '<div class="modal-option" onclick="selectChantierAdmin(' + c.id + ',\'' + c.nom.replace(/'/g, "\\'") + '\')">' + c.nom + '</div>'
+    ).join('');
+  }
+
+  function selectChantierAdmin(id, nom) {
+    selectedChantierAdmin = { id, nom };
+    const el = document.getElementById('val-chantier-admin');
+    el.textContent = nom; el.classList.remove('empty');
+    closeOptionsChantierAdmin();
+  }
+
+  async function exportExcelAdmin() {
+    const lundi = getLundiAdmin(semaineAdmin);
+    const jours = [];
+    for (let i = 0; i < 5; i++) {
+      const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+      jours.push(j);
+    }
+    const joursNoms = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+    const headers = ['Collaborateur', ...jours.map((j, i) =>
+      joursNoms[i] + ' ' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+    )];
+    const rows = [headers];
+    COLLABORATEURS_ADMIN.forEach(collab => {
+      const row = [collab.nom];
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const conge = congesAdminData.find(c =>
+          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+        );
+        if (conge) { row.push('Congé - ' + (conge['Type de demande']?.value || 'Absence')); return; }
+        const affs = planningAdminData.filter(p =>
+          p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
+        );
+        row.push(affs.length > 0 ? affs.map(a => (a['Chantier'] || [])[0]?.value || '-').join(' / ') : '');
+      });
+      rows.push(row);
+    });
+    // Export CSV simple (pas besoin de SheetJS)
+    const csvRows = rows.map(r => r.join(';'));
+    const csv = '\uFEFF' + csvRows.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'Planning_' + lundi.toISOString().split('T')[0] + '.csv';
+    a.click(); URL.revokeObjectURL(url);
+  }
+
+
+  // ── GESTION CHANTIERS ──
+  let chantiersGestionCache = [];
+
+  async function loadChantiersGestion() {
+    const container = document.getElementById('liste-chantiers-gestion');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      chantiersGestionCache = data.results || [];
+      renderChantiersGestion(chantiersGestionCache);
+    } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  function filtrerChantiersGestion(q) {
+    const filtered = q
+      ? chantiersGestionCache.filter(c => (c['Nom du chantier'] || '').toLowerCase().includes(q.toLowerCase()))
+      : chantiersGestionCache;
+    renderChantiersGestion(filtered);
+  }
+
+  function renderChantiersGestion(chantiers) {
+    const container = document.getElementById('liste-chantiers-gestion');
+    if (!chantiers.length) { container.innerHTML = '<div class="feuille-empty">Aucun chantier</div>'; return; }
+    container.innerHTML = '';
+    chantiers.forEach(c => {
+      const statue = c['Statue']?.value || c['Statue'] || '—';
+      const color = statue === 'En cours' ? 'var(--vert)' : statue === 'Terminé' ? '#aaa' : 'var(--beige)';
+      const div = document.createElement('div');
+      div.style.cssText = 'background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ' + color;
+      div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--gris);flex:1">' + (c['Nom du chantier'] || '#' + c.id) + '</div>' +
+        '<select onchange="modifierStatueChantier(' + c.id + ', this.value)" style="background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;color:var(--gris);outline:none">' +
+        '<option value="" disabled' + (!statue || statue === '—' ? ' selected' : '') + '>-- Statut --</option>' +
+        '<option value="En cours"' + (statue === 'En cours' ? ' selected' : '') + '>🟢 En cours</option>' +
+        '<option value="En pause"' + (statue === 'En pause' ? ' selected' : '') + '>🟡 En pause</option>' +
+        '<option value="Terminé"' + (statue === 'Terminé' ? ' selected' : '') + '>⚫ Terminé</option>' +
+        '</select></div>';
+      container.appendChild(div);
+    });
+  }
+
+  async function modifierStatueChantier(rowId, statue) {
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statue': statue }) });
+      if (!res.ok) throw new Error(await res.text());
+      // Mettre à jour le cache local
+      const c = chantiersGestionCache.find(c => c.id === rowId);
+      if (c) c['Statue'] = { value: statue };
+      renderChantiersGestion(chantiersGestionCache);
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
+  // ── GESTION ADMIN ──
+  const TABLE_CONGES_ADMIN = '1022869';
+
+  function switchGestionTab(tab) {
+    ['utilisateurs','chantiers','conges-admin','planning-admin','export'].forEach(t => {
+      document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
+      const btn = document.getElementById('tab-g-' + t);
+      if (btn) btn.classList.toggle('active', t === tab);
+    });
+  }
+
+  async function loadGestion() {
+    // Masquer certains onglets pour les Gestionnaires
+    const isGestionnaire = connectedDroit === 'Gestionnaire';
+    ['tab-g-utilisateurs', 'tab-g-conges', 'tab-g-planning-admin', 'tab-g-export'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = isGestionnaire ? 'none' : '';
+    });
+    if (isGestionnaire) {
+      switchGestionTab('chantiers');
+    } else {
+      switchGestionTab('utilisateurs');
+      await loadUtilisateurs();
+    }
+  }
+
+  async function loadUtilisateurs() {
+    const container = document.getElementById('liste-utilisateurs');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      const users = data.results || [];
+      if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun utilisateur</div>'; return; }
+      container.innerHTML = users.map(u => {
+        const actif = u['Actif'] !== false;
+        const droit = u['Droit']?.value || u['Droit'] || 'Collaborateur';
+        return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--gris)">${u['Nom complet'] || '—'}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}</div>
+            <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button onclick="ouvrirFormUser(${u.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
+            <button onclick="supprimerUser(${u.id},'${(u['Nom complet']||'').replace(/'/g,"")}')" style="background:#fde8e8;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">🗑️</button>
+          </div>
+        </div>`;
+      }).join('');
+    } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  let usersCache = [];
+
+  async function ouvrirFormUser(rowId) {
+    document.getElementById('user-row-id').value = rowId || '';
+    document.getElementById('modal-user-titre').textContent = rowId ? 'Modifier utilisateur' : 'Nouvel utilisateur';
+    document.getElementById('user-nom').value = '';
+    document.getElementById('user-id').value = '';
+    document.getElementById('user-mdp').value = '';
+    document.getElementById('user-droit').value = 'Collaborateur';
+    document.getElementById('user-actif').value = 'true';
+    if (rowId) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+        const u = await res.json();
+        document.getElementById('user-nom').value = u['Nom complet'] || '';
+        document.getElementById('user-id').value = u['Identifiant'] || '';
+        document.getElementById('user-mdp').value = u['Mot de passe'] || '';
+        document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Collaborateur';
+        document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
+      } catch(e) {}
+    }
+    document.getElementById('modal-user').style.display = 'flex';
+  }
+
+  function fermerFormUser() {
+    document.getElementById('modal-user').style.display = 'none';
+  }
+
+  async function sauvegarderUser() {
+    const rowId = document.getElementById('user-row-id').value;
+    const payload = {
+      'Nom complet': document.getElementById('user-nom').value,
+      'Identifiant': document.getElementById('user-id').value,
+      'Mot de passe': document.getElementById('user-mdp').value,
+      'Droit': document.getElementById('user-droit').value,
+      'Actif': document.getElementById('user-actif').value === 'true',
+    };
+    const btn = document.getElementById('btn-save-user');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
+      const method = rowId ? 'PATCH' : 'POST';
+      const res = await fetch(url, { method, headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      fermerFormUser();
+      await loadUtilisateurs();
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+  }
+
+  async function supprimerUser(rowId, nom) {
+    if (!confirm('Supprimer l\'utilisateur "' + nom + '" ?')) return;
+    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
+    await loadUtilisateurs();
+  }
+
+  async function loadCongesAdmin() {
+    const container = document.getElementById('liste-conges-admin');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      const rows = (data.results || []).sort((a,b) => {
+        const order = {'En attente':0,'Validé':1,'Approuvé':1,'Refusé':2};
+        return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
+      });
+      if (!rows.length) { container.innerHTML = '<div class="feuille-empty">Aucune demande</div>'; return; }
+      container.innerHTML = rows.map(r => {
+        const statut = r['Statut']?.value || 'En attente';
+        const collab = (r['Collaborateurs'] || [])[0]?.value || '—';
+        const type = r['Type de demande']?.value || '—';
+        const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+        const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+        const isAttente = statut === 'En attente';
+        const color = isAttente ? 'var(--beige)' : statut.includes('Valid') || statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
+        return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
+            <div style="font-size:11px;font-weight:700;color:${color}">${statut}</div>
+          </div>
+          <div style="font-size:12px;color:#aaa">${type} · Du ${debut} au ${fin}</div>
+          ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
+          ${isAttente ? `<div style="display:flex;gap:8px;margin-top:10px">
+            <button onclick="validerConge(${r.id},'Validé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
+            <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
+          </div>` : ''}
+        </div>`;
+      }).join('');
+    } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  async function validerConge(rowId, statut) {
+    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statut }) });
+    await loadCongesAdmin();
+  }
+
+  async function exportCSVSaisies(periode) {
+    const btn = event.target;
+    btn.textContent = '⏳ Export…';
+    btn.disabled = true;
+    try {
+      const now = new Date();
+      let dateDebut, dateFin, nomFichier;
+      if (periode === 'semaine') {
+        const lundi = new Date(now);
+        const day = lundi.getDay();
+        lundi.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+        lundi.setHours(0,0,0,0);
+        const vendredi = new Date(lundi);
+        vendredi.setDate(lundi.getDate() + 4);
+        dateDebut = lundi.toISOString().split('T')[0];
+        dateFin = vendredi.toISOString().split('T')[0];
+        nomFichier = 'Saisies_semaine_' + dateDebut;
+      } else {
+        const year = now.getFullYear();
+        const month = now.getMonth();
+        dateDebut = new Date(year, month, 1).toISOString().split('T')[0];
+        dateFin = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        nomFichier = 'Saisies_mois_' + year + '_' + String(month+1).padStart(2,'0');
+      }
+      let allRows = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const url = 'https://api.baserow.io/api/database/rows/table/1014445/?user_field_names=true&size=200&page=' + page +
+          '&filter__Date__date_after_or_equal=' + dateDebut +
+          '&filter__Date__date_before_or_equal=' + dateFin;
+        const res = await fetch(url, { headers: HEADERS });
+        const data = await res.json();
+        allRows = allRows.concat(data.results || []);
+        hasMore = !!data.next;
+        page++;
+      }
+      if (!allRows.length) { alert('Aucune saisie pour cette période.'); return; }
+      const keys = Object.keys(allRows[0]).filter(k => k !== 'order');
+      const csvRows = [keys.join(';')];
+      allRows.forEach(row => {
+        csvRows.push(keys.map(k => {
+          let val = row[k];
+          if (val === null || val === undefined) return '';
+          if (Array.isArray(val)) return val.map(v => v.value || v).join(', ');
+          if (typeof val === 'object') return val.value || JSON.stringify(val);
+          return String(val).replace(/;/g, ',').replace(/[\r\n]+/g, ' ');
+        }).join(';'));
+      });
+      const csv = '\uFEFF' + csvRows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url2 = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url2; a.download = nomFichier + '.csv';
+      a.click(); URL.revokeObjectURL(url2);
+    } catch(e) { alert('Erreur export : ' + e.message); }
+    finally { btn.textContent = periode === 'semaine' ? '📅 Semaine courante' : '🗓️ Mois courant'; btn.disabled = false; }
+  }
+
+  async function exportCSV(tableId, nom) {
+    const btn = event.target;
+    btn.textContent = '⏳ Export…';
+    btn.disabled = true;
+    try {
+      let allRows = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + tableId + '/?user_field_names=true&size=200&page=' + page, { headers: HEADERS });
+        const data = await res.json();
+        allRows = allRows.concat(data.results || []);
+        hasMore = !!data.next;
+        page++;
+      }
+      if (!allRows.length) { alert('Aucune donnée à exporter.'); return; }
+      // Construire CSV
+      const keys = Object.keys(allRows[0]).filter(k => k !== 'order');
+      const csvRows = [keys.join(';')];
+      allRows.forEach(row => {
+        csvRows.push(keys.map(k => {
+          let val = row[k];
+          if (val === null || val === undefined) return '';
+          if (Array.isArray(val)) return val.map(v => v.value || v).join(', ');
+          if (typeof val === 'object') return val.value || JSON.stringify(val);
+          return String(val).replace(/;/g, ',').replace(/\r?\n/g, ' ');
+        }).join(';'));
+      });
+      const csv = '\uFEFF' + csvRows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = nom + '_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.click(); URL.revokeObjectURL(url);
+    } catch(e) { alert('Erreur export : ' + e.message); }
+    finally { btn.textContent = '📥 ' + nom; btn.disabled = false; }
+  }
+
+  // Override switchGestionTab pour charger les données
+  const _origSwitchGestionTab = switchGestionTab;
+  function switchGestionTab(tab) {
+    ['utilisateurs','chantiers','conges-admin','planning-admin','export'].forEach(t => {
+      document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
+      const btn = document.getElementById('tab-g-' + t);
+      if (btn) btn.classList.toggle('active', t === tab);
+    });
+    if (tab === 'conges-admin') loadCongesAdmin();
+    if (tab === 'utilisateurs') loadUtilisateurs();
+    if (tab === 'planning-admin') loadPlanningAdmin();
+    if (tab === 'chantiers') loadChantiersGestion();
+  }
+
   init();
 </script>
+<!-- PAGE COLLECTIF (Gestionnaires) -->
+<div id="page-collectif" class="page">
+  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 20px">
+    <div style="font-size:15px;font-weight:800;color:#fff">📋 Planning collectif</div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">Affectation des chantiers · En cours uniquement</div>
+  </div>
+
+  <!-- Navigation semaine -->
+  <div class="semaine-nav-admin">
+    <button class="semaine-nav-btn" onclick="changerSemaineCollectif(-1)">‹</button>
+    <div style="text-align:center;flex:1">
+      <div class="semaine-label-admin" id="semaine-label-collectif">—</div>
+      <input type="week" id="input-semaine-collectif" onchange="allerSemaineCollectif(this.value)" style="margin-top:4px;font-size:11px;border:1px solid #ddd5c5;border-radius:6px;padding:3px 6px;color:var(--gris);background:var(--beige-clair);outline:none;width:100%" />
+    </div>
+    <button class="semaine-nav-btn" onclick="changerSemaineCollectif(1)">›</button>
+    <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 CSV</button>
+  </div>
+
+  <!-- Filtres postes + Bulles collaborateurs -->
+  <div style="margin:0 16px 10px">
+    <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">Filtrer par poste :</div>
+    <div id="filtre-poste-collectif" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <button onclick="filtrerTousPostes()" id="btn-tous-postes" style="background:var(--vert);color:#fff;border:none;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Tous</button>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">👷 Collaborateurs disponibles — glisser vers un chantier</div>
+    <div id="bulles-collabs" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;background:#f8fafc;border-radius:10px;padding:8px;border:1.5px dashed #ddd"></div>
+  </div>
+
+  <!-- Grille planning -->
+  <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
+  <div class="planning-admin-wrap">
+    <table class="planning-admin-table" id="planning-collectif-grid"></table>
+  </div>
+
+  <!-- MODAL NOTES DROP -->
+  <div class="modal-backdrop" id="modal-notes-drop" onclick="closeModalNotesDrop(event)">
+    <div class="modal-sheet" style="max-height:50vh">
+      <div class="modal-header">
+        <h3 id="modal-notes-drop-title">Notes</h3>
+        <button class="modal-close" onclick="closeModalNotesDrop()">✕</button>
+      </div>
+      <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
+        <textarea id="notes-drop-input" placeholder="Notes (optionnel)…" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:14px;min-height:80px;resize:none;outline:none"></textarea>
+        <button onclick="confirmerAvecNotes()" style="background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer">✅ Confirmer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL MODIFIER AFF -->
+  <div class="modal-backdrop" id="modal-aff-collectif" onclick="closeModalAffCollectif(event)">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <h3 id="modal-aff-collectif-title">Modifier</h3>
+          <div style="font-size:12px;color:#aaa;margin-top:2px" id="modal-aff-collectif-sub"></div>
+        </div>
+        <button class="modal-close" onclick="closeModalAffCollectif()">✕</button>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="field">
+          <label>Chantier</label>
+          <div style="background:var(--vert-clair);border-radius:10px;padding:11px 13px;font-size:14px;font-weight:700;color:var(--vert)" id="val-chantier-collectif">—</div>
+        </div>
+        <div class="field">
+          <label>Collaborateur</label>
+          <div id="field-collab-collectif"></div>
+        </div>
+        <div class="field">
+          <label>Période</label>
+          <select id="select-periode-modal" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+            <option value="Matin">🌅 Matin</option>
+            <option value="Après-midi">🌆 Après-midi</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <textarea id="modal-aff-collectif-notes" placeholder="Remarques…" style="min-height:60px"></textarea>
+        </div>
+        <button onclick="validerAffCollectif()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-aff-collectif">✅ Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL CHANTIERS COLLECTIF (non utilisé mais gardé) -->
+  <div class="modal-backdrop" id="modal-chantiers-collectif" style="display:none">
+    <div class="modal-sheet">
+      <div class="modal-options" id="liste-chantiers-collectif"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- PAGE GESTION -->
+<div id="page-gestion" class="page">
+  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:16px 20px;margin-bottom:16px">
+    <div style="font-size:16px;font-weight:800;color:#fff">⚙️ Administration</div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">Espace réservé aux administrateurs</div>
+  </div>
+
+  <!-- ONGLETS GESTION -->
+  <div style="display:flex;margin:0 16px 16px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+    <button class="tab-btn active" id="tab-g-utilisateurs" onclick="switchGestionTab('utilisateurs')" style="font-size:11px">👤 Users</button>
+    <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
+    <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
+    <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
+    <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
+  </div>
+
+  <!-- UTILISATEURS -->
+  <div id="gestion-utilisateurs">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
+      <div style="font-size:13px;font-weight:700;color:var(--gris)">Comptes collaborateurs</div>
+      <button onclick="ouvrirFormUser(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+    </div>
+    <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
+  </div>
+
+  <!-- CHANTIERS -->
+  <div id="gestion-chantiers" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
+      <div style="font-size:13px;font-weight:700;color:var(--gris)">Statut des chantiers</div>
+      <div style="font-size:11px;color:#aaa">Modifier le statut</div>
+    </div>
+    <div style="margin:0 16px 10px">
+      <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none" />
+    </div>
+    <div id="liste-chantiers-gestion"><div class="feuille-loading">⏳ Chargement…</div></div>
+  </div>
+
+  <!-- CONGÉS ADMIN -->
+  <div id="gestion-conges-admin" style="display:none">
+    <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Demandes de congés</div>
+    <div id="liste-conges-admin"><div class="feuille-loading">⏳ Chargement…</div></div>
+  </div>
+
+  <!-- EXPORT -->
+  <div id="gestion-export" style="display:none">
+    <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Exporter en CSV</div>
+    <div style="margin:0 16px;display:flex;flex-direction:column;gap:10px">
+      <div style="background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;overflow:hidden">
+        <div style="padding:12px 14px;font-size:13px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3">📊 Saisies des temps</div>
+        <button onclick="exportCSVSaisies('semaine')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1ece3;padding:12px 14px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris)">📅 Semaine courante</button>
+        <button onclick="exportCSVSaisies('mois')" style="width:100%;background:none;border:none;padding:12px 14px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris)">🗓️ Mois courant</button>
+      </div>
+      <button onclick="exportCSV('1014431','Collaborateurs')" class="btn-export">👥 Collaborateurs</button>
+      <button onclick="exportCSV('1022869','Demandes Congés RTT')" class="btn-export">🏖️ Demandes Congés RTT</button>
+      <button onclick="exportCSV('1014444','Types de taches')" class="btn-export">⚙️ Types de tâches</button>
+      <button onclick="exportCSV('1015608','Sous Taches')" class="btn-export">📋 Sous-tâches</button>
+      <button onclick="exportCSV('1014441','Chantiers')" class="btn-export">🏗️ Chantiers</button>
+      <button onclick="exportCSV('1017158','Vehicules')" class="btn-export">🚗 Véhicules</button>
+      <button onclick="exportCSV('1023480','Planning')" class="btn-export">📅 Planning</button>
+    </div>
+  </div>
+
+  <!-- PLANNING ADMIN -->
+  <div id="gestion-planning-admin" style="display:none">
+    <div class="semaine-nav-admin">
+      <button class="semaine-nav-btn" onclick="changerSemaineAdmin(-1)">‹</button>
+      <div style="text-align:center;flex:1">
+        <div class="semaine-label-admin" id="semaine-label-admin">—</div>
+      </div>
+      <button class="semaine-nav-btn" onclick="changerSemaineAdmin(1)">›</button>
+      <button onclick="exportExcelAdmin()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 Excel</button>
+    </div>
+    <div id="planning-admin-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
+    <div class="planning-admin-wrap">
+      <table class="planning-admin-table" id="planning-admin-grid"></table>
+    </div>
+  </div>
+
+  <!-- MODAL AFFECTATION -->
+  <div class="modal-backdrop" id="modal-aff-admin" onclick="closeModalAffAdmin(event)">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div>
+          <h3 id="modal-aff-admin-title">Affecter</h3>
+          <div style="font-size:12px;color:#aaa;margin-top:2px" id="modal-aff-admin-sub"></div>
+        </div>
+        <button class="modal-close" onclick="closeModalAffAdmin()">✕</button>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="field">
+          <label>Chantier</label>
+          <div class="selector" onclick="openOptionsChantierAdmin()">
+            <span class="selector-value empty" id="val-chantier-admin">Sélectionner…</span>
+            <span>▾</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Notes (optionnel)</label>
+          <textarea id="modal-aff-admin-notes" placeholder="Remarques…" style="min-height:60px"></textarea>
+        </div>
+        <button onclick="validerAffAdmin()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-aff-admin">✅ Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL CHANTIERS ADMIN -->
+  <div class="modal-backdrop" id="modal-chantiers-admin" onclick="closeOptionsChantierAdmin()">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h3>Chantier</h3>
+        <button class="modal-close" onclick="closeOptionsChantierAdmin()">✕</button>
+      </div>
+      <div class="modal-search">
+        <input type="text" id="search-chantier-admin" placeholder="Rechercher…" oninput="filterChantiersAdmin(this.value)" />
+      </div>
+      <div class="modal-options" id="liste-chantiers-admin"></div>
+    </div>
+  </div>
+
+  <!-- MODAL USER -->
+  <div id="modal-user" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:flex-end">
+    <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;padding:24px 20px;max-height:85vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div style="font-size:16px;font-weight:800;color:var(--gris)" id="modal-user-titre">Nouvel utilisateur</div>
+        <button onclick="fermerFormUser()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa">✕</button>
+      </div>
+      <div class="field"><label>Nom complet</label><input type="text" id="user-nom" placeholder="Prénom Nom" /></div>
+      <div class="field"><label>Identifiant</label><input type="text" id="user-id" placeholder="prenom.nom" autocapitalize="none" /></div>
+      <div class="field"><label>Mot de passe</label><input type="text" id="user-mdp" placeholder="Mot de passe" /></div>
+      <div class="field">
+        <label>Droit</label>
+        <select id="user-droit" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+          <option value="Collaborateur">Collaborateur</option>
+          <option value="Gestionnaire">Gestionnaire</option>
+          <option value="Administrateur">Administrateur</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Actif</label>
+        <select id="user-actif" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+          <option value="true">Oui</option>
+          <option value="false">Non</option>
+        </select>
+      </div>
+      <input type="hidden" id="user-row-id" value="" />
+      <button onclick="sauvegarderUser()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;margin-top:8px" id="btn-save-user">💾 Enregistrer</button>
+    </div>
+  </div>
+
+</div>
+
 <!-- NAVIGATION BAS -->
 <div class="bottom-nav">
   <div class="nav-bar" id="nav-bar"></div>
@@ -1369,7 +2841,15 @@
   </button>
   <button class="nav-btn" id="nav-planning" onclick="switchPage('planning')">
     <span class="nav-icon">📅</span>
-    Planning
+    Mon planning
+  </button>
+  <button class="nav-btn" id="nav-collectif" style="display:none" onclick="switchPage('collectif')">
+    <span class="nav-icon">📋</span>
+    Collectif
+  </button>
+  <button class="nav-btn" id="nav-gestion" style="display:none" onclick="switchPage('gestion')">
+    <span class="nav-icon">⚙️</span>
+    Gestion
   </button>
   <button class="nav-btn" onclick="seDeconnecter()">
     <span class="nav-icon">🚪</span>
