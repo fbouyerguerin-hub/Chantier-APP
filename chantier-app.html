@@ -1439,11 +1439,19 @@
       COLLABORATEURS_ADMIN.forEach(c => { if (c.poste) postes.add(c.poste); });
       const filtreWrap = document.getElementById('filtre-poste-collectif');
       if (filtreWrap && filtreWrap.children.length <= 1) {
+        // Mettre à jour le bouton "Tous"
+        const btnTous = document.getElementById('btn-tous-postes');
+        if (btnTous && postesSelectionnes.size > 0) {
+          btnTous.style.background = '#f1f5f9'; btnTous.style.color = 'var(--gris)';
+        }
         [...postes].sort().forEach(p => {
           const btn = document.createElement('button');
           btn.textContent = p;
           btn.dataset.poste = p;
-          btn.style.cssText = 'background:#f1f5f9;color:var(--gris);border:1.5px solid #ddd;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer';
+          const isSelected = postesSelectionnes.has(p);
+          btn.style.cssText = isSelected
+            ? 'background:var(--vert);color:#fff;border:none;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer'
+            : 'background:#f1f5f9;color:var(--gris);border:1.5px solid #ddd;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer';
           btn.onclick = () => toggleFiltrePoste(btn, p);
           filtreWrap.appendChild(btn);
         });
@@ -1823,7 +1831,7 @@
   }
 
 
-  let postesSelectionnes = new Set();
+  let postesSelectionnes = new Set(['Pose', 'Apprenti']);
 
   function filtrerTousPostes() {
     postesSelectionnes.clear();
