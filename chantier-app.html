@@ -1496,7 +1496,23 @@
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
       th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px';
-      th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR', {day:'numeric', month:'short'}) + '</div>';
+      // Compter les absences ce jour
+      const absentsJour = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
+        (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
+        dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+      )).map(c => {
+        const conge = congesCollectifData.find(cc =>
+          (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
+          dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+        );
+        const raison = conge?.['Type de demande']?.value || conge?.['Type de demande'] || 'Absence';
+        return { nom: c.nom, raison };
+      });
+      const bandeauAbsent = absentsJour.length > 0
+        ? '<div style="background:rgba(255,100,100,0.25);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;font-weight:600;text-align:left;line-height:1.6">' +
+          absentsJour.map(a => '🚫 ' + a.nom.split(' ')[0] + ' <span style="opacity:0.8;font-style:italic">(' + a.raison + ')</span>').join('<br>') + '</div>'
+        : '';
+      th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR', {day:'numeric', month:'short'}) + '</div>' + bandeauAbsent;
       trHead1.appendChild(th);
     });
     thead.appendChild(trHead1);
@@ -1563,7 +1579,7 @@
         jours.forEach(j => {
           const dateStr = j.toISOString().split('T')[0];
           const td = document.createElement('td');
-          td.style.cssText = 'padding:2px;min-height:28px;vertical-align:top;border:1px solid #f0f0f0' + (pi === 0 ? ';border-top:2px solid #e0e0e0' : '');
+          td.style.cssText = 'padding:3px;min-height:50px;vertical-align:top;border:1px solid #f0f0f0' + (pi === 0 ? ';border-top:2px solid #e0e0e0' : '');
           const lbl = document.createElement('div');
           lbl.style.cssText = 'font-size:8px;color:#bbb;font-weight:700;margin-bottom:1px';
           lbl.textContent = pi === 0 ? '🌅' : '🌆';
@@ -1588,6 +1604,20 @@
             }
             td.appendChild(div);
           });
+          // Bouton "tout supprimer" si plusieurs affectations
+          if (isGestAdmin && affs.length > 1) {
+            const btnAll = document.createElement('button');
+            btnAll.textContent = '🗑 Tous';
+            btnAll.style.cssText = 'width:100%;font-size:8px;background:#fde8e8;border:1px solid #c0392b;border-radius:3px;color:#c0392b;padding:2px;cursor:pointer;margin-top:2px;font-weight:700';
+            btnAll.onclick = (e) => {
+              e.stopPropagation();
+              if (!confirm('Supprimer toutes les affectations ' + (periode === 'Matin' ? 'Matin' : 'Après-midi') + ' sur ' + chantier.nom + ' ?')) return;
+              Promise.all(affs.map(aff =>
+                fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + aff.id + '/', { method: 'DELETE', headers: HEADERS })
+              )).then(() => loadPlanningCollectif());
+            };
+            td.appendChild(btnAll);
+          }
           if (isGestAdmin) {
             td.onclick = async (e) => {
               if (e.target.classList.contains('btn-del-aff') || e.target.closest('.aff-tag') || e.target.tagName === 'BUTTON') return;
