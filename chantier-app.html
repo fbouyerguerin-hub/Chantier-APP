@@ -591,7 +591,10 @@
     const navGestion = document.getElementById('nav-gestion');
     if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navCollectif = document.getElementById('nav-collectif');
-    if (navCollectif) navCollectif.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'flex' : 'none';
+    if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
+    // Masquer la section bulles si collaborateur simple
+    const sectionBulles = document.getElementById('section-bulles-collectif');
+    if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     showPage('page-form');
     chargerMessage();
   }
@@ -1538,11 +1541,13 @@
 
           // Vérifier si le collaborateur déposé est absent ce jour
           zone.ondragover = (e) => {
+            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
             e.preventDefault();
             zone.style.background = '#e8f5e9';
           };
           zone.ondragleave = () => { zone.style.background = ''; };
           zone.ondrop = (e) => {
+            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
             e.preventDefault();
             zone.style.background = '';
             const collabIdRaw = e.dataTransfer.getData('collabId');
@@ -1557,16 +1562,16 @@
             if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
             affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId || null);
           };
-          // Support tactile : tap sur la zone si une bulle est sélectionnée
+          // Support tactile : tap sur la zone si une bulle est sélectionnée (Gestionnaire/Admin uniquement)
           zone.onclick = () => {
             if (!selectedBulle) return;
+            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
             const { collabId, collabNom } = selectedBulle;
             const absent = congesCollectifData.some(c =>
               (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
               dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
             );
             if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
-            // Désélectionner la bulle
             if (selectedBulle.el) selectedBulle.el.classList.remove('bulle-selected');
             const bulle = selectedBulle;
             selectedBulle = null;
@@ -2694,8 +2699,8 @@
     <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 CSV</button>
   </div>
 
-  <!-- Filtres postes + Bulles collaborateurs -->
-  <div style="margin:0 16px 10px">
+  <!-- Filtres postes + Bulles collaborateurs (Gestionnaire/Admin uniquement) -->
+  <div id="section-bulles-collectif" style="margin:0 16px 10px">
     <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">Filtrer par poste :</div>
     <div id="filtre-poste-collectif" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button onclick="filtrerTousPostes()" id="btn-tous-postes" style="background:var(--vert);color:#fff;border:none;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Tous</button>
