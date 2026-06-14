@@ -1574,11 +1574,9 @@
           tdNom.rowSpan = 2;
           tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle';
           // Chercher les fichiers liés à ce chantier cette semaine
-          const affsChantier = planningCollectifData.filter(p =>
-            (p['Chantier'] || []).some(c => c.id === chantier.id) &&
-            jours.some(j => j.toISOString().split('T')[0] === p['Date'])
-          );
-          const fichiers = affsChantier.flatMap(p => p['Fichiers'] || []);
+          // Fichiers stockés dans la table Chantiers
+          const chantierData = dataChantiers.results.find(r => r.id === chantier.id);
+          const fichiers = chantierData?.['Fichiers'] || [];
           // Nom du chantier
           const nomDiv = document.createElement('div');
           nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px';
@@ -1698,23 +1696,25 @@
   let currentChantierPJ = null;
   let currentAffPJ = null;
 
-  function ouvrirModalPJ(chantier) {
+  async function ouvrirModalPJ(chantier) {
     currentChantierPJ = chantier;
-    // Trouver une affectation de ce chantier cette semaine pour y attacher le fichier
-    const aff = planningCollectifData.find(p => (p['Chantier'] || []).some(c => c.id === chantier.id));
-    currentAffPJ = aff || null;
     document.getElementById('modal-pj-titre').textContent = '📎 ' + chantier.nom;
-    // Afficher fichiers existants
-    const fichiers = planningCollectifData
-      .filter(p => (p['Chantier'] || []).some(c => c.id === chantier.id))
-      .flatMap(p => p['Fichiers'] || []);
-    const liste = document.getElementById('modal-pj-liste');
-    liste.innerHTML = fichiers.length > 0
-      ? fichiers.map(f => '<a href="' + f.url + '" target="_blank" style="display:flex;align-items:center;gap:8px;background:var(--vert-clair);border-radius:8px;padding:8px 12px;font-size:13px;color:var(--vert);font-weight:600;text-decoration:none">📎 ' + (f.visible_name || f.name || 'Fichier') + '</a>').join('')
-      : '<div style="color:#aaa;font-size:13px">Aucune pièce jointe</div>';
+    document.getElementById('modal-pj-liste').innerHTML = '<div style="color:#aaa;font-size:13px">⏳ Chargement…</div>';
     document.getElementById('pj-preview').innerHTML = '';
     document.getElementById('pj-chantier-input').value = '';
     document.getElementById('modal-pj-chantier').classList.add('open');
+    // Charger les fichiers depuis la table Chantiers
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantier.id + '/?user_field_names=true', { headers: HEADERS });
+      const data = await res.json();
+      const fichiers = data['Fichiers'] || [];
+      const liste = document.getElementById('modal-pj-liste');
+      liste.innerHTML = fichiers.length > 0
+        ? fichiers.map(f => '<a href="' + f.url + '" target="_blank" style="display:flex;align-items:center;gap:8px;background:var(--vert-clair);border-radius:8px;padding:8px 12px;font-size:13px;color:var(--vert);font-weight:600;text-decoration:none">📎 ' + (f.visible_name || f.name || 'Fichier') + '</a>').join('')
+        : '<div style="color:#aaa;font-size:13px">Aucune pièce jointe</div>';
+    } catch(e) {
+      document.getElementById('modal-pj-liste').innerHTML = '<div style="color:#c0392b;font-size:13px">Erreur de chargement</div>';
+    }
   }
 
   function previewPJChantier(input) {
@@ -1731,11 +1731,14 @@
   async function uploaderPJChantier() {
     const input = document.getElementById('pj-chantier-input');
     if (!input.files.length) { fermerModalPJ(); return; }
-    if (!currentAffPJ) { alert('Aucune affectation trouvée pour ce chantier cette semaine.'); return; }
     const btn = document.getElementById('btn-upload-pj');
     btn.disabled = true; btn.textContent = 'Upload…';
     try {
-      const fichiersExistants = currentAffPJ['Fichiers'] || [];
+      // Charger les fichiers existants du chantier
+      const resChantier = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + currentChantierPJ.id + '/?user_field_names=true', { headers: HEADERS });
+      const dataChantier = await resChantier.json();
+      const fichiersExistants = dataChantier['Fichiers'] || [];
+      // Uploader les nouveaux fichiers
       const nouveauxFichiers = [];
       for (const file of input.files) {
         const formData = new FormData();
@@ -1749,8 +1752,9 @@
         const data = await res.json();
         nouveauxFichiers.push({ name: data.name });
       }
+      // Sauvegarder dans la table Chantiers
       const payload = { Fichiers: [...fichiersExistants.map(f => ({ name: f.name })), ...nouveauxFichiers] };
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentAffPJ.id + '/?user_field_names=true',
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + currentChantierPJ.id + '/?user_field_names=true',
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(await res.text());
       document.getElementById('modal-pj-chantier').classList.remove('open');
