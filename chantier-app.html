@@ -239,6 +239,7 @@
     .btn-add-aff-admin { background: #f0f7ef; border: 1px dashed var(--vert); border-radius: 4px; width: 100%; padding: 4px; font-size: 16px; cursor: pointer; color: var(--vert); margin-top: 2px; }
     .bulle-selected { background: var(--beige) !important; box-shadow: 0 0 0 3px var(--beige), 0 0 0 5px #fff; transform: scale(1.05); }
     .drop-zone-active { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
+    .bulle-tooltip { position: fixed; background: #1a1a1a; color: #fff; border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.6; z-index: 999; max-width: 260px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); pointer-events: none; white-space: pre-line; }
     .semaine-nav-admin { display: flex; align-items: center; justify-content: space-between; margin: 0 16px 12px; background: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border-left: 3px solid var(--vert); }
     .semaine-nav-btn { background: var(--vert-clair); border: none; border-radius: 6px; padding: 6px 12px; font-size: 16px; cursor: pointer; color: var(--vert); font-weight: 700; }
     .semaine-label-admin { font-size: 11px; font-weight: 700; color: var(--gris); }
@@ -503,6 +504,8 @@
     <button class="btn-validate" onclick="closeModal()">Fermer</button>
   </div>
 </div>
+
+<div id="bulle-tooltip" class="bulle-tooltip" style="display:none"></div>
 
 <script>
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
@@ -1655,7 +1658,28 @@
       // Couleur selon disponibilité
       const couleur = joursDispos === 5 ? '#4a7c3f' : joursDispos === 4 ? '#c8a96e' : joursDispos === 3 ? '#e67e22' : joursDispos === 2 ? '#c0392b' : '#1a1a1a';
       bulle.style.background = couleur;
-      bulle.title = collab.nom + (collab.poste ? ' · ' + collab.poste : '') + ' — ' + joursDispos + '/5 jours disponibles';
+      // Construire le tooltip avec les absences
+      const absencesSemaine = congesCollectifData.filter(c =>
+        (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+        jours.some(j => {
+          const d = j.toISOString().split('T')[0];
+          return d >= c['Date de début'] && d <= c['Date de fin journée (inclus)'];
+        })
+      );
+      let tooltipText = '👷 ' + collab.nom + (collab.poste ? '\n📋 ' + collab.poste : '') + '\n✅ ' + joursDispos + '/5 jours disponibles cette semaine';
+      if (absencesSemaine.length > 0) {
+        tooltipText += '\n\n🚫 Absences :';
+        absencesSemaine.forEach(a => {
+          const type = a['Type de demande']?.value || a['Type de demande'] || 'Absence';
+          const debut = a['Date de début'] ? new Date(a['Date de début'] + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'numeric', month:'long'}) : '—';
+          const fin = a['Date de fin journée (inclus)'] ? new Date(a['Date de fin journée (inclus)'] + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'numeric', month:'long'}) : '—';
+          const statut = a['Statut']?.value || a['Statut'] || 'En attente';
+          const statutEmoji = statut === 'Validé' || statut === 'Approuvé' ? '✅' : statut === 'Refusé' ? '❌' : '⏳';
+          tooltipText += '\n• ' + type + ' ' + statutEmoji + ' ' + statut + '\n  Du ' + debut + '\n  au ' + fin;
+        });
+      }
+      bulle.dataset.tooltip = tooltipText;
+      bulle.title = ''; // Désactiver tooltip natif
 
       bulle.ondragstart = (e) => {
         e.dataTransfer.setData('collabId', collab.collabId);
@@ -1665,10 +1689,33 @@
       };
       bulle.ondragend = () => { bulle.style.opacity = '1'; };
       // Support tactile : tap pour sélectionner
+      let pressTimer = null;
+      const showTooltip = (e) => {
+        const tooltip = document.getElementById('bulle-tooltip');
+        if (tooltip.style.display === 'block') return; // Déjà visible
+        tooltip.innerHTML = (bulle.dataset.tooltip || bulle.title || '').replace(/\n/g, '<br>');
+        const x = (e.touches ? e.touches[0].clientX : e.clientX);
+        const y = (e.touches ? e.touches[0].clientY : e.clientY);
+        tooltip.style.display = 'block';
+        tooltip.style.left = Math.min(x + 10, window.innerWidth - 270) + 'px';
+        tooltip.style.top = Math.max(y - 80, 10) + 'px';
+      };
+      const hideTooltip = () => {
+        document.getElementById('bulle-tooltip').style.display = 'none';
+        clearTimeout(pressTimer);
+      };
+      // Mobile : appui long uniquement
+      bulle.ontouchstart = (e) => { pressTimer = setTimeout(() => showTooltip(e), 600); };
+      bulle.ontouchend = (e) => { clearTimeout(pressTimer); setTimeout(hideTooltip, 2000); };
+      bulle.ontouchmove = hideTooltip;
+      // PC : survol souris uniquement
+      bulle.onmouseenter = showTooltip;
+      bulle.onmouseleave = hideTooltip;
+
       bulle.onclick = () => {
         document.querySelectorAll('.bulle-selected').forEach(b => b.classList.remove('bulle-selected'));
         if (selectedBulle && selectedBulle.collabId === collab.collabId) {
-          selectedBulle = null; // Désélectionner si déjà sélectionné
+          selectedBulle = null;
         } else {
           selectedBulle = { collabId: collab.collabId, collabNom: collab.nom, el: bulle };
           bulle.classList.add('bulle-selected');
