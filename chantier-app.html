@@ -1642,6 +1642,21 @@
       bulle.style.cssText = 'background:var(--vert);color:#fff;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:grab;user-select:none;white-space:nowrap';
       bulle.textContent = collab.nom.split(' ')[0] + ' ' + collab.nom.split(' ').slice(1).join(' ').charAt(0) + '.';
       bulle.title = collab.nom + (collab.poste ? ' · ' + collab.poste : '');
+      // Calculer jours disponibles
+      let joursDispos = 0;
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const absent = congesCollectifData.some(c =>
+          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+        );
+        if (!absent) joursDispos++;
+      });
+      // Couleur selon disponibilité
+      const couleur = joursDispos === 5 ? '#4a7c3f' : joursDispos === 4 ? '#c8a96e' : joursDispos === 3 ? '#e67e22' : joursDispos === 2 ? '#c0392b' : '#1a1a1a';
+      bulle.style.background = couleur;
+      bulle.title = collab.nom + (collab.poste ? ' · ' + collab.poste : '') + ' — ' + joursDispos + '/5 jours disponibles';
+
       bulle.ondragstart = (e) => {
         e.dataTransfer.setData('collabId', collab.collabId);
         e.dataTransfer.setData('collabNom', collab.nom);
@@ -2632,6 +2647,13 @@
     </div>
     <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">👷 Collaborateurs disponibles — glisser vers un chantier</div>
     <div id="bulles-collabs" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;background:#f8fafc;border-radius:10px;padding:8px;border:1.5px dashed #ddd"></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:10px;font-weight:600">
+      <span style="display:flex;align-items:center;gap:4px"><span style="background:#4a7c3f;border-radius:10px;padding:2px 8px;color:#fff">●</span> 5j libre</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="background:#c8a96e;border-radius:10px;padding:2px 8px;color:#fff">●</span> 4j libre</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="background:#e67e22;border-radius:10px;padding:2px 8px;color:#fff">●</span> 3j libre</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="background:#c0392b;border-radius:10px;padding:2px 8px;color:#fff">●</span> 2j libre</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="background:#1a1a1a;border-radius:10px;padding:2px 8px;color:#fff">●</span> 1j libre</span>
+    </div>
   </div>
 
   <!-- Grille planning -->
