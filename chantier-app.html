@@ -237,6 +237,8 @@
     .planning-admin-table td { padding: 4px; vertical-align: top; border-right: 1px solid #f1ece3; border-bottom: 1px solid #f1ece3; width: calc((100% - 90px) / 5); max-width: 120px; }
     .conge-tag-admin { background: #fef3cd; border-left: 2px solid var(--beige); border-radius: 4px; padding: 3px 5px; font-size: 10px; color: #856404; font-weight: 600; }
     .btn-add-aff-admin { background: #f0f7ef; border: 1px dashed var(--vert); border-radius: 4px; width: 100%; padding: 4px; font-size: 16px; cursor: pointer; color: var(--vert); margin-top: 2px; }
+    .bulle-selected { background: var(--beige) !important; box-shadow: 0 0 0 3px var(--beige), 0 0 0 5px #fff; transform: scale(1.05); }
+    .drop-zone-active { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
     .semaine-nav-admin { display: flex; align-items: center; justify-content: space-between; margin: 0 16px 12px; background: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border-left: 3px solid var(--vert); }
     .semaine-nav-btn { background: var(--vert-clair); border: none; border-radius: 6px; padding: 6px 12px; font-size: 16px; cursor: pointer; color: var(--vert); font-weight: 700; }
     .semaine-label-admin { font-size: 11px; font-weight: 700; color: var(--gris); }
@@ -1525,28 +1527,39 @@
 
           // Vérifier si le collaborateur déposé est absent ce jour
           zone.ondragover = (e) => {
-            const collabId = parseInt(e.dataTransfer.getData('collabId') || 0);
-            const absent = collabId && congesCollectifData.some(c =>
-              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
-              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-            );
-            if (absent) { zone.style.background = '#fde8e8'; return; }
-            e.preventDefault(); zone.style.background = '#e8f5e9';
+            e.preventDefault();
+            zone.style.background = '#e8f5e9';
           };
           zone.ondragleave = () => { zone.style.background = ''; };
           zone.ondrop = (e) => {
             e.preventDefault();
             zone.style.background = '';
-            const collabId = parseInt(e.dataTransfer.getData('collabId'));
+            const collabIdRaw = e.dataTransfer.getData('collabId');
+            const collabId = parseInt(collabIdRaw);
             const collabNom = e.dataTransfer.getData('collabNom');
             const existingAffId = e.dataTransfer.getData('existingAffId');
-            // Vérifier absence ce jour
+            if (!collabIdRaw || isNaN(collabId) || !collabNom) return; // Mobile : données vides
             const absent = congesCollectifData.some(c =>
               (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
               dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
             );
             if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
             affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId || null);
+          };
+          // Support tactile : tap sur la zone si une bulle est sélectionnée
+          zone.onclick = () => {
+            if (!selectedBulle) return;
+            const { collabId, collabNom } = selectedBulle;
+            const absent = congesCollectifData.some(c =>
+              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
+              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+            );
+            if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
+            // Désélectionner la bulle
+            if (selectedBulle.el) selectedBulle.el.classList.remove('bulle-selected');
+            const bulle = selectedBulle;
+            selectedBulle = null;
+            affecterDirectement(bulle.collabId, bulle.collabNom, chantier, dateStr, periode, null);
           };
 
           // Affectations existantes pour cette période
@@ -1633,13 +1646,25 @@
         e.dataTransfer.setData('collabId', collab.collabId);
         e.dataTransfer.setData('collabNom', collab.nom);
         bulle.style.opacity = '0.5';
+        selectedBulle = { collabId: collab.collabId, collabNom: collab.nom, el: bulle };
       };
       bulle.ondragend = () => { bulle.style.opacity = '1'; };
+      // Support tactile : tap pour sélectionner
+      bulle.onclick = () => {
+        document.querySelectorAll('.bulle-selected').forEach(b => b.classList.remove('bulle-selected'));
+        if (selectedBulle && selectedBulle.collabId === collab.collabId) {
+          selectedBulle = null; // Désélectionner si déjà sélectionné
+        } else {
+          selectedBulle = { collabId: collab.collabId, collabNom: collab.nom, el: bulle };
+          bulle.classList.add('bulle-selected');
+        }
+      };
       container.appendChild(bulle);
     });
   }
 
   let pendingAff = null;
+  let selectedBulle = null;
 
   function affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId) {
     // Vérifier si déjà affecté ce jour sur cette période (sauf si c'est un déplacement)
