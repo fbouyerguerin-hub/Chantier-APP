@@ -1428,41 +1428,27 @@
   let selectedChantierCollectif = null;
   let collectifLoaded = false;
   let collaborateursFiltre = []; // liste filtrée selon poste
+  let postesSelectionnes = new Set(['Pose', 'Apprenti']);
+  let postesDisponibles = [];
+  let collabsSelectionnesParJour = {}; // { dateStr: Set([collabId, ...]) }
 
   async function loadPlanningCollectif() {
     if (!collectifLoaded) {
       const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const dataC = await resC.json();
+      const postes = new Set();
       (dataC.results || []).forEach(r => {
         const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
-        if (c) { c.collabId = r.id; c.poste = r['Poste / Métier'] || ''; }
+        if (c) { c.collabId = r.id; c.poste = r['Poste / Métier'] || ''; if (c.poste) postes.add(c.poste); }
       });
-      // Créer les boutons filtres postes
-      const postes = new Set();
-      COLLABORATEURS_ADMIN.forEach(c => { if (c.poste) postes.add(c.poste); });
-      const filtreWrap = document.getElementById('filtre-poste-collectif');
-      if (filtreWrap && filtreWrap.children.length <= 1) {
-        // Mettre à jour le bouton "Tous"
-        const btnTous = document.getElementById('btn-tous-postes');
-        if (btnTous && postesSelectionnes.size > 0) {
-          btnTous.style.background = '#f1f5f9'; btnTous.style.color = 'var(--gris)';
-        }
-        [...postes].sort().forEach(p => {
-          const btn = document.createElement('button');
-          btn.textContent = p;
-          btn.dataset.poste = p;
-          const isSelected = postesSelectionnes.has(p);
-          btn.style.cssText = isSelected
-            ? 'background:var(--vert);color:#fff;border:none;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer'
-            : 'background:#f1f5f9;color:var(--gris);border:1.5px solid #ddd;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer';
-          btn.onclick = () => toggleFiltrePoste(btn, p);
-          filtreWrap.appendChild(btn);
-        });
-      }
+      // Stocker les postes disponibles
+      postesDisponibles = [...postes].sort();
+      // Mettre à jour le bouton filtre
+      const btnFiltre = document.getElementById('btn-filtre-poste');
+      if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
       collectifLoaded = true;
     }
 
-    // Charger chantiers en cours
     const resChantiers = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
     const dataChantiers = await resChantiers.json();
     chantiersCollectif = (dataChantiers.results || [])
@@ -1488,388 +1474,273 @@
     ]);
     planningCollectifData = (await resP.json()).results || [];
     congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
-
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
-    // Construire les bulles collaborateurs disponibles
-    renderBullesCollabs(jours);
+    collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
+      if (!c.collabId) return false;
+      if (postesSelectionnes.size === 0) return true;
+      return postesSelectionnes.has(c.poste);
+    });
 
-    // Construire la grille
     const table = document.getElementById('planning-collectif-grid');
     const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
+    const isGestAdmin = connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur';
 
     const thead = document.createElement('thead');
-    const trHead = document.createElement('tr');
+    const trHead1 = document.createElement('tr');
     const thChantier = document.createElement('th');
-    thChantier.className = 'col-collab';
+    thChantier.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:2';
     thChantier.textContent = 'Chantier';
-    trHead.appendChild(thChantier);
+    trHead1.appendChild(thChantier);
     jours.forEach((j, i) => {
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
-      th.className = 'col-jour' + (dateStr === today ? ' today' : '');
-      th.innerHTML = '<div>' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) + '</div>';
-      trHead.appendChild(th);
+      th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px';
+      th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR', {day:'numeric', month:'short'}) + '</div>';
+      trHead1.appendChild(th);
     });
-    thead.appendChild(trHead);
+    thead.appendChild(trHead1);
+
+    if (isGestAdmin) {
+      const trHead2 = document.createElement('tr');
+      const tdEmpty = document.createElement('td');
+      tdEmpty.style.cssText = 'background:#f8fafc;position:sticky;left:0;z-index:2;border-bottom:2px solid #ddd';
+      trHead2.appendChild(tdEmpty);
+      jours.forEach(j => {
+        const dateStr = j.toISOString().split('T')[0];
+        const td = document.createElement('td');
+        td.style.cssText = 'background:#f8fafc;padding:3px;border-bottom:2px solid #ddd;vertical-align:top';
+        // Calculer collabs disponibles ce jour (non affectés)
+        const affectesJour = planningCollectifData
+          .filter(p => p['Date'] === dateStr)
+          .map(p => (p['Collaborateurs'] || [])[0]?.id)
+          .filter(Boolean);
+        const collabsDispo = collaborateursFiltre.filter(collab => {
+          const absent = congesCollectifData.some(c =>
+            (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
+            dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+          );
+          return !absent && !affectesJour.includes(collab.collabId);
+        });
+        const couleurDispo = (c) => {
+          const d = jours.filter(jj => !congesCollectifData.some(cc =>
+            (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
+            jj.toISOString().split('T')[0] >= cc['Date de début'] &&
+            jj.toISOString().split('T')[0] <= cc['Date de fin journée (inclus)']
+          )).length;
+          return d === 5 ? '#4a7c3f' : d === 4 ? '#c8a96e' : d === 3 ? '#e67e22' : '#c0392b';
+        };
+        // Bouton compact
+        const btnCollab = document.createElement('button');
+        btnCollab.id = 'btn-collab-' + dateStr;
+        btnCollab.dataset.date = dateStr;
+        btnCollab.dataset.collabs = JSON.stringify(collabsDispo.map(c => ({ id: c.collabId, nom: c.nom, couleur: couleurDispo(c) })));
+        if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
+        // Nettoyer les sélections si collab déjà affecté
+        affectesJour.forEach(id => collabsSelectionnesParJour[dateStr]?.delete(id));
+        const selCount = collabsSelectionnesParJour[dateStr].size;
+        btnCollab.textContent = selCount > 0 ? '👥 ' + selCount + ' sél.' : '+ Choisir';
+        btnCollab.style.cssText = 'width:100%;font-size:9px;border:1px solid ' + (selCount > 0 ? 'var(--vert)' : '#ddd') + ';border-radius:4px;background:' + (selCount > 0 ? 'var(--vert-clair)' : '#f8fafc') + ';color:var(--gris);padding:3px 4px;cursor:pointer;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        btnCollab.onclick = (e) => { e.stopPropagation(); ouvrirModalCollabJour(dateStr, btnCollab); };
+        td.appendChild(btnCollab);
+        trHead2.appendChild(td);
+      });
+      thead.appendChild(trHead2);
+    }
     table.appendChild(thead);
 
     const tbody = document.createElement('tbody');
     chantiersCollectif.forEach(chantier => {
-      const tr = document.createElement('tr');
-      const tdNom = document.createElement('td');
-      tdNom.className = 'col-collab-cell';
-      tdNom.style.verticalAlign = 'middle';
-      tdNom.innerHTML = '<div class="collab-name"><strong style="font-size:10px">' + chantier.nom + '</strong></div>';
-      tr.appendChild(tdNom);
-
-      jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
-        const td = document.createElement('td');
-        td.style.padding = '0';
-
-        // Créer zone Matin et Après-midi
-        ['Matin', 'Après-midi'].forEach(periode => {
-          const zone = document.createElement('div');
-          zone.style.cssText = 'padding:4px;min-height:36px;' + (periode === 'Matin' ? 'border-bottom:1px dashed #e0e0e0;' : '');
-
-          // Label période
-          const label = document.createElement('div');
-          label.style.cssText = 'font-size:8px;color:#bbb;font-weight:700;margin-bottom:2px';
-          label.textContent = periode === 'Matin' ? '🌅 Matin' : '🌆 AM';
-          zone.appendChild(label);
-
-          // Vérifier si le collaborateur déposé est absent ce jour
-          zone.ondragover = (e) => {
-            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
-            e.preventDefault();
-            zone.style.background = '#e8f5e9';
-          };
-          zone.ondragleave = () => { zone.style.background = ''; };
-          zone.ondrop = (e) => {
-            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
-            e.preventDefault();
-            zone.style.background = '';
-            const collabIdRaw = e.dataTransfer.getData('collabId');
-            const collabId = parseInt(collabIdRaw);
-            const collabNom = e.dataTransfer.getData('collabNom');
-            const existingAffId = e.dataTransfer.getData('existingAffId');
-            if (!collabIdRaw || isNaN(collabId) || !collabNom) return; // Mobile : données vides
-            const absent = congesCollectifData.some(c =>
-              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
-              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-            );
-            if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
-            affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId || null);
-          };
-          // Support tactile : tap sur la zone si une bulle est sélectionnée (Gestionnaire/Admin uniquement)
-          zone.onclick = () => {
-            if (!selectedBulle) return;
-            if (connectedDroit !== 'Gestionnaire' && connectedDroit !== 'Administrateur') return;
-            const { collabId, collabNom } = selectedBulle;
-            const absent = congesCollectifData.some(c =>
-              (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
-              dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-            );
-            if (absent) { alert('⚠️ ' + collabNom.split(' ')[0] + ' est absent ce jour !'); return; }
-            if (selectedBulle.el) selectedBulle.el.classList.remove('bulle-selected');
-            const bulle = selectedBulle;
-            selectedBulle = null;
-            affecterDirectement(bulle.collabId, bulle.collabNom, chantier, dateStr, periode, null);
-          };
-
-          // Affectations existantes pour cette période
+      ['Matin', 'Après-midi'].forEach((periode, pi) => {
+        const tr = document.createElement('tr');
+        if (pi === 0) {
+          const tdNom = document.createElement('td');
+          tdNom.rowSpan = 2;
+          tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle';
+          tdNom.textContent = chantier.nom;
+          tr.appendChild(tdNom);
+        }
+        jours.forEach(j => {
+          const dateStr = j.toISOString().split('T')[0];
+          const td = document.createElement('td');
+          td.style.cssText = 'padding:2px;min-height:28px;vertical-align:top;border:1px solid #f0f0f0' + (pi === 0 ? ';border-top:2px solid #e0e0e0' : '');
+          const lbl = document.createElement('div');
+          lbl.style.cssText = 'font-size:8px;color:#bbb;font-weight:700;margin-bottom:1px';
+          lbl.textContent = pi === 0 ? '🌅' : '🌆';
+          td.appendChild(lbl);
           const affs = planningCollectifData.filter(p => {
             if (p['Date'] !== dateStr) return false;
             if (!(p['Chantier'] || []).some(c => c.id === chantier.id)) return false;
             const p2 = Array.isArray(p['Periode']) ? p['Periode'].map(v => v.value || v).join('/') : p['Periode']?.value || p['Periode'] || 'Matin';
             return p2 === periode;
           });
-
           affs.forEach(aff => {
             const collabNom = (aff['Collaborateurs'] || [])[0]?.value || '—';
-            const collabId = (aff['Collaborateurs'] || [])[0]?.id;
             const notes = aff['Notes'] || '';
             const div = document.createElement('div');
             div.className = 'aff-tag';
-            div.style.cssText = 'cursor:grab;margin-bottom:2px;' + (periode === 'Après-midi' ? 'background:#f0f7ef;border-color:#7ab870;' : '');
-            div.draggable = true;
-            div.innerHTML = '👷 ' + collabNom.split(' ')[0] + (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') + '<button class="btn-del-aff">✕</button>';
-            div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
-            div.onclick = () => modifierAffCollectifChantier(aff.id, chantier, collabNom, notes, periode, dateStr);
-            div.ondragstart = (e) => {
-              e.dataTransfer.setData('collabId', collabId);
-              e.dataTransfer.setData('collabNom', collabNom);
-              e.dataTransfer.setData('existingAffId', aff.id);
-              div.style.opacity = '0.5';
-            };
-            div.ondragend = () => { div.style.opacity = '1'; };
-            zone.appendChild(div);
+            div.style.cssText = 'font-size:9px;padding:2px 4px;margin-bottom:2px;' + (pi === 1 ? 'background:#f0f7ef;border-color:#7ab870;' : '');
+            div.innerHTML = collabNom.split(' ')[0] + (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') + (isGestAdmin ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
+            if (isGestAdmin) {
+              div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
+              div.onclick = () => modifierAffCollectifChantier(aff.id, chantier, collabNom, notes, periode, dateStr);
+              div.style.cursor = 'pointer';
+            }
+            td.appendChild(div);
           });
-
-          td.appendChild(zone);
+          if (isGestAdmin) {
+            td.onclick = async (e) => {
+              if (e.target.classList.contains('btn-del-aff') || e.target.closest('.aff-tag') || e.target.tagName === 'BUTTON') return;
+              const selCollabs = collabsSelectionnesParJour[dateStr];
+              if (!selCollabs || selCollabs.size === 0) {
+                alert('Sélectionne des collaborateurs avec le bouton + Choisir');
+                return;
+              }
+              // Affecter chaque collab sélectionné
+              const toAffect = [...selCollabs];
+              collabsSelectionnesParJour[dateStr] = new Set(); // Vider la sélection
+              for (const collabId of toAffect) {
+                const collab = collaborateursFiltre.find(c => c.collabId === collabId);
+                if (!collab) continue;
+                pendingAff = { collabId, collabNom: collab.nom, chantier, dateStr, periode, existingAffId: null };
+                // Affecter sans modal notes (notes vides)
+                const payload = {
+                  Collaborateurs: [collabId],
+                  Chantier: [parseInt(chantier.id)],
+                  Date: dateStr,
+                  Periode: [periode],
+                  Notes: '',
+                };
+                try {
+                  const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+                    { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+                  if (!res.ok) throw new Error(await res.text());
+                } catch(err) { alert('Erreur : ' + err.message); }
+              }
+              await loadPlanningCollectif();
+            };
+          }
+          tr.appendChild(td);
         });
-
-        tr.appendChild(td);
+        tbody.appendChild(tr);
       });
-      tbody.appendChild(tr);
     });
     table.appendChild(tbody);
 
     const lundi2 = getLundiAdmin(semaineCollectif);
     const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate() + 4);
     document.getElementById('semaine-label-collectif').textContent =
-      'Du ' + lundi2.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) +
-      ' au ' + vendredi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+      'Du ' + lundi2.toLocaleDateString('fr-FR', {day:'numeric', month:'long'}) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'});
     updateInputSemaineCollectif();
   }
 
-  const TYPES_ABSENCE = ['Congés payés', 'RTT', 'Formation', 'Maladie', 'Sans solde', 'Autre'];
-
-  function estAbsentJour(collabId, dateStr) {
-    return congesCollectifData.some(c =>
-      (c['Collaborateurs'] || []).some(cc => cc.id === collabId) &&
-      dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-    );
+  function filtrerCollaborateurs() {
+    loadPlanningCollectif();
   }
 
-  function renderBullesCollabs(jours) {
-    const container = document.getElementById('bulles-collabs');
-    if (!container) return;
-    container.innerHTML = '';
-    const dateDebut = jours[0].toISOString().split('T')[0];
-    const dateFin = jours[4].toISOString().split('T')[0];
+  let currentDateCollab = null;
+  let currentBtnCollab = null;
 
-    COLLABORATEURS_ADMIN.forEach(collab => {
-      if (!collab.collabId) return;
-      // Appliquer le filtre poste
-      if (postesSelectionnes.size > 0 && !postesSelectionnes.has(collab.poste)) return;
-      // Masquer seulement si absent TOUTE la semaine
-      const absentTouteSemaine = congesCollectifData.some(c => {
-        if (!(c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)) return false;
-        const debut = c['Date de début'] || '';
-        const fin = c['Date de fin journée (inclus)'] || '';
-        return debut <= dateDebut && fin >= dateFin;
-      });
-      if (absentTouteSemaine) return;
+  function ouvrirModalCollabJour(dateStr, btn) {
+    currentDateCollab = dateStr;
+    currentBtnCollab = btn;
+    if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
+    const sel = collabsSelectionnesParJour[dateStr];
+    const collabs = JSON.parse(btn.dataset.collabs || '[]');
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-collab-jour-title').textContent =
+      '👷 ' + d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'short'});
+    const couleur = (dispo) => dispo === 5 ? '#4a7c3f' : dispo === 4 ? '#c8a96e' : dispo === 3 ? '#e67e22' : '#c0392b';
+    document.getElementById('liste-collab-jour').innerHTML = collabs.map(c => `
+      <div class="modal-option ${sel.has(c.id) ? 'selected' : ''}" onclick="toggleCollabJour(${c.id}, this)" style="gap:10px">
+        <span style="width:8px;height:8px;border-radius:50%;background:${couleur(c.dispo)};flex-shrink:0;display:inline-block"></span>
+        <span style="flex:1">${c.nom}</span>
+        ${sel.has(c.id) ? '<span class="check">✓</span>' : ''}
+      </div>`).join('');
+    document.getElementById('modal-collab-jour').classList.add('open');
+  }
 
-      const bulle = document.createElement('div');
-      bulle.draggable = true;
-      bulle.style.cssText = 'background:var(--vert);color:#fff;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:grab;user-select:none;white-space:nowrap';
-      bulle.textContent = collab.nom.split(' ')[0] + ' ' + collab.nom.split(' ').slice(1).join(' ').charAt(0) + '.';
-      bulle.title = collab.nom + (collab.poste ? ' · ' + collab.poste : '');
-      // Calculer jours disponibles
-      let joursDispos = 0;
-      jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
-        const absent = congesCollectifData.some(c =>
-          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-        );
-        if (!absent) joursDispos++;
-      });
-      // Couleur selon disponibilité
-      const couleur = joursDispos === 5 ? '#4a7c3f' : joursDispos === 4 ? '#c8a96e' : joursDispos === 3 ? '#e67e22' : joursDispos === 2 ? '#c0392b' : '#1a1a1a';
-      bulle.style.background = couleur;
-      // Construire le tooltip avec les absences
-      const absencesSemaine = congesCollectifData.filter(c =>
-        (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-        jours.some(j => {
-          const d = j.toISOString().split('T')[0];
-          return d >= c['Date de début'] && d <= c['Date de fin journée (inclus)'];
-        })
-      );
-      let tooltipText = '👷 ' + collab.nom + (collab.poste ? '\n📋 ' + collab.poste : '') + '\n✅ ' + joursDispos + '/5 jours disponibles cette semaine';
-      if (absencesSemaine.length > 0) {
-        tooltipText += '\n\n🚫 Absences :';
-        absencesSemaine.forEach(a => {
-          const type = a['Type de demande']?.value || a['Type de demande'] || 'Absence';
-          const debut = a['Date de début'] ? new Date(a['Date de début'] + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'numeric', month:'long'}) : '—';
-          const fin = a['Date de fin journée (inclus)'] ? new Date(a['Date de fin journée (inclus)'] + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'numeric', month:'long'}) : '—';
-          const statut = a['Statut']?.value || a['Statut'] || 'En attente';
-          const statutEmoji = statut === 'Validé' || statut === 'Approuvé' ? '✅' : statut === 'Refusé' ? '❌' : '⏳';
-          tooltipText += '\n• ' + type + ' ' + statutEmoji + ' ' + statut + '\n  Du ' + debut + '\n  au ' + fin;
-        });
+  function toggleCollabJour(collabId, el) {
+    const sel = collabsSelectionnesParJour[currentDateCollab];
+    if (sel.has(collabId)) {
+      sel.delete(collabId);
+      el.classList.remove('selected');
+      el.querySelector('.check')?.remove();
+    } else {
+      sel.add(collabId);
+      el.classList.add('selected');
+      if (!el.querySelector('.check')) {
+        const check = document.createElement('span');
+        check.className = 'check'; check.textContent = '✓';
+        el.appendChild(check);
       }
-      bulle.dataset.tooltip = tooltipText;
-      bulle.title = ''; // Désactiver tooltip natif
+    }
+  }
 
-      bulle.ondragstart = (e) => {
-        e.dataTransfer.setData('collabId', collab.collabId);
-        e.dataTransfer.setData('collabNom', collab.nom);
-        bulle.style.opacity = '0.5';
-        selectedBulle = { collabId: collab.collabId, collabNom: collab.nom, el: bulle };
-      };
-      bulle.ondragend = () => { bulle.style.opacity = '1'; };
-      // Support tactile : tap pour sélectionner
-      let pressTimer = null;
-      const showTooltip = (e) => {
-        const tooltip = document.getElementById('bulle-tooltip');
-        if (tooltip.style.display === 'block') return; // Déjà visible
-        tooltip.innerHTML = (bulle.dataset.tooltip || bulle.title || '').replace(/\n/g, '<br>');
-        const x = (e.touches ? e.touches[0].clientX : e.clientX);
-        const y = (e.touches ? e.touches[0].clientY : e.clientY);
-        tooltip.style.display = 'block';
-        tooltip.style.left = Math.min(x + 10, window.innerWidth - 270) + 'px';
-        tooltip.style.top = Math.max(y - 80, 10) + 'px';
-      };
-      const hideTooltip = () => {
-        document.getElementById('bulle-tooltip').style.display = 'none';
-        clearTimeout(pressTimer);
-      };
-      // Mobile : appui long uniquement
-      bulle.ontouchstart = (e) => { pressTimer = setTimeout(() => showTooltip(e), 600); };
-      bulle.ontouchend = (e) => { clearTimeout(pressTimer); setTimeout(hideTooltip, 2000); };
-      bulle.ontouchmove = hideTooltip;
-      // PC : survol souris uniquement
-      bulle.onmouseenter = showTooltip;
-      bulle.onmouseleave = hideTooltip;
-
-      bulle.onclick = () => {
-        document.querySelectorAll('.bulle-selected').forEach(b => b.classList.remove('bulle-selected'));
-        if (selectedBulle && selectedBulle.collabId === collab.collabId) {
-          selectedBulle = null;
-        } else {
-          selectedBulle = { collabId: collab.collabId, collabNom: collab.nom, el: bulle };
-          bulle.classList.add('bulle-selected');
-        }
-      };
-      container.appendChild(bulle);
+  function resetCollabJour() {
+    if (currentDateCollab) collabsSelectionnesParJour[currentDateCollab] = new Set();
+    document.querySelectorAll('#liste-collab-jour .modal-option').forEach(el => {
+      el.classList.remove('selected');
+      el.querySelector('.check')?.remove();
     });
   }
 
-  let pendingAff = null;
-  let selectedBulle = null;
-
-  function affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId) {
-    // Vérifier si déjà affecté ce jour sur cette période (sauf si c'est un déplacement)
-    if (!existingAffId) {
-      const dejaAffecte = planningCollectifData.find(p => {
-        if (p['Date'] !== dateStr) return false;
-        if (!(p['Collaborateurs'] || []).some(cc => cc.id === parseInt(collabId))) return false;
-        const pPeriode = Array.isArray(p['Periode']) ? p['Periode'].map(v => v.value || v).join('/') : p['Periode']?.value || p['Periode'] || 'Matin';
-        return pPeriode === periode;
-      });
-      if (dejaAffecte) {
-        const chantierExist = (dejaAffecte['Chantier'] || [])[0]?.value || '—';
-        const msg = '⚠️ ' + collabNom.split(' ')[0] + ' est déjà affecté ce jour sur ce créneau sur le chantier : ' + chantierExist + '\n\nVoulez-vous quand même affecter ?';
-        if (!confirm(msg)) return;
+  function fermerModalCollabJour(e) {
+    if (!e || e.target === document.getElementById('modal-collab-jour')) {
+      document.getElementById('modal-collab-jour').classList.remove('open');
+      if (currentBtnCollab && currentDateCollab) {
+        const count = (collabsSelectionnesParJour[currentDateCollab] || new Set()).size;
+        currentBtnCollab.textContent = count > 0 ? '👥 ' + count + ' sél.' : '+ Choisir';
+        currentBtnCollab.style.background = count > 0 ? 'var(--vert-clair)' : '#f8fafc';
+        currentBtnCollab.style.borderColor = count > 0 ? 'var(--vert)' : '#ddd';
       }
-    }
-    // Stocker et ouvrir modal notes
-    pendingAff = { collabId: parseInt(collabId), collabNom, chantier, dateStr, periode, existingAffId: existingAffId || null };
-    const d = new Date(dateStr + 'T12:00:00');
-    document.getElementById('modal-notes-drop-title').textContent =
-      '👷 ' + collabNom.split(' ')[0] + ' → ' + chantier.nom + ' · ' + (periode === 'Matin' ? '🌅' : '🌆') + ' ' + periode;
-    document.getElementById('notes-drop-input').value = '';
-    document.getElementById('modal-notes-drop').classList.add('open');
-    setTimeout(() => document.getElementById('notes-drop-input').focus(), 300);
-  }
-
-  function closeModalNotesDrop(e) {
-    if (!e || e.target === document.getElementById('modal-notes-drop')) {
-      document.getElementById('modal-notes-drop').classList.remove('open');
-      pendingAff = null;
+      currentDateCollab = null;
+      currentBtnCollab = null;
     }
   }
 
-  async function confirmerAvecNotes() {
-    document.getElementById('modal-notes-drop').classList.remove('open');
-    if (!pendingAff) return;
-    const notes = document.getElementById('notes-drop-input').value || '';
-    try {
-      if (pendingAff.existingAffId) {
-        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
-      }
-      const payload = {
-        Collaborateurs: [pendingAff.collabId],
-        Chantier: [parseInt(pendingAff.chantier.id)],
-        Date: pendingAff.dateStr,
-        Periode: [pendingAff.periode],
-        Notes: notes,
-      };
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-      pendingAff = null;
-      await loadPlanningCollectif();
-    } catch(e) { alert('Erreur : ' + e.message); }
+  function ouvrirFiltrePoste() {
+    const liste = document.getElementById('liste-postes-filtre');
+    liste.innerHTML = postesDisponibles.map(p => `
+      <div class="modal-option ${postesSelectionnes.has(p) ? 'selected' : ''}" onclick="togglePosteFiltre('${p}', this)">
+        <span>${p}</span>
+        ${postesSelectionnes.has(p) ? '<span class="check">✓</span>' : ''}
+      </div>`).join('');
+    document.getElementById('modal-filtre-poste').classList.add('open');
   }
 
-  function ouvrirModalPeriode(collabNom, chantierNom, dateStr) {
-    const d = new Date(dateStr + 'T12:00:00');
-    document.getElementById('modal-periode-title').textContent =
-      collabNom.split(' ')[0] + ' → ' + chantierNom + ' · ' + d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
-    document.getElementById('modal-periode-collectif').classList.add('open');
-  }
-
-  function closeModalPeriodeCollectif(e) {
-    if (!e || e.target === document.getElementById('modal-periode-collectif')) {
-      document.getElementById('modal-periode-collectif').classList.remove('open');
-      pendingAff = null;
-    }
-  }
-
-  async function confirmerAffectation(periode) {
-    document.getElementById('modal-periode-collectif').classList.remove('open');
-    if (!pendingAff) return;
-    try {
-      const collabId = parseInt(pendingAff.collabId);
-      const chantierId = parseInt(pendingAff.chantier.id);
-      const payload = {
-        Collaborateurs: [collabId],
-        Chantier: [chantierId],
-        Date: pendingAff.dateStr,
-        Periode: [periode],
-        Notes: '',
-      };
-      // Si déplacement depuis une cellule existante, supprimer l'ancienne
-      if (pendingAff.existingAffId) {
-        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
-      }
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-      pendingAff = null;
-      await loadPlanningCollectif();
-    } catch(e) { alert('Erreur : ' + e.message); }
-  }
-
-
-  let postesSelectionnes = new Set(['Pose', 'Apprenti']);
-
-  function filtrerTousPostes() {
-    postesSelectionnes.clear();
-    document.querySelectorAll('#filtre-poste-collectif button').forEach(b => {
-      if (b.id === 'btn-tous-postes') {
-        b.style.background = 'var(--vert)'; b.style.color = '#fff';
-      } else {
-        b.style.background = '#f1f5f9'; b.style.color = 'var(--gris)';
-      }
-    });
-    const lundi = getLundiAdmin(semaineCollectif);
-    const jours = [];
-    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(j); }
-    renderBullesCollabs(jours);
-  }
-
-  function toggleFiltrePoste(btn, poste) {
+  function togglePosteFiltre(poste, el) {
     if (postesSelectionnes.has(poste)) {
       postesSelectionnes.delete(poste);
-      btn.style.background = '#f1f5f9'; btn.style.color = 'var(--gris)';
+      el.classList.remove('selected');
+      el.querySelector('.check')?.remove();
     } else {
       postesSelectionnes.add(poste);
-      btn.style.background = 'var(--vert)'; btn.style.color = '#fff';
+      el.classList.add('selected');
+      if (!el.querySelector('.check')) {
+        const check = document.createElement('span');
+        check.className = 'check'; check.textContent = '✓';
+        el.appendChild(check);
+      }
     }
-    const btnTous = document.getElementById('btn-tous-postes');
-    if (btnTous) {
-      btnTous.style.background = postesSelectionnes.size > 0 ? '#f1f5f9' : 'var(--vert)';
-      btnTous.style.color = postesSelectionnes.size > 0 ? 'var(--gris)' : '#fff';
+    // Mettre à jour le bouton
+    const btn = document.getElementById('btn-filtre-poste');
+    if (btn) btn.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
+  }
+
+  function resetFiltrePoste() {
+    postesSelectionnes.clear();
+    const btn = document.getElementById('btn-filtre-poste');
+    if (btn) btn.textContent = '🔽 Postes';
+    ouvrirFiltrePoste(); // Rafraîchir la liste
+  }
+
+  function fermerFiltrePoste(e) {
+    if (!e || e.target === document.getElementById('modal-filtre-poste')) {
+      document.getElementById('modal-filtre-poste').classList.remove('open');
+      loadPlanningCollectif();
     }
-    const lundi = getLundiAdmin(semaineCollectif);
-    const jours = [];
-    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(j); }
-    renderBullesCollabs(jours);
   }
 
   function changerSemaineCollectif(delta) {
@@ -2023,6 +1894,45 @@
       await loadPlanningCollectif();
     } catch(e) { alert('Erreur : ' + e.message); }
     finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
+  }
+
+  async function affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId) {
+    pendingAff = { collabId: parseInt(collabId), collabNom, chantier, dateStr, periode, existingAffId: existingAffId || null };
+    document.getElementById('modal-notes-drop-title').textContent =
+      '👷 ' + collabNom.split(' ')[0] + ' → ' + chantier.nom + ' · ' + (periode === 'Matin' ? '🌅' : '🌆') + ' ' + periode;
+    document.getElementById('notes-drop-input').value = '';
+    document.getElementById('modal-notes-drop').classList.add('open');
+    setTimeout(() => document.getElementById('notes-drop-input').focus(), 300);
+  }
+
+  async function confirmerAvecNotes() {
+    document.getElementById('modal-notes-drop').classList.remove('open');
+    if (!pendingAff) return;
+    const notes = document.getElementById('notes-drop-input').value || '';
+    try {
+      if (pendingAff.existingAffId) {
+        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
+      }
+      const payload = {
+        Collaborateurs: [pendingAff.collabId],
+        Chantier: [parseInt(pendingAff.chantier.id)],
+        Date: pendingAff.dateStr,
+        Periode: [pendingAff.periode],
+        Notes: notes,
+      };
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      pendingAff = null;
+      await loadPlanningCollectif();
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
+  function closeModalNotesDrop(e) {
+    if (!e || e.target === document.getElementById('modal-notes-drop')) {
+      document.getElementById('modal-notes-drop').classList.remove('open');
+      pendingAff = null;
+    }
   }
 
   async function supprimerAffCollectif(id) {
@@ -2681,48 +2591,55 @@
 
   init();
 </script>
-<!-- PAGE COLLECTIF (Gestionnaires) -->
+<!-- PAGE COLLECTIF -->
 <div id="page-collectif" class="page">
-  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 20px">
-    <div style="font-size:15px;font-weight:800;color:#fff">📋 Planning collectif</div>
-    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">Affectation des chantiers · En cours uniquement</div>
-  </div>
-
-  <!-- Navigation semaine -->
-  <div class="semaine-nav-admin">
-    <button class="semaine-nav-btn" onclick="changerSemaineCollectif(-1)">‹</button>
-    <div style="text-align:center;flex:1">
-      <div class="semaine-label-admin" id="semaine-label-collectif">—</div>
-      <input type="week" id="input-semaine-collectif" onchange="allerSemaineCollectif(this.value)" style="margin-top:4px;font-size:11px;border:1px solid #ddd5c5;border-radius:6px;padding:3px 6px;color:var(--gris);background:var(--beige-clair);outline:none;width:100%" />
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#1e2420;gap:8px">
+    <div style="display:flex;align-items:center;gap:6px">
+      <button onclick="changerSemaineCollectif(-1)" style="background:rgba(255,255,255,0.15);border:none;border-radius:6px;padding:4px 10px;color:#fff;font-size:16px;cursor:pointer">‹</button>
+      <input type="week" id="input-semaine-collectif" onchange="allerSemaineCollectif(this.value)" style="font-size:10px;border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:3px 6px;color:#fff;background:rgba(255,255,255,0.1);outline:none;width:120px" />
+      <button onclick="changerSemaineCollectif(1)" style="background:rgba(255,255,255,0.15);border:none;border-radius:6px;padding:4px 10px;color:#fff;font-size:16px;cursor:pointer">›</button>
     </div>
-    <button class="semaine-nav-btn" onclick="changerSemaineCollectif(1)">›</button>
-    <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 CSV</button>
-  </div>
-
-  <!-- Filtres postes + Bulles collaborateurs (Gestionnaire/Admin uniquement) -->
-  <div id="section-bulles-collectif" style="margin:0 16px 10px">
-    <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">Filtrer par poste :</div>
-    <div id="filtre-poste-collectif" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
-      <button onclick="filtrerTousPostes()" id="btn-tous-postes" style="background:var(--vert);color:#fff;border:none;border-radius:20px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">Tous</button>
-    </div>
-    <div style="font-size:11px;font-weight:700;color:var(--gris-moyen);margin-bottom:6px">👷 Collaborateurs disponibles — glisser vers un chantier</div>
-    <div id="bulles-collabs" style="display:flex;flex-wrap:wrap;gap:6px;min-height:36px;background:#f8fafc;border-radius:10px;padding:8px;border:1.5px dashed #ddd"></div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;font-size:10px;font-weight:600">
-      <span style="display:flex;align-items:center;gap:4px"><span style="background:#4a7c3f;border-radius:10px;padding:2px 8px;color:#fff">●</span> 5j libre</span>
-      <span style="display:flex;align-items:center;gap:4px"><span style="background:#c8a96e;border-radius:10px;padding:2px 8px;color:#fff">●</span> 4j libre</span>
-      <span style="display:flex;align-items:center;gap:4px"><span style="background:#e67e22;border-radius:10px;padding:2px 8px;color:#fff">●</span> 3j libre</span>
-      <span style="display:flex;align-items:center;gap:4px"><span style="background:#c0392b;border-radius:10px;padding:2px 8px;color:#fff">●</span> 2j libre</span>
-      <span style="display:flex;align-items:center;gap:4px"><span style="background:#1a1a1a;border-radius:10px;padding:2px 8px;color:#fff">●</span> 1j libre</span>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button onclick="ouvrirFiltrePoste()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:4px 10px;color:#fff;font-size:11px;cursor:pointer;white-space:nowrap" id="btn-filtre-poste">🔽 Postes</button>
+      <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">📥</button>
     </div>
   </div>
-
-  <!-- Grille planning -->
+  <div style="padding:3px 8px 4px;background:#1e2420;text-align:center">
+    <div style="font-size:10px;color:rgba(255,255,255,0.6)" id="semaine-label-collectif">—</div>
+  </div>
+  <div id="section-bulles-collectif" style="display:flex;flex-wrap:wrap;gap:6px;padding:5px 10px;background:#f8fafc;border-bottom:1px solid #eee;font-size:10px;font-weight:600;align-items:center">
+    <span style="color:#666">Dispo :</span>
+    <span><span style="background:#4a7c3f;border-radius:8px;padding:1px 7px;color:#fff">●</span> 5j</span>
+    <span><span style="background:#c8a96e;border-radius:8px;padding:1px 7px;color:#fff">●</span> 4j</span>
+    <span><span style="background:#e67e22;border-radius:8px;padding:1px 7px;color:#fff">●</span> 3j</span>
+    <span><span style="background:#c0392b;border-radius:8px;padding:1px 7px;color:#fff">●</span> 2j</span>
+    <span><span style="background:#1a1a1a;border-radius:8px;padding:1px 7px;color:#fff">●</span> 1j</span>
+  </div>
   <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
-  <div class="planning-admin-wrap">
-    <table class="planning-admin-table" id="planning-collectif-grid"></table>
+  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <table id="planning-collectif-grid" style="border-collapse:collapse;width:100%;min-width:340px;background:#fff"></table>
   </div>
-
-  <!-- MODAL NOTES DROP -->
+  <div class="modal-backdrop" id="modal-aff-collectif" onclick="closeModalAffCollectif(event)">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <div><h3 id="modal-aff-collectif-title">Modifier</h3><div style="font-size:12px;color:#aaa;margin-top:2px" id="modal-aff-collectif-sub"></div></div>
+        <button class="modal-close" onclick="closeModalAffCollectif()">✕</button>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="field"><label>Chantier</label><div style="background:var(--vert-clair);border-radius:10px;padding:11px 13px;font-size:14px;font-weight:700;color:var(--vert)" id="val-chantier-collectif">—</div></div>
+        <div class="field"><label>Collaborateur</label><div id="field-collab-collectif"></div></div>
+        <div class="field">
+          <label>Période</label>
+          <select id="select-periode-modal" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+            <option value="Matin">🌅 Matin</option>
+            <option value="Après-midi">🌆 Après-midi</option>
+          </select>
+        </div>
+        <div class="field"><label>Notes</label><textarea id="modal-aff-collectif-notes" placeholder="Remarques…" style="min-height:60px"></textarea></div>
+        <button onclick="validerAffCollectif()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-aff-collectif">✅ Enregistrer</button>
+      </div>
+    </div>
+  </div>
   <div class="modal-backdrop" id="modal-notes-drop" onclick="closeModalNotesDrop(event)">
     <div class="modal-sheet" style="max-height:50vh">
       <div class="modal-header">
@@ -2735,50 +2652,40 @@
       </div>
     </div>
   </div>
+  <div class="modal-backdrop" id="modal-chantiers-collectif" style="display:none">
+    <div class="modal-sheet"><div class="modal-options" id="liste-chantiers-collectif"></div></div>
+  </div>
 
-  <!-- MODAL MODIFIER AFF -->
-  <div class="modal-backdrop" id="modal-aff-collectif" onclick="closeModalAffCollectif(event)">
-    <div class="modal-sheet">
+  <!-- MODAL COLLAB JOUR -->
+  <div class="modal-backdrop" id="modal-collab-jour" onclick="fermerModalCollabJour(event)">
+    <div class="modal-sheet" style="max-height:70vh">
       <div class="modal-header">
-        <div>
-          <h3 id="modal-aff-collectif-title">Modifier</h3>
-          <div style="font-size:12px;color:#aaa;margin-top:2px" id="modal-aff-collectif-sub"></div>
-        </div>
-        <button class="modal-close" onclick="closeModalAffCollectif()">✕</button>
+        <h3 id="modal-collab-jour-title">Choisir collaborateur(s)</h3>
+        <button class="modal-close" onclick="fermerModalCollabJour()">✕</button>
       </div>
-      <div style="padding:16px 20px">
-        <div class="field">
-          <label>Chantier</label>
-          <div style="background:var(--vert-clair);border-radius:10px;padding:11px 13px;font-size:14px;font-weight:700;color:var(--vert)" id="val-chantier-collectif">—</div>
-        </div>
-        <div class="field">
-          <label>Collaborateur</label>
-          <div id="field-collab-collectif"></div>
-        </div>
-        <div class="field">
-          <label>Période</label>
-          <select id="select-periode-modal" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
-            <option value="Matin">🌅 Matin</option>
-            <option value="Après-midi">🌆 Après-midi</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>Notes</label>
-          <textarea id="modal-aff-collectif-notes" placeholder="Remarques…" style="min-height:60px"></textarea>
-        </div>
-        <button onclick="validerAffCollectif()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-aff-collectif">✅ Enregistrer</button>
+      <div class="modal-options" id="liste-collab-jour" style="overflow-y:auto;flex:1"></div>
+      <div style="padding:12px 16px;display:flex;gap:8px">
+        <button onclick="resetCollabJour()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Aucun</button>
+        <button onclick="fermerModalCollabJour()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ OK</button>
       </div>
     </div>
   </div>
 
-  <!-- MODAL CHANTIERS COLLECTIF (non utilisé mais gardé) -->
-  <div class="modal-backdrop" id="modal-chantiers-collectif" style="display:none">
-    <div class="modal-sheet">
-      <div class="modal-options" id="liste-chantiers-collectif"></div>
+  <!-- MODAL FILTRE POSTES -->
+  <div class="modal-backdrop" id="modal-filtre-poste" onclick="fermerFiltrePoste(event)">
+    <div class="modal-sheet" style="max-height:60vh">
+      <div class="modal-header">
+        <h3>Filtrer par poste</h3>
+        <button class="modal-close" onclick="fermerFiltrePoste()">✕</button>
+      </div>
+      <div class="modal-options" id="liste-postes-filtre"></div>
+      <div style="padding:12px 16px;display:flex;gap:8px">
+        <button onclick="resetFiltrePoste()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Tous</button>
+        <button onclick="fermerFiltrePoste()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ Appliquer</button>
+      </div>
     </div>
   </div>
 </div>
-
 
 <!-- PAGE GESTION -->
 <div id="page-gestion" class="page">
