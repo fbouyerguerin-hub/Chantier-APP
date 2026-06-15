@@ -82,6 +82,7 @@
     .page { display: none !important; }
     .page.active { display: block !important; }
     .login-page.active { display: flex !important; }
+    #page-collectif.active { display: flex !important; }
     .resume-header { background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); padding: 28px 20px; text-align: center; }
     .resume-check { font-size: 56px; margin-bottom: 10px; }
     .resume-header h2 { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -1494,6 +1495,35 @@
     congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
+    // Si semaine passée → charger les saisies réelles à la place
+    const lundiCollectif = getLundiAdmin(semaineCollectif);
+    lundiCollectif.setHours(0,0,0,0);
+    const todayCollectif = new Date(); todayCollectif.setHours(0,0,0,0);
+    const isPasseCollectif = lundiCollectif < todayCollectif;
+    if (isPasseCollectif) {
+      const resSaisiesCollectif = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
+      const dataSaisiesCollectif = (await resSaisiesCollectif.json()).results || [];
+      // IDs des collaborateurs filtrés
+      const collabIdsFiltres = new Set(collaborateursFiltre.map(c => c.collabId));
+      // Convertir les saisies au format planningCollectifData en filtrant par poste
+      planningCollectifData = dataSaisiesCollectif
+        .filter(r => {
+          const collabId = (r['Collaborateur'] || [])[0]?.id;
+          return collabIdsFiltres.size === 0 || collabIdsFiltres.has(collabId);
+        })
+        .map(r => ({
+          id: r.id,
+          Date: r['Date'],
+          Collaborateurs: r['Collaborateur'] || [],
+          Chantier: r['Chantiers'] || [],
+          Periode: [{ value: 'Matin' }],
+          Notes: r['Notes'] || '',
+          Fichiers: [],
+          isSaisie: true,
+          heures: r['Heures Normales'] || 0
+        }));
+    }
+
     collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
       if (!c.collabId) return false;
       if (postesSelectionnes.size === 0) return true;
@@ -1504,16 +1534,18 @@
     const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
     const isGestAdmin = connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur';
 
+    // Rendre le thead sticky
     const thead = document.createElement('thead');
+    thead.style.cssText = 'position:sticky;top:0;z-index:3';
     const trHead1 = document.createElement('tr');
     const thChantier = document.createElement('th');
-    thChantier.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:2';
+    thChantier.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:4';
     thChantier.textContent = 'Chantier';
     trHead1.appendChild(thChantier);
     jours.forEach((j, i) => {
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
-      th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px';
+      th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
       // Compter les absences ce jour
       const absentsJour = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
         (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
@@ -1538,12 +1570,12 @@
     if (isGestAdmin) {
       const trHead2 = document.createElement('tr');
       const tdEmpty = document.createElement('td');
-      tdEmpty.style.cssText = 'background:#f8fafc;position:sticky;left:0;z-index:2;border-bottom:2px solid #ddd';
+      tdEmpty.style.cssText = 'background:#f8fafc;position:sticky;left:0;z-index:4;border-bottom:2px solid #ddd';
       trHead2.appendChild(tdEmpty);
       jours.forEach(j => {
         const dateStr = j.toISOString().split('T')[0];
         const td = document.createElement('td');
-        td.style.cssText = 'background:#f8fafc;padding:3px;border-bottom:2px solid #ddd;vertical-align:top';
+        td.style.cssText = 'background:#f8fafc;padding:3px;border-bottom:2px solid #ddd;vertical-align:top;position:sticky;top:0;z-index:3';
         // Calculer collabs disponibles ce jour (non affectés)
         const affectesJour = planningCollectifData
           .filter(p => p['Date'] === dateStr)
@@ -1635,11 +1667,16 @@
           affs.forEach(aff => {
             const collabNom = (aff['Collaborateurs'] || [])[0]?.value || '—';
             const notes = aff['Notes'] || '';
+            const heures = aff['heures'] || '';
             const div = document.createElement('div');
             div.className = 'aff-tag';
-            div.style.cssText = 'font-size:9px;padding:2px 4px;margin-bottom:2px;' + (pi === 1 ? 'background:#f0f7ef;border-color:#7ab870;' : '');
-            div.innerHTML = collabNom.split(' ')[0] + (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') + (isGestAdmin ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
-            if (isGestAdmin) {
+            const isSaisie = aff.isSaisie === true;
+            div.style.cssText = 'font-size:9px;padding:2px 4px;margin-bottom:2px;' + (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;' : pi === 1 ? 'background:#f0f7ef;border-color:#7ab870;' : '');
+            div.innerHTML = collabNom.split(' ')[0] +
+              (heures ? '<div class="aff-notes">⏱ ' + heures + 'h</div>' : '') +
+              (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') +
+              (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
+            if (isGestAdmin && !isSaisie) {
               div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
               div.onclick = () => modifierAffCollectifChantier(aff.id, chantier, collabNom, notes, periode, dateStr);
               div.style.cursor = 'pointer';
@@ -1701,9 +1738,9 @@
 
     const lundi2 = getLundiAdmin(semaineCollectif);
     const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate() + 4);
-    document.getElementById('semaine-label-collectif').textContent =
-      'Du ' + lundi2.toLocaleDateString('fr-FR', {day:'numeric', month:'long'}) +
+    const labelSemaine = 'Du ' + lundi2.toLocaleDateString('fr-FR', {day:'numeric', month:'long'}) +
       ' au ' + vendredi.toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'});
+    document.getElementById('semaine-label-collectif').textContent = labelSemaine + (isPasseCollectif ? ' · 📋 Saisies réelles' : '');
     updateInputSemaineCollectif();
   }
 
@@ -1981,8 +2018,11 @@
       selWrap.parentElement.insertBefore(selCollab, selWrap);
     }
     selCollab.innerHTML = '<option value="">-- Choisir un collaborateur --</option>';
-    const poste = document.getElementById('filtre-poste-collectif')?.value || '';
-    const collabs = COLLABORATEURS_ADMIN.filter(c => c.collabId && (!poste || c.poste === poste));
+    const collabs = COLLABORATEURS_ADMIN.filter(c => {
+      if (!c.collabId) return false;
+      if (postesSelectionnes.size === 0) return true;
+      return postesSelectionnes.has(c.poste);
+    });
     collabs.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.collabId;
@@ -2781,7 +2821,7 @@
   init();
 </script>
 <!-- PAGE COLLECTIF -->
-<div id="page-collectif" class="page">
+<div id="page-collectif" class="page" style="display:none;flex-direction:column;height:calc(100vh - 70px);overflow:hidden">
   <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#1e2420;gap:8px">
     <div style="display:flex;align-items:center;gap:6px">
       <button onclick="changerSemaineCollectif(-1)" style="background:rgba(255,255,255,0.15);border:none;border-radius:6px;padding:4px 10px;color:#fff;font-size:16px;cursor:pointer">‹</button>
@@ -2798,7 +2838,7 @@
   </div>
 
   <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
-  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
+  <div style="overflow:auto;-webkit-overflow-scrolling:touch;flex:1">
     <table id="planning-collectif-grid" style="border-collapse:collapse;width:100%;min-width:340px;background:#fff"></table>
   </div>
   <div class="modal-backdrop" id="modal-aff-collectif" onclick="closeModalAffCollectif(event)">
