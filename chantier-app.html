@@ -1584,36 +1584,53 @@
 
           if (isGestAdmin && !isSaisie) {
             div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
-            // CLIC = sélectionner pour déplacer
-            div.onclick = e => {
-              if (e.target.classList.contains('btn-del-aff')) return;
-              if (collabDeplace) return; // déjà en train de déplacer
-              // Sélectionner
-              document.querySelectorAll('.aff-tag.selected-move').forEach(el => el.classList.remove('selected-move'));
+            // Démarrer le drag (PC: clic, Mobile: touchstart)
+            const startSelect = (x, y) => {
+              if (collabDeplace) return;
+              document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor='grab'; });
               div.classList.add('selected-move');
               collabDeplace = { affId: aff.id, collabNom, chantier, dateStr };
               div.style.cursor = 'grabbing';
-              // Montrer curseur
+              navigator.vibrate && navigator.vibrate(40);
               const cursor = document.getElementById('drag-cursor');
               cursor.textContent = '👷 ' + collabNom.split(' ')[0];
               cursor.style.display = 'block';
+              cursor.style.left = (x + 14) + 'px';
+              cursor.style.top = (y - 40) + 'px';
             };
+            div.onclick = e => {
+              if (e.target.classList.contains('btn-del-aff')) return;
+              if (collabDeplace) return;
+              startSelect(e.clientX, e.clientY);
+            };
+            div.addEventListener('touchstart', e => {
+              if (e.target.classList.contains('btn-del-aff')) return;
+              if (collabDeplace) return;
+              e.stopPropagation();
+              const t = e.touches[0];
+              startSelect(t.clientX, t.clientY);
+            }, { passive: true });
           }
           td.appendChild(div);
         });
 
-        // Clic sur la case
+        // Clic sur la case (PC)
         if (isGestAdmin && !isPasseCollectif) {
           td.onclick = e => {
             if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
             if (collabDeplace) {
-              // DÉPOSER
               deplacerCollab(collabDeplace, chantier, dateStr);
             } else {
-              // Ouvrir modal ajout
               ouvrirModalCollabCase(chantier, dateStr);
             }
           };
+          // Tap sur case vide (mobile, sans drag actif)
+          td.addEventListener('touchend', e => {
+            if (collabDeplace) return; // géré par le touchend global
+            if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+            e.preventDefault();
+            ouvrirModalCollabCase(chantier, dateStr);
+          }, { passive: false });
         }
         tr.appendChild(td);
       });
@@ -1631,17 +1648,44 @@
   }
 
 
-  // Curseur suit la souris quand un collab est sélectionné
+  // Curseur suit la souris (PC)
   document.addEventListener('mousemove', e => {
     if (!collabDeplace) return;
     const cursor = document.getElementById('drag-cursor');
     cursor.style.left = (e.clientX + 14) + 'px';
     cursor.style.top = (e.clientY - 14) + 'px';
-    // Surligner la case cible
     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
     const under = document.elementFromPoint(e.clientX, e.clientY);
     const targetTd = under?.closest('td');
     if (targetTd && targetTd._chantier) targetTd.classList.add('drop-hover');
+  });
+
+  // Touch : ghost suit le doigt (mobile)
+  document.addEventListener('touchmove', e => {
+    if (!collabDeplace) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const cursor = document.getElementById('drag-cursor');
+    cursor.style.left = (t.clientX + 14) + 'px';
+    cursor.style.top = (t.clientY - 40) + 'px';
+    document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
+    const under = document.elementFromPoint(t.clientX, t.clientY);
+    const targetTd = under?.closest('td');
+    if (targetTd && targetTd._chantier) targetTd.classList.add('drop-hover');
+  }, { passive: false });
+
+  // Touch : déposer au relâchement (mobile)
+  document.addEventListener('touchend', e => {
+    if (!collabDeplace) return;
+    const t = e.changedTouches[0];
+    document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
+    const under = document.elementFromPoint(t.clientX, t.clientY);
+    const targetTd = under?.closest('td');
+    if (targetTd && targetTd._chantier && targetTd._dateStr) {
+      deplacerCollab(collabDeplace, targetTd._chantier, targetTd._dateStr);
+    } else {
+      annulerDeplacement();
+    }
   });
 
   // Echap ou clic en dehors = annuler
