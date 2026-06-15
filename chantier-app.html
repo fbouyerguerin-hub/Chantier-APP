@@ -241,6 +241,7 @@
     #page-collectif.active { display: flex !important; }
     .aff-tag.dragging { opacity: 0.3; }
     #drag-cursor { position:fixed;pointer-events:none;z-index:9999;background:#fff3cd;border:2px solid #c8a96e;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;color:#2c2c2c;box-shadow:0 4px 20px rgba(0,0,0,0.25);transform:rotate(-2deg);white-space:nowrap;display:none;transition:none }
+    #drag-cursor::after { content:'✕ annuler';display:block;font-size:8px;color:#c0392b;font-weight:600;text-align:center;margin-top:2px;opacity:0.8 }
     .drop-hover { background:#e8f5e9 !important; outline:2px dashed #4a7c3f; }
     .aff-tag.selected-move { background:#fff3cd !important; border-color:#c8a96e !important; }
     .drop-zone-active { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
@@ -1681,7 +1682,12 @@
     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
     const under = document.elementFromPoint(t.clientX, t.clientY);
     const targetTd = under?.closest('td');
-    if (targetTd && targetTd._chantier && targetTd._dateStr) {
+    // Tap sur le curseur fantôme ou sur le collab sélectionné = annuler
+    const onGhost = under?.id === 'drag-cursor' || under?.closest('#drag-cursor');
+    const onSelectedTag = under?.closest('.aff-tag.selected-move');
+    if (onGhost || onSelectedTag) {
+      annulerDeplacement();
+    } else if (targetTd && targetTd._chantier && targetTd._dateStr) {
       deplacerCollab(collabDeplace, targetTd._chantier, targetTd._dateStr);
     } else {
       annulerDeplacement();
