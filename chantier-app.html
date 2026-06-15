@@ -1452,19 +1452,22 @@
   let collabsSelectionnesParJour = {}; // { dateStr: Set([collabId, ...]) }
 
   async function loadPlanningCollectif() {
+    // Toujours recharger les collaborateurs depuis Baserow
+    const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+    const dataC = await resC.json();
+    const postes = new Set();
+    COLLABORATEURS_ADMIN = (dataC.results || []).map(r => {
+      const nom = r['Nom Complet'] || '';
+      const parts = nom.trim().split(' ');
+      const initiales = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
+      const poste = r['Poste / Métier'] || '';
+      if (poste) postes.add(poste);
+      return { nom, initiales, collabId: r.id, poste };
+    });
+    postesDisponibles = [...postes].sort();
+    const btnFiltre = document.getElementById('btn-filtre-poste');
+    if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
     if (!collectifLoaded) {
-      const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const dataC = await resC.json();
-      const postes = new Set();
-      (dataC.results || []).forEach(r => {
-        const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
-        if (c) { c.collabId = r.id; c.poste = r['Poste / Métier'] || ''; if (c.poste) postes.add(c.poste); }
-      });
-      // Stocker les postes disponibles
-      postesDisponibles = [...postes].sort();
-      // Mettre à jour le bouton filtre
-      const btnFiltre = document.getElementById('btn-filtre-poste');
-      if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
       collectifLoaded = true;
     }
 
@@ -2246,41 +2249,7 @@
   const TABLE_CONGES_PLANNING = '1022869';
   const TABLE_COLLABS_ADMIN = '1014431';
 
-  const COLLABORATEURS_ADMIN = [
-    { nom: 'Karine Bouyer', initiales: 'KB', collabId: null },
-    { nom: 'Mehdi Bonnaud', initiales: 'MB', collabId: null },
-    { nom: 'Freddy Kreb', initiales: 'FK', collabId: null },
-    { nom: 'Romain Bonnaud', initiales: 'RB', collabId: null },
-    { nom: 'Loic Robineau', initiales: 'LR', collabId: null },
-    { nom: 'Nathalie Lurel', initiales: 'NL', collabId: null },
-    { nom: 'Louise Boissinot', initiales: 'LB', collabId: null },
-    { nom: 'Valentin Boudard', initiales: 'VB', collabId: null },
-    { nom: 'Frédéric Bouyer', initiales: 'FB', collabId: null },
-    { nom: 'Yohan Brusselle', initiales: 'YB', collabId: null },
-    { nom: 'Jocelyn Chapleau', initiales: 'JC', collabId: null },
-    { nom: 'Jerome Chauvet', initiales: 'JC', collabId: null },
-    { nom: 'Christophe Michenaud', initiales: 'CM', collabId: null },
-    { nom: 'Cedric Fradin', initiales: 'CF', collabId: null },
-    { nom: 'Fabrice Glard', initiales: 'FG', collabId: null },
-    { nom: 'Olivier Guilbaud', initiales: 'OG', collabId: null },
-    { nom: 'Samuel Herbreteau', initiales: 'SH', collabId: null },
-    { nom: 'Philippe Kreb', initiales: 'PK', collabId: null },
-    { nom: 'Stephane Lunais', initiales: 'SL', collabId: null },
-    { nom: 'Sebastien Lurel', initiales: 'SL', collabId: null },
-    { nom: 'Benjamin Martineau', initiales: 'BM', collabId: null },
-    { nom: 'Cedric Morin', initiales: 'CM', collabId: null },
-    { nom: 'Nael Hardouin', initiales: 'NH', collabId: null },
-    { nom: 'Yann Poupet', initiales: 'YP', collabId: null },
-    { nom: 'Robin Airieau', initiales: 'RA', collabId: null },
-    { nom: 'Fredy Souzeau', initiales: 'FS', collabId: null },
-    { nom: 'Remi Thomas', initiales: 'RT', collabId: null },
-    { nom: 'Alexis Tricoire', initiales: 'AT', collabId: null },
-    { nom: 'Renaud Voisin', initiales: 'RV', collabId: null },
-    { nom: 'Bruno Techer', initiales: 'BT', collabId: null },
-    { nom: 'Philippe Pinto', initiales: 'PP', collabId: null },
-    { nom: 'Youenn Morin', initiales: 'YM', collabId: null },
-    { nom: 'Loukas Piveteau', initiales: 'LP', collabId: null },
-  ];
+  let COLLABORATEURS_ADMIN = []; // Chargé dynamiquement depuis Baserow
 
   let semaineAdmin = new Date();
   let chantiersAdmin = [];
