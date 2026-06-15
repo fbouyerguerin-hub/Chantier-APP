@@ -82,7 +82,6 @@
     .page { display: none !important; }
     .page.active { display: block !important; }
     .login-page.active { display: flex !important; }
-    #page-collectif.active { display: flex !important; }
     .resume-header { background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); padding: 28px 20px; text-align: center; }
     .resume-check { font-size: 56px; margin-bottom: 10px; }
     .resume-header h2 { font-size: 22px; font-weight: 800; color: #fff; margin-bottom: 6px; }
@@ -239,6 +238,10 @@
     .conge-tag-admin { background: #fef3cd; border-left: 2px solid var(--beige); border-radius: 4px; padding: 3px 5px; font-size: 10px; color: #856404; font-weight: 600; }
     .btn-add-aff-admin { background: #f0f7ef; border: 1px dashed var(--vert); border-radius: 4px; width: 100%; padding: 4px; font-size: 16px; cursor: pointer; color: var(--vert); margin-top: 2px; }
     .bulle-selected { background: var(--beige) !important; box-shadow: 0 0 0 3px var(--beige), 0 0 0 5px #fff; transform: scale(1.05); }
+    .aff-tag.selected-move { background: #fff3cd !important; border-color: #c8a96e !important; box-shadow: 0 0 0 2px var(--beige); opacity: 0.5; }
+    .drag-ghost { position: fixed; pointer-events: none; z-index: 9999; background: #fff3cd; border: 2px solid var(--beige); border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 700; color: var(--gris); box-shadow: 0 8px 24px rgba(0,0,0,0.25); transform: rotate(-2deg) scale(1.08); will-change: left, top; white-space: nowrap; }
+    .drop-target-hover { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
+    #page-collectif.active { display: flex !important; }
     .drop-zone-active { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
     .bulle-tooltip { position: fixed; background: #1a1a1a; color: #fff; border-radius: 10px; padding: 10px 14px; font-size: 12px; line-height: 1.6; z-index: 999; max-width: 260px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); pointer-events: none; white-space: pre-line; }
     .semaine-nav-admin { display: flex; align-items: center; justify-content: space-between; margin: 0 16px 12px; background: #fff; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); border-left: 3px solid var(--vert); }
@@ -507,6 +510,7 @@
 </div>
 
 <div id="bulle-tooltip" class="bulle-tooltip" style="display:none"></div>
+<div id="drag-ghost" class="drag-ghost" style="display:none"></div>
 
 <script>
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
@@ -1284,7 +1288,6 @@
       const todayDate = new Date(); todayDate.setHours(0,0,0,0);
       const lundiDate = new Date(lundi); lundiDate.setHours(0,0,0,0);
       const isPast = lundiDate < todayDate;
-      const isCurrent = !isPast; // Semaine courante ou future
 
       // Charger congés
       const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100`;
@@ -1297,89 +1300,37 @@
       // Charger planning prévu ET saisies réelles en parallèle
       const byDatePlanning = {};
       const byDateSaisies = {};
-
-      const [resPlan, resSaisies] = await Promise.all([
+      const [resPlan, resSaisies2] = await Promise.all([
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS })
       ]);
-
-      const planRows = (await resPlan.json()).results || [];
-      planRows.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
-        const d = r['Date'];
-        if (!byDatePlanning[d]) byDatePlanning[d] = [];
-        const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
+      (await resPlan.json()).results?.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
+        const d = r['Date']; if (!byDatePlanning[d]) byDatePlanning[d] = [];
+        const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || '';
         byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', periode });
       });
-
-      (await resSaisies.json()).results?.forEach(r => {
-        const d = r['Date'];
-        if (!byDateSaisies[d]) byDateSaisies[d] = [];
+      (await resSaisies2.json()).results?.forEach(r => {
+        const d = r['Date']; if (!byDateSaisies[d]) byDateSaisies[d] = [];
         byDateSaisies[d].push({ chantier: (r['Chantiers'] || [])[0]?.value || '—', notes: r['Notes'] || '', heures: r['Heures Normales'] || '' });
       });
-
-      const hasPlan = Object.keys(byDatePlanning).length > 0;
-      const hasSaisies = Object.keys(byDateSaisies).length > 0;
-
-      // En-têtes communs
       const thHTML = jours.map((j, i) => {
         const dateStr = j.toISOString().split('T')[0];
-        const isToday = dateStr === today;
-        const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-        return `<th class="${isToday ? 'today-header' : ''}">
-          <div class="jour-nom-th">${joursNoms[i]}</div>
-          <div class="jour-date-th">${dateLabel}</div>
-        </th>`;
+        return `<th class="${dateStr === today ? 'today-header' : ''}"><div class="jour-nom-th">${joursNoms[i]}</div><div class="jour-date-th">${j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</div></th>`;
       }).join('');
-
-      // Grille planning prévu
-      const tdPlanHTML = jours.map(j => {
+      const mkTd = (byDate) => jours.map(j => {
         const dateStr = j.toISOString().split('T')[0];
         const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
         let cellHTML = '';
-        if (congeJour) {
-          cellHTML = `<div class="planning-cell-conge">🏖️ ${congeJour['Type de demande']?.value || 'Absence'}</div>`;
-        } else if (byDatePlanning[dateStr]?.length > 0) {
-          cellHTML = byDatePlanning[dateStr].map(r =>
-            `<div class="planning-cell-chantier">🏗 ${r.chantier}${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`
-          ).join('');
-        } else {
-          cellHTML = `<div class="planning-cell-vide">—</div>`;
-        }
+        if (congeJour) cellHTML = `<div class="planning-cell-conge">🏖️ ${congeJour['Type de demande']?.value || 'Absence'}</div>`;
+        else if (byDate[dateStr]?.length > 0) cellHTML = byDate[dateStr].map(r => `<div class="planning-cell-chantier">🏗 ${r.chantier}${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`).join('');
+        else cellHTML = `<div class="planning-cell-vide">—</div>`;
         return `<td>${cellHTML}</td>`;
       }).join('');
-
-      // Grille saisies réelles
-      const tdSaisiesHTML = jours.map(j => {
-        const dateStr = j.toISOString().split('T')[0];
-        const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
-        let cellHTML = '';
-        if (congeJour) {
-          cellHTML = `<div class="planning-cell-conge">🏖️ ${congeJour['Type de demande']?.value || 'Absence'}</div>`;
-        } else if (byDateSaisies[dateStr]?.length > 0) {
-          cellHTML = byDateSaisies[dateStr].map(r =>
-            `<div class="planning-cell-chantier">🏗 ${r.chantier}${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`
-          ).join('');
-        } else {
-          cellHTML = `<div class="planning-cell-vide">—</div>`;
-        }
-        return `<td>${cellHTML}</td>`;
-      }).join('');
-
       container.innerHTML = `
         <div style="margin:0 16px 8px;background:#f7f2ea;border-radius:8px;padding:8px 12px;font-size:11px;color:#c8a96e;font-weight:600">📅 Planning prévu</div>
-        <div class="planning-grid">
-          <table class="planning-table">
-            <thead><tr>${thHTML}</tr></thead>
-            <tbody><tr>${tdPlanHTML}</tr></tbody>
-          </table>
-        </div>
+        <div class="planning-grid"><table class="planning-table"><thead><tr>${thHTML}</tr></thead><tbody><tr>${mkTd(byDatePlanning)}</tr></tbody></table></div>
         <div style="margin:8px 16px;background:#e8f0e7;border-radius:8px;padding:8px 12px;font-size:11px;color:#4a7c3f;font-weight:600">📋 Saisies réelles</div>
-        <div class="planning-grid">
-          <table class="planning-table">
-            <thead><tr>${thHTML}</tr></thead>
-            <tbody><tr>${tdSaisiesHTML}</tr></tbody>
-          </table>
-        </div>
+        <div class="planning-grid"><table class="planning-table"><thead><tr>${thHTML}</tr></thead><tbody><tr>${mkTd(byDateSaisies)}</tr></tbody></table></div>
         <div style="height:16px"></div>`;
 
     } catch(e) {
@@ -1443,16 +1394,20 @@
   let chantiersCollectif = [];
   let planningCollectifData = [];
   let congesCollectifData = [];
+  let joursCollectif = [];
+  let dataChantiersCached = null;
   let currentAffCollectif = null;
   let selectedChantierCollectif = null;
   let collectifLoaded = false;
   let collaborateursFiltre = []; // liste filtrée selon poste
   let postesSelectionnes = new Set(['Pose', 'Apprenti']);
   let postesDisponibles = [];
-  let collabsSelectionnesParJour = {}; // { dateStr: Set([collabId, ...]) }
+  let collabsSelectionnesParJour = {};
+  let collabDeplace = null;
+  let isPasseCollectif = false;
 
   async function loadPlanningCollectif() {
-    // Toujours recharger les collaborateurs depuis Baserow
+    // Charger collaborateurs dynamiquement
     const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
     const dataC = await resC.json();
     const postes = new Set();
@@ -1467,22 +1422,21 @@
     postesDisponibles = [...postes].sort();
     const btnFiltre = document.getElementById('btn-filtre-poste');
     if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
-    if (!collectifLoaded) {
-      collectifLoaded = true;
-    }
 
     const resChantiers = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-    const dataChantiers = await resChantiers.json();
+    dataChantiersCached = await resChantiers.json();
+    const dataChantiers = dataChantiersCached;
     chantiersCollectif = (dataChantiers.results || [])
       .filter(r => (r['Statue']?.value || r['Statue'] || '').toLowerCase().trim() === 'en cours')
       .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id }));
 
     const lundi = getLundiAdmin(semaineCollectif);
-    const jours = [];
+    joursCollectif = [];
     for (let i = 0; i < 5; i++) {
       const j = new Date(lundi); j.setDate(lundi.getDate() + i);
-      jours.push(j);
+      joursCollectif.push(j);
     }
+    const jours = joursCollectif;
     const dateDebut = jours[0].toISOString().split('T')[0];
     const dateFin = jours[4].toISOString().split('T')[0];
     const today = new Date().toISOString().split('T')[0];
@@ -1498,34 +1452,11 @@
     congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
-    // Si semaine passée → charger les saisies réelles à la place
+    // Semaine passée → saisies réelles
     const lundiCollectif = getLundiAdmin(semaineCollectif);
     lundiCollectif.setHours(0,0,0,0);
     const todayCollectif = new Date(); todayCollectif.setHours(0,0,0,0);
-    const isPasseCollectif = lundiCollectif < todayCollectif;
-    if (isPasseCollectif) {
-      const resSaisiesCollectif = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
-      const dataSaisiesCollectif = (await resSaisiesCollectif.json()).results || [];
-      // IDs des collaborateurs filtrés
-      const collabIdsFiltres = new Set(collaborateursFiltre.map(c => c.collabId));
-      // Convertir les saisies au format planningCollectifData en filtrant par poste
-      planningCollectifData = dataSaisiesCollectif
-        .filter(r => {
-          const collabId = (r['Collaborateur'] || [])[0]?.id;
-          return collabIdsFiltres.size === 0 || collabIdsFiltres.has(collabId);
-        })
-        .map(r => ({
-          id: r.id,
-          Date: r['Date'],
-          Collaborateurs: r['Collaborateur'] || [],
-          Chantier: r['Chantiers'] || [],
-          Periode: [{ value: 'Matin' }],
-          Notes: r['Notes'] || '',
-          Fichiers: [],
-          isSaisie: true,
-          heures: r['Heures Normales'] || 0
-        }));
-    }
+    isPasseCollectif = lundiCollectif < todayCollectif;
 
     collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
       if (!c.collabId) return false;
@@ -1533,13 +1464,35 @@
       return postesSelectionnes.has(c.poste);
     });
 
+    if (isPasseCollectif) {
+      const resSaisies = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
+      const collabIdsFiltres = new Set(collaborateursFiltre.map(c => c.collabId));
+      planningCollectifData = ((await resSaisies.json()).results || [])
+        .filter(r => { const id = (r['Collaborateur'] || [])[0]?.id; return collabIdsFiltres.size === 0 || collabIdsFiltres.has(id); })
+        .map(r => ({ id: r.id, Date: r['Date'], Collaborateurs: r['Collaborateur'] || [], Chantier: r['Chantiers'] || [], Notes: r['Notes'] || '', Fichiers: [], isSaisie: true, heures: r['Heures Normales'] || 0 }));
+    }
+
+    renderGrilleCollectif(jours, dataChantiers);
+  }
+
+
+  function renderGrilleCollectif(jours, dataChantiers) {
+    jours = jours || joursCollectif;
+    dataChantiers = dataChantiers || dataChantiersCached;
+    if (!jours || !jours.length || !dataChantiers) return;
+    const today = new Date().toISOString().split('T')[0];
+    const dateDebut = jours[0].toISOString().split('T')[0];
+    const dateFin = jours[4].toISOString().split('T')[0];
     const table = document.getElementById('planning-collectif-grid');
+    table.innerHTML = '';
     const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
     const isGestAdmin = connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur';
 
-    // Rendre le thead sticky
+    // THEAD sticky
     const thead = document.createElement('thead');
     thead.style.cssText = 'position:sticky;top:0;z-index:3';
+
+    // Ligne 1 : jours + absences
     const trHead1 = document.createElement('tr');
     const thChantier = document.createElement('th');
     thChantier.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:4';
@@ -1549,17 +1502,12 @@
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
       th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
-      // Compter les absences ce jour
       const absentsJour = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
         (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
         dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
       )).map(c => {
-        const conge = congesCollectifData.find(cc =>
-          (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
-          dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
-        );
-        const raison = conge?.['Type de demande']?.value || conge?.['Type de demande'] || 'Absence';
-        return { nom: c.nom, raison };
+        const conge = congesCollectifData.find(cc => (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
+        return { nom: c.nom, raison: conge?.['Type de demande']?.value || 'Absence' };
       });
       const bandeauAbsent = absentsJour.length > 0
         ? '<div style="background:rgba(255,100,100,0.25);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;font-weight:600;text-align:left;line-height:1.6">' +
@@ -1570,189 +1518,367 @@
     });
     thead.appendChild(trHead1);
 
-    if (isGestAdmin) {
-      const trHead2 = document.createElement('tr');
-      const tdEmpty = document.createElement('td');
-      tdEmpty.style.cssText = 'background:#f8fafc;position:sticky;left:0;z-index:4;border-bottom:2px solid #ddd';
-      trHead2.appendChild(tdEmpty);
+
+    table.appendChild(thead);
+
+    // TBODY - une case par chantier/jour
+    const tbody = document.createElement('tbody');
+    chantiersCollectif.forEach(chantier => {
+      const tr = document.createElement('tr');
+      // Cellule nom chantier
+      const tdNom = document.createElement('td');
+      tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle;min-width:80px';
+      const chantierData = dataChantiers.results.find(r => r.id === chantier.id);
+      const fichiers = chantierData?.['Fichiers'] || [];
+      const nomDiv = document.createElement('div');
+      nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px';
+      nomDiv.textContent = chantier.nom;
+      tdNom.appendChild(nomDiv);
+      fichiers.forEach(f => {
+        const a = document.createElement('a');
+        a.href = f.url; a.target = '_blank';
+        a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
+        a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
+        tdNom.appendChild(a);
+      });
+      if (isGestAdmin) {
+        const btnPJ = document.createElement('button');
+        btnPJ.textContent = '+ 📎';
+        btnPJ.style.cssText = 'margin-top:4px;width:100%;font-size:8px;background:#f0f7ef;border:1px dashed var(--vert);border-radius:3px;color:var(--vert);padding:2px;cursor:pointer;font-weight:700';
+        btnPJ.onclick = (e) => { e.stopPropagation(); ouvrirModalPJ(chantier); };
+        tdNom.appendChild(btnPJ);
+      }
+      tr.appendChild(tdNom);
+
       jours.forEach(j => {
         const dateStr = j.toISOString().split('T')[0];
         const td = document.createElement('td');
-        td.style.cssText = 'background:#f8fafc;padding:3px;border-bottom:2px solid #ddd;vertical-align:top;position:sticky;top:0;z-index:3';
-        // Calculer collabs disponibles ce jour (non affectés)
-        const affectesJour = planningCollectifData
-          .filter(p => p['Date'] === dateStr)
-          .map(p => (p['Collaborateurs'] || [])[0]?.id)
-          .filter(Boolean);
-        const collabsDispo = collaborateursFiltre.filter(collab => {
-          const absent = congesCollectifData.some(c =>
-            (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-            dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-          );
-          return !absent && !affectesJour.includes(collab.collabId);
+        td.style.cssText = 'padding:3px;min-height:50px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;cursor:' + (isGestAdmin ? 'pointer' : 'default');
+        td._chantier = chantier;
+        td._dateStr = dateStr;
+        td.dataset.key = chantier.id + '-' + dateStr;
+        const affs = planningCollectifData.filter(p => {
+          if (p['Date'] !== dateStr) return false;
+          return (p['Chantier'] || p['Chantiers'] || []).some(c => c.id === chantier.id);
         });
-        const couleurDispo = (c) => {
-          const d = jours.filter(jj => !congesCollectifData.some(cc =>
-            (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
-            jj.toISOString().split('T')[0] >= cc['Date de début'] &&
-            jj.toISOString().split('T')[0] <= cc['Date de fin journée (inclus)']
-          )).length;
-          return d === 5 ? '#4a7c3f' : d === 4 ? '#c8a96e' : d === 3 ? '#e67e22' : '#c0392b';
-        };
-        // Bouton compact
-        const btnCollab = document.createElement('button');
-        btnCollab.id = 'btn-collab-' + dateStr;
-        btnCollab.dataset.date = dateStr;
-        btnCollab.dataset.collabs = JSON.stringify(collabsDispo.map(c => ({ id: c.collabId, nom: c.nom, couleur: couleurDispo(c) })));
-        if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
-        // Nettoyer les sélections si collab déjà affecté
-        affectesJour.forEach(id => collabsSelectionnesParJour[dateStr]?.delete(id));
-        const selCount = collabsSelectionnesParJour[dateStr].size;
-        btnCollab.textContent = selCount > 0 ? '👥 ' + selCount + ' sél.' : '+ Choisir';
-        btnCollab.style.cssText = 'width:100%;font-size:9px;border:1px solid ' + (selCount > 0 ? 'var(--vert)' : '#ddd') + ';border-radius:4px;background:' + (selCount > 0 ? 'var(--vert-clair)' : '#f8fafc') + ';color:var(--gris);padding:3px 4px;cursor:pointer;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
-        btnCollab.onclick = (e) => { e.stopPropagation(); ouvrirModalCollabJour(dateStr, btnCollab); };
-        td.appendChild(btnCollab);
-        trHead2.appendChild(td);
-      });
-      thead.appendChild(trHead2);
-    }
-    table.appendChild(thead);
+        affs.forEach(aff => {
+          const collabNom = (aff['Collaborateurs'] || aff['Collaborateur'] || [])[0]?.value || '—';
+          const notes = aff['Notes'] || '';
+          const heures = aff['heures'] || '';
+          const isSaisie = aff.isSaisie === true;
+          const div = document.createElement('div');
+          div.className = 'aff-tag';
+          div.dataset.affId = aff.id;
+            div.setAttribute('data-aff-id', aff.id);
+          div.style.cssText = 'font-size:9px;padding:3px 5px;margin-bottom:3px;cursor:' + (isGestAdmin && !isSaisie ? 'pointer' : 'default') + ';' + (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;' : '');
+          div.innerHTML = '👷 ' + collabNom.split(' ')[0] +
+            (heures ? '<div class="aff-notes">⏱ ' + heures + 'h</div>' : '') +
+            (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') +
+            (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
+          if (isGestAdmin && !isSaisie) {
+            div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
+            // Clic simple : déplacer vers ici si un collab est sélectionné
+            div.onclick = (e) => {
+              if (e.target.classList.contains('btn-del-aff')) return;
+              if (collabDeplace && collabDeplace.affId !== aff.id) {
+                deplacerCollab(collabDeplace, chantier, dateStr);
+              }
+            };
+            // Drag fluide
+            let pressTimer = null;
+            const affInfo = { affId: aff.id, collabNom, chantier, dateStr };
 
-    const tbody = document.createElement('tbody');
-    chantiersCollectif.forEach(chantier => {
-      ['Matin', 'Après-midi'].forEach((periode, pi) => {
-        const tr = document.createElement('tr');
-        if (pi === 0) {
-          const tdNom = document.createElement('td');
-          tdNom.rowSpan = 2;
-          tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle';
-          // Chercher les fichiers liés à ce chantier cette semaine
-          // Fichiers stockés dans la table Chantiers
-          const chantierData = dataChantiers.results.find(r => r.id === chantier.id);
-          const fichiers = chantierData?.['Fichiers'] || [];
-          // Nom du chantier
-          const nomDiv = document.createElement('div');
-          nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px';
-          nomDiv.textContent = chantier.nom;
-          tdNom.appendChild(nomDiv);
-          // Liens fichiers existants
-          fichiers.forEach(f => {
-            const a = document.createElement('a');
-            a.href = f.url; a.target = '_blank';
-            a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
-            a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
-            tdNom.appendChild(a);
-          });
-          // Bouton ajouter PJ
-          if (isGestAdmin) {
-            const btnPJ = document.createElement('button');
-            btnPJ.textContent = '+ 📎';
-            btnPJ.style.cssText = 'margin-top:4px;width:100%;font-size:8px;background:#f0f7ef;border:1px dashed var(--vert);border-radius:3px;color:var(--vert);padding:2px;cursor:pointer;font-weight:700';
-            btnPJ.onclick = (e) => { e.stopPropagation(); ouvrirModalPJ(chantier); };
-            tdNom.appendChild(btnPJ);
-          }
-          tr.appendChild(tdNom);
-        }
-        jours.forEach(j => {
-          const dateStr = j.toISOString().split('T')[0];
-          const td = document.createElement('td');
-          td.style.cssText = 'padding:3px;min-height:50px;vertical-align:top;border:1px solid #f0f0f0' + (pi === 0 ? ';border-top:2px solid #e0e0e0' : '');
-          const lbl = document.createElement('div');
-          lbl.style.cssText = 'font-size:8px;color:#bbb;font-weight:700;margin-bottom:1px';
-          lbl.textContent = pi === 0 ? '🌅' : '🌆';
-          td.appendChild(lbl);
-          const affs = planningCollectifData.filter(p => {
-            if (p['Date'] !== dateStr) return false;
-            if (!(p['Chantier'] || []).some(c => c.id === chantier.id)) return false;
-            const p2 = Array.isArray(p['Periode']) ? p['Periode'].map(v => v.value || v).join('/') : p['Periode']?.value || p['Periode'] || 'Matin';
-            return p2 === periode;
-          });
-          affs.forEach(aff => {
-            const collabNom = (aff['Collaborateurs'] || [])[0]?.value || '—';
-            const notes = aff['Notes'] || '';
-            const heures = aff['heures'] || '';
-            const div = document.createElement('div');
-            div.className = 'aff-tag';
-            const isSaisie = aff.isSaisie === true;
-            div.style.cssText = 'font-size:9px;padding:2px 4px;margin-bottom:2px;' + (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;' : pi === 1 ? 'background:#f0f7ef;border-color:#7ab870;' : '');
-            div.innerHTML = collabNom.split(' ')[0] +
-              (heures ? '<div class="aff-notes">⏱ ' + heures + 'h</div>' : '') +
-              (notes ? '<div class="aff-notes">📝 ' + notes + '</div>' : '') +
-              (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
-            if (isGestAdmin && !isSaisie) {
-              div.querySelector('.btn-del-aff').onclick = (e) => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
-              div.onclick = () => modifierAffCollectifChantier(aff.id, chantier, collabNom, notes, periode, dateStr);
-              div.style.cursor = 'pointer';
-            }
-            td.appendChild(div);
-          });
-          // Bouton "tout supprimer" si plusieurs affectations
-          if (isGestAdmin && affs.length > 1) {
-            const btnAll = document.createElement('button');
-            btnAll.textContent = '🗑 Tous';
-            btnAll.style.cssText = 'width:100%;font-size:8px;background:#fde8e8;border:1px solid #c0392b;border-radius:3px;color:#c0392b;padding:2px;cursor:pointer;margin-top:2px;font-weight:700';
-            btnAll.onclick = (e) => {
+            const startDrag = (x, y) => {
+              document.querySelectorAll('.aff-tag.selected-move').forEach(el => el.classList.remove('selected-move'));
+              div.classList.add('selected-move');
+              collabDeplace = affInfo;
+              navigator.vibrate && navigator.vibrate(40);
+              const ghost = document.getElementById('drag-ghost');
+              ghost.textContent = '👷 ' + collabNom.split(' ')[0];
+              ghost.style.cssText = ghost.style.cssText + ';display:block;left:' + (x - 30) + 'px;top:' + (y - 50) + 'px';
+              ghost.style.display = 'block';
+            };
+
+            const moveDrag = (x, y) => {
+              const ghost = document.getElementById('drag-ghost');
+              ghost.style.left = (x - 30) + 'px';
+              ghost.style.top = (y - 50) + 'px';
+              document.querySelectorAll('.drop-target-hover').forEach(el => el.classList.remove('drop-target-hover'));
+              const under = document.elementFromPoint(x, y);
+              const targetTd = under?.closest('td:not(.col-collab-cell)');
+              if (targetTd) targetTd.classList.add('drop-target-hover');
+            };
+
+            const endDrag = (x, y) => {
+              clearTimeout(pressTimer);
+              document.getElementById('drag-ghost').style.display = 'none';
+              document.querySelectorAll('.drop-target-hover').forEach(el => el.classList.remove('drop-target-hover'));
+              if (!collabDeplace) return;
+              const under = document.elementFromPoint(x, y);
+              const targetTd = under?.closest('td:not(.col-collab-cell)');
+              if (targetTd && targetTd._chantier && targetTd._dateStr) {
+                deplacerCollab(collabDeplace, targetTd._chantier, targetTd._dateStr);
+              } else {
+                document.querySelectorAll('.aff-tag.selected-move').forEach(el => el.classList.remove('selected-move'));
+                collabDeplace = null;
+              }
+            };
+
+            div.addEventListener('touchstart', (e) => {
+              if (e.target.classList.contains('btn-del-aff')) return;
               e.stopPropagation();
-              if (!confirm('Supprimer toutes les affectations ' + (periode === 'Matin' ? 'Matin' : 'Après-midi') + ' sur ' + chantier.nom + ' ?')) return;
-              Promise.all(affs.map(aff =>
-                fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + aff.id + '/', { method: 'DELETE', headers: HEADERS })
-              )).then(() => loadPlanningCollectif());
-            };
-            td.appendChild(btnAll);
+              const t = e.touches[0];
+              pressTimer = setTimeout(() => startDrag(t.clientX, t.clientY), 400);
+            }, { passive: true });
+            div.addEventListener('touchmove', (e) => {
+              if (!collabDeplace || collabDeplace.affId !== aff.id) { clearTimeout(pressTimer); return; }
+              e.preventDefault();
+              const t = e.touches[0];
+              moveDrag(t.clientX, t.clientY);
+            }, { passive: false });
+            div.addEventListener('touchend', (e) => {
+              if (!collabDeplace || collabDeplace.affId !== aff.id) { clearTimeout(pressTimer); return; }
+              const t = e.changedTouches[0];
+              endDrag(t.clientX, t.clientY);
+            });
+            div.addEventListener('touchcancel', () => {
+              clearTimeout(pressTimer);
+              document.getElementById('drag-ghost').style.display = 'none';
+              collabDeplace = null;
+            });
+            div.addEventListener('mousedown', (e) => {
+              if (e.target.classList.contains('btn-del-aff')) return;
+              pressTimer = setTimeout(() => startDrag(e.clientX, e.clientY), 400);
+            });
+            div.addEventListener('mousemove', (e) => {
+              if (!collabDeplace || collabDeplace.affId !== aff.id) return;
+              if (document.getElementById('drag-ghost').style.display === 'none') return;
+              moveDrag(e.clientX, e.clientY);
+            });
+            div.addEventListener('mouseup', (e) => {
+              clearTimeout(pressTimer);
+              if (!collabDeplace || collabDeplace.affId !== aff.id) return;
+              endDrag(e.clientX, e.clientY);
+            });
+            div.addEventListener('mouseleave', () => { if (!collabDeplace) clearTimeout(pressTimer); });
           }
-          if (isGestAdmin) {
-            td.onclick = async (e) => {
-              if (e.target.classList.contains('btn-del-aff') || e.target.closest('.aff-tag') || e.target.tagName === 'BUTTON') return;
-              const selCollabs = collabsSelectionnesParJour[dateStr];
-              if (!selCollabs || selCollabs.size === 0) {
-                alert('Sélectionne des collaborateurs avec le bouton + Choisir');
-                return;
-              }
-              // Affecter chaque collab sélectionné
-              const toAffect = [...selCollabs];
-              collabsSelectionnesParJour[dateStr] = new Set(); // Vider la sélection
-              for (const collabId of toAffect) {
-                const collab = collaborateursFiltre.find(c => c.collabId === collabId);
-                if (!collab) continue;
-                pendingAff = { collabId, collabNom: collab.nom, chantier, dateStr, periode, existingAffId: null };
-                // Affecter sans modal notes (notes vides)
-                const payload = {
-                  Collaborateurs: [collabId],
-                  Chantier: [parseInt(chantier.id)],
-                  Date: dateStr,
-                  Periode: [periode],
-                  Notes: '',
-                };
-                try {
-                  const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-                    { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-                  if (!res.ok) throw new Error(await res.text());
-                } catch(err) { alert('Erreur : ' + err.message); }
-              }
-              await loadPlanningCollectif();
-            };
-          }
-          tr.appendChild(td);
+          td.appendChild(div);
         });
-        tbody.appendChild(tr);
+        // Bouton tout supprimer
+        if (isGestAdmin && affs.length > 1 && !isPasseCollectif) {
+          const btnAll = document.createElement('button');
+          btnAll.textContent = '🗑 Tous';
+          btnAll.style.cssText = 'width:100%;font-size:8px;background:#fde8e8;border:1px solid #c0392b;border-radius:3px;color:#c0392b;padding:2px;cursor:pointer;margin-top:2px;font-weight:700';
+          btnAll.onclick = (e) => {
+            e.stopPropagation();
+            if (!confirm('Supprimer toutes les affectations sur ' + chantier.nom + ' ?')) return;
+            Promise.all(affs.map(a => fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + a.id + '/', { method: 'DELETE', headers: HEADERS }))).then(() => loadPlanningCollectif());
+          };
+          td.appendChild(btnAll);
+        }
+        if (isGestAdmin && !isPasseCollectif) {
+          td.onclick = async (e) => {
+            if (e.target.tagName === 'BUTTON' || e.target.closest('.aff-tag')) return;
+            if (collabDeplace) return; // géré par endDrag
+            ouvrirModalCollabCase(chantier, dateStr, td);
+          };
+        }
+
+        tr.appendChild(td);
       });
+      tbody.appendChild(tr);
     });
     table.appendChild(tbody);
 
     const lundi2 = getLundiAdmin(semaineCollectif);
     const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate() + 4);
-    const labelSemaine = 'Du ' + lundi2.toLocaleDateString('fr-FR', {day:'numeric', month:'long'}) +
-      ' au ' + vendredi.toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'});
-    document.getElementById('semaine-label-collectif').textContent = labelSemaine + (isPasseCollectif ? ' · 📋 Saisies réelles' : '');
+    document.getElementById('semaine-label-collectif').textContent =
+      'Du ' + lundi2.toLocaleDateString('fr-FR', {day:'numeric', month:'long'}) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'}) +
+      (isPasseCollectif ? ' · 📋 Saisies réelles' : '');
     updateInputSemaineCollectif();
   }
 
-  function filtrerCollaborateurs() {
-    loadPlanningCollectif();
+  function filtrerCollaborateurs() { loadPlanningCollectif(); }
+
+  // Annuler la sélection en tapant ailleurs
+  document.addEventListener('click', (e) => {
+    if (collabDeplace && !e.target.closest('.aff-tag') && !e.target.closest('td')) {
+      document.querySelectorAll('.aff-tag.selected-move').forEach(el => el.classList.remove('selected-move'));
+      collabDeplace = null;
+    }
+  });
+
+  async function deplacerCollab(collab, newChantier, newDateStr) {
+    document.querySelectorAll('.aff-tag.selected-move').forEach(el => el.classList.remove('selected-move'));
+    collabDeplace = null;
+
+    // Mise à jour locale IMMÉDIATE des données
+    const oldAff = planningCollectifData.find(p => p.id === collab.affId);
+    if (oldAff) {
+      planningCollectifData = planningCollectifData.filter(p => p.id !== collab.affId);
+      const collabObj = COLLABORATEURS_ADMIN.find(c => c.nom === collab.collabNom);
+      planningCollectifData.push({
+        ...oldAff,
+        Date: newDateStr,
+        Chantier: [{ id: newChantier.id, value: newChantier.nom }],
+        Collaborateurs: [{ id: collabObj?.collabId, value: collab.collabNom }]
+      });
+    }
+    // Re-render immédiat (sans API)
+    renderGrilleCollectif();
+
+    // API en arrière-plan (silencieux)
+    try {
+      const collabObj = COLLABORATEURS_ADMIN.find(c => c.nom === collab.collabNom);
+      await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + collab.affId + '/', { method: 'DELETE', headers: HEADERS });
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs: [collabObj?.collabId], Chantier: [parseInt(newChantier.id)], Date: newDateStr, Notes: '' }) });
+      if (!res.ok) throw new Error(await res.text());
+    } catch(e) {
+      alert('Erreur sync : ' + e.message);
+      loadPlanningCollectif(); // Resync uniquement en cas d'erreur
+    }
+  }
+
+  function ouvrirModalCollabCase(chantier, dateStr, td) {
+    const affectesJour = planningCollectifData.filter(p => p['Date'] === dateStr).map(p => (p['Collaborateurs'] || p['Collaborateur'] || [])[0]?.id).filter(Boolean);
+    const collabsDispo = collaborateursFiltre.filter(c => {
+      const absent = congesCollectifData.some(cc => (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
+      return !absent && !affectesJour.includes(c.collabId);
+    });
+    if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
+    affectesJour.forEach(id => collabsSelectionnesParJour[dateStr]?.delete(id));
+    const couleurDispo = (c) => { const d = 5; return '#4a7c3f'; };
+    const sel = collabsSelectionnesParJour[dateStr];
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-collab-jour-title').textContent = '👷 ' + chantier.nom + ' · ' + d.toLocaleDateString('fr-FR', {weekday:'short', day:'numeric', month:'short'});
+    document.getElementById('liste-collab-jour').innerHTML = collabsDispo.length > 0
+      ? collabsDispo.map(c => '<div class="modal-option ' + (sel.has(c.collabId) ? 'selected' : '') + '" onclick="toggleCollabCase(' + c.collabId + ', this)" style="gap:10px"><span style="flex:1">' + c.nom + '</span>' + (sel.has(c.collabId) ? '<span class="check">✓</span>' : '') + '</div>').join('')
+      : '<div style="padding:20px;text-align:center;color:#aaa">Tous les collaborateurs sont déjà affectés ce jour</div>';
+    document.getElementById('modal-collab-jour').dataset.chantier = JSON.stringify(chantier);
+    document.getElementById('modal-collab-jour').dataset.date = dateStr;
+    document.getElementById('modal-collab-jour').classList.add('open');
+  }
+
+  function toggleCollabCase(collabId, el) {
+    const dateStr = document.getElementById('modal-collab-jour').dataset.date;
+    if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
+    const sel = collabsSelectionnesParJour[dateStr];
+    if (sel.has(collabId)) { sel.delete(collabId); el.classList.remove('selected'); el.querySelector('.check')?.remove(); }
+    else { sel.add(collabId); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className = 'check'; c.textContent = '✓'; el.appendChild(c); } }
+  }
+
+  async function confirmerCollabCase() {
+    const modal = document.getElementById('modal-collab-jour');
+    const chantier = JSON.parse(modal.dataset.chantier || '{}');
+    const dateStr = modal.dataset.date;
+    const sel = collabsSelectionnesParJour[dateStr] || new Set();
+    if (!sel.size) { modal.classList.remove('open'); return; }
+    modal.classList.remove('open');
+    // Envoyer les requêtes en parallèle
+    const promises = [...sel].map(collabId =>
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs: [collabId], Chantier: [parseInt(chantier.id)], Date: dateStr, Notes: '' }) })
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .catch(e => { alert('Erreur affectation'); })
+    );
+    // Mise à jour locale immédiate
+    for (const collabId of sel) {
+      const collabObj = COLLABORATEURS_ADMIN.find(c => c.collabId === collabId);
+      if (collabObj) {
+        planningCollectifData.push({
+          id: 'tmp-' + Date.now() + '-' + collabId,
+          Date: dateStr,
+          Chantier: [{ id: chantier.id, value: chantier.nom }],
+          Collaborateurs: [{ id: collabId, value: collabObj.nom }],
+          Notes: '', Fichiers: [], isSaisie: false, heures: 0
+        });
+      }
+    }
+    renderGrilleCollectif();
+    collabsSelectionnesParJour[dateStr] = new Set();
+    // Sync API en arrière-plan
+    Promise.all(promises).then(() => loadPlanningCollectif()).catch(() => loadPlanningCollectif());
+  }
+
+  let currentDateCollab = null;
+  let currentBtnCollab = null;
+
+  function ouvrirModalCollabJour(dateStr, btn) {
+    currentDateCollab = dateStr;
+    currentBtnCollab = btn;
+    if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
+    const sel = collabsSelectionnesParJour[dateStr];
+    const collabs = JSON.parse(btn.dataset.collabs || '[]');
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-collab-jour-title').textContent = '👷 ' + d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'short'});
+    const couleur = (c) => c.couleur || '#4a7c3f';
+    document.getElementById('liste-collab-jour').innerHTML = collabs.length > 0
+      ? collabs.map(c => '<div class="modal-option ' + (sel.has(c.id) ? 'selected' : '') + '" onclick="toggleCollabJour(' + c.id + ', this)" style="gap:10px"><span style="width:8px;height:8px;border-radius:50%;background:' + couleur(c) + ';flex-shrink:0;display:inline-block"></span><span style="flex:1">' + c.nom + '</span>' + (sel.has(c.id) ? '<span class="check">✓</span>' : '') + '</div>').join('')
+      : '<div style="padding:20px;text-align:center;color:#aaa">Aucun collaborateur disponible</div>';
+    document.getElementById('modal-collab-jour').classList.add('open');
+  }
+
+  function toggleCollabJour(collabId, el) {
+    const sel = collabsSelectionnesParJour[currentDateCollab];
+    if (sel.has(collabId)) { sel.delete(collabId); el.classList.remove('selected'); el.querySelector('.check')?.remove(); }
+    else { sel.add(collabId); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className = 'check'; c.textContent = '✓'; el.appendChild(c); } }
+  }
+
+  function resetCollabJour() {
+    if (currentDateCollab) collabsSelectionnesParJour[currentDateCollab] = new Set();
+    document.querySelectorAll('#liste-collab-jour .modal-option').forEach(el => { el.classList.remove('selected'); el.querySelector('.check')?.remove(); });
+  }
+
+  function fermerModalCollabJour(e) {
+    if (!e || e.target === document.getElementById('modal-collab-jour')) {
+      document.getElementById('modal-collab-jour').classList.remove('open');
+      if (currentBtnCollab && currentDateCollab) {
+        const count = (collabsSelectionnesParJour[currentDateCollab] || new Set()).size;
+        currentBtnCollab.textContent = count > 0 ? '👥 ' + count + ' sél.' : '+ Choisir';
+        currentBtnCollab.style.background = count > 0 ? 'var(--vert-clair)' : '#f8fafc';
+        currentBtnCollab.style.borderColor = count > 0 ? 'var(--vert)' : '#ddd';
+      }
+      currentDateCollab = null; currentBtnCollab = null;
+    }
+  }
+
+  function ouvrirFiltrePoste() {
+    const liste = document.getElementById('liste-postes-filtre');
+    liste.innerHTML = '';
+    postesDisponibles.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'modal-option' + (postesSelectionnes.has(p) ? ' selected' : '');
+      div.innerHTML = '<span>' + p + '</span>' + (postesSelectionnes.has(p) ? '<span class="check">✓</span>' : '');
+      div.onclick = () => togglePosteFiltre(p, div);
+      liste.appendChild(div);
+    });
+    document.getElementById('modal-filtre-poste').classList.add('open');
+  }
+
+  function togglePosteFiltre(poste, el) {
+    if (postesSelectionnes.has(poste)) { postesSelectionnes.delete(poste); el.classList.remove('selected'); el.querySelector('.check')?.remove(); }
+    else { postesSelectionnes.add(poste); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className = 'check'; c.textContent = '✓'; el.appendChild(c); } }
+    const btn = document.getElementById('btn-filtre-poste');
+    if (btn) btn.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
+  }
+
+  function resetFiltrePoste() {
+    postesSelectionnes.clear();
+    const btn = document.getElementById('btn-filtre-poste');
+    if (btn) btn.textContent = '🔽 Postes';
+    ouvrirFiltrePoste();
+  }
+
+  function fermerFiltrePoste(e) {
+    if (!e || e.target === document.getElementById('modal-filtre-poste')) {
+      document.getElementById('modal-filtre-poste').classList.remove('open');
+      loadPlanningCollectif();
+    }
   }
 
   let currentChantierPJ = null;
-  let currentAffPJ = null;
 
   async function ouvrirModalPJ(chantier) {
     currentChantierPJ = chantier;
@@ -1761,29 +1887,20 @@
     document.getElementById('pj-preview').innerHTML = '';
     document.getElementById('pj-chantier-input').value = '';
     document.getElementById('modal-pj-chantier').classList.add('open');
-    // Charger les fichiers depuis la table Chantiers
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantier.id + '/?user_field_names=true', { headers: HEADERS });
       const data = await res.json();
       const fichiers = data['Fichiers'] || [];
-      const liste = document.getElementById('modal-pj-liste');
-      liste.innerHTML = fichiers.length > 0
+      document.getElementById('modal-pj-liste').innerHTML = fichiers.length > 0
         ? fichiers.map(f => '<a href="' + f.url + '" target="_blank" style="display:flex;align-items:center;gap:8px;background:var(--vert-clair);border-radius:8px;padding:8px 12px;font-size:13px;color:var(--vert);font-weight:600;text-decoration:none">📎 ' + (f.visible_name || f.name || 'Fichier') + '</a>').join('')
         : '<div style="color:#aaa;font-size:13px">Aucune pièce jointe</div>';
-    } catch(e) {
-      document.getElementById('modal-pj-liste').innerHTML = '<div style="color:#c0392b;font-size:13px">Erreur de chargement</div>';
-    }
+    } catch(e) { document.getElementById('modal-pj-liste').innerHTML = '<div style="color:#c0392b">Erreur de chargement</div>'; }
   }
 
   function previewPJChantier(input) {
     const preview = document.getElementById('pj-preview');
     preview.innerHTML = '';
-    [...input.files].forEach(f => {
-      const tag = document.createElement('div');
-      tag.style.cssText = 'background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600';
-      tag.textContent = '📎 ' + f.name;
-      preview.appendChild(tag);
-    });
+    [...input.files].forEach(f => { const tag = document.createElement('div'); tag.style.cssText = 'background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600'; tag.textContent = '📎 ' + f.name; preview.appendChild(tag); });
   }
 
   async function uploaderPJChantier() {
@@ -1792,25 +1909,18 @@
     const btn = document.getElementById('btn-upload-pj');
     btn.disabled = true; btn.textContent = 'Upload…';
     try {
-      // Charger les fichiers existants du chantier
       const resChantier = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + currentChantierPJ.id + '/?user_field_names=true', { headers: HEADERS });
       const dataChantier = await resChantier.json();
       const fichiersExistants = dataChantier['Fichiers'] || [];
-      // Uploader les nouveaux fichiers
       const nouveauxFichiers = [];
       for (const file of input.files) {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
-          method: 'POST',
-          headers: { 'Authorization': 'Token ' + BASEROW_TOKEN },
-          body: formData
-        });
+        const res = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: formData });
         if (!res.ok) throw new Error('Erreur upload');
         const data = await res.json();
         nouveauxFichiers.push({ name: data.name });
       }
-      // Sauvegarder dans la table Chantiers
       const payload = { Fichiers: [...fichiersExistants.map(f => ({ name: f.name })), ...nouveauxFichiers] };
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + currentChantierPJ.id + '/?user_field_names=true',
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
@@ -1827,108 +1937,10 @@
     }
   }
 
-  let currentDateCollab = null;
-  let currentBtnCollab = null;
-
-  function ouvrirModalCollabJour(dateStr, btn) {
-    currentDateCollab = dateStr;
-    currentBtnCollab = btn;
-    if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
-    const sel = collabsSelectionnesParJour[dateStr];
-    const collabs = JSON.parse(btn.dataset.collabs || '[]');
-    const d = new Date(dateStr + 'T12:00:00');
-    document.getElementById('modal-collab-jour-title').textContent =
-      '👷 ' + d.toLocaleDateString('fr-FR', {weekday:'long', day:'numeric', month:'short'});
-    const couleur = (dispo) => dispo === 5 ? '#4a7c3f' : dispo === 4 ? '#c8a96e' : dispo === 3 ? '#e67e22' : '#c0392b';
-    document.getElementById('liste-collab-jour').innerHTML = collabs.map(c => `
-      <div class="modal-option ${sel.has(c.id) ? 'selected' : ''}" onclick="toggleCollabJour(${c.id}, this)" style="gap:10px">
-        <span style="width:8px;height:8px;border-radius:50%;background:${couleur(c.dispo)};flex-shrink:0;display:inline-block"></span>
-        <span style="flex:1">${c.nom}</span>
-        ${sel.has(c.id) ? '<span class="check">✓</span>' : ''}
-      </div>`).join('');
-    document.getElementById('modal-collab-jour').classList.add('open');
-  }
-
-  function toggleCollabJour(collabId, el) {
-    const sel = collabsSelectionnesParJour[currentDateCollab];
-    if (sel.has(collabId)) {
-      sel.delete(collabId);
-      el.classList.remove('selected');
-      el.querySelector('.check')?.remove();
-    } else {
-      sel.add(collabId);
-      el.classList.add('selected');
-      if (!el.querySelector('.check')) {
-        const check = document.createElement('span');
-        check.className = 'check'; check.textContent = '✓';
-        el.appendChild(check);
-      }
-    }
-  }
-
-  function resetCollabJour() {
-    if (currentDateCollab) collabsSelectionnesParJour[currentDateCollab] = new Set();
-    document.querySelectorAll('#liste-collab-jour .modal-option').forEach(el => {
-      el.classList.remove('selected');
-      el.querySelector('.check')?.remove();
-    });
-  }
-
-  function fermerModalCollabJour(e) {
-    if (!e || e.target === document.getElementById('modal-collab-jour')) {
-      document.getElementById('modal-collab-jour').classList.remove('open');
-      if (currentBtnCollab && currentDateCollab) {
-        const count = (collabsSelectionnesParJour[currentDateCollab] || new Set()).size;
-        currentBtnCollab.textContent = count > 0 ? '👥 ' + count + ' sél.' : '+ Choisir';
-        currentBtnCollab.style.background = count > 0 ? 'var(--vert-clair)' : '#f8fafc';
-        currentBtnCollab.style.borderColor = count > 0 ? 'var(--vert)' : '#ddd';
-      }
-      currentDateCollab = null;
-      currentBtnCollab = null;
-    }
-  }
-
-  function ouvrirFiltrePoste() {
-    const liste = document.getElementById('liste-postes-filtre');
-    liste.innerHTML = postesDisponibles.map(p => `
-      <div class="modal-option ${postesSelectionnes.has(p) ? 'selected' : ''}" onclick="togglePosteFiltre('${p}', this)">
-        <span>${p}</span>
-        ${postesSelectionnes.has(p) ? '<span class="check">✓</span>' : ''}
-      </div>`).join('');
-    document.getElementById('modal-filtre-poste').classList.add('open');
-  }
-
-  function togglePosteFiltre(poste, el) {
-    if (postesSelectionnes.has(poste)) {
-      postesSelectionnes.delete(poste);
-      el.classList.remove('selected');
-      el.querySelector('.check')?.remove();
-    } else {
-      postesSelectionnes.add(poste);
-      el.classList.add('selected');
-      if (!el.querySelector('.check')) {
-        const check = document.createElement('span');
-        check.className = 'check'; check.textContent = '✓';
-        el.appendChild(check);
-      }
-    }
-    // Mettre à jour le bouton
-    const btn = document.getElementById('btn-filtre-poste');
-    if (btn) btn.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
-  }
-
-  function resetFiltrePoste() {
-    postesSelectionnes.clear();
-    const btn = document.getElementById('btn-filtre-poste');
-    if (btn) btn.textContent = '🔽 Postes';
-    ouvrirFiltrePoste(); // Rafraîchir la liste
-  }
-
-  function fermerFiltrePoste(e) {
-    if (!e || e.target === document.getElementById('modal-filtre-poste')) {
-      document.getElementById('modal-filtre-poste').classList.remove('open');
-      loadPlanningCollectif();
-    }
+  function previewFichiers(input) {
+    const liste = document.getElementById('modal-aff-fichiers-liste');
+    if (!liste) return;
+    [...input.files].forEach(f => { const tag = document.createElement('div'); tag.style.cssText = 'background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600'; tag.textContent = '📎 ' + f.name; liste.appendChild(tag); });
   }
 
   function changerSemaineCollectif(delta) {
@@ -1971,17 +1983,6 @@
     document.getElementById('modal-aff-collectif').classList.add('open');
   }
 
-  function previewFichiers(input) {
-    const liste = document.getElementById('modal-aff-fichiers-liste');
-    if (!liste) return;
-    [...input.files].forEach(f => {
-      const tag = document.createElement('div');
-      tag.style.cssText = 'background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600';
-      tag.textContent = '📎 ' + f.name;
-      liste.appendChild(tag);
-    });
-  }
-
   function modifierAffCollectifChantier(affId, chantier, collabNom, notes, periode, dateStr) {
     currentAffCollectif = { chantier, dateStr, editId: affId };
     document.getElementById('modal-aff-collectif-title').textContent = '✏️ Modifier affectation';
@@ -1993,17 +1994,6 @@
     const sel = document.getElementById('select-periode-modal');
     if (sel) { [...sel.options].forEach(o => { if (o.value === periode) o.selected = true; }); }
     document.getElementById('modal-aff-collectif-notes').value = notes || '';
-    // Afficher les fichiers existants
-    const aff = planningCollectifData.find(p => p.id === affId);
-    const fichiers = aff?.['Fichiers'] || [];
-    const liste = document.getElementById('modal-aff-fichiers-liste');
-    if (liste) {
-      liste.innerHTML = fichiers.map(f =>
-        '<a href="' + f.url + '" target="_blank" style="background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600;text-decoration:none">📎 ' + (f.visible_name || f.name) + '</a>'
-      ).join('');
-    }
-    const input = document.getElementById('modal-aff-fichier-input');
-    if (input) input.value = '';
     document.getElementById('modal-aff-collectif').classList.add('open');
   }
 
@@ -2021,11 +2011,8 @@
       selWrap.parentElement.insertBefore(selCollab, selWrap);
     }
     selCollab.innerHTML = '<option value="">-- Choisir un collaborateur --</option>';
-    const collabs = COLLABORATEURS_ADMIN.filter(c => {
-      if (!c.collabId) return false;
-      if (postesSelectionnes.size === 0) return true;
-      return postesSelectionnes.has(c.poste);
-    });
+    const poste = document.getElementById('filtre-poste-collectif')?.value || '';
+    const collabs = COLLABORATEURS_ADMIN.filter(c => c.collabId && (!poste || c.poste === poste));
     collabs.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.collabId;
@@ -2094,7 +2081,6 @@
     const btn = document.getElementById('btn-valider-aff-collectif');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
     try {
-      // Upload les fichiers si présents
       let fichiersBaserow = [];
       const fileInput = document.getElementById('modal-aff-fichier-input');
       if (fileInput && fileInput.files.length > 0) {
@@ -2102,12 +2088,8 @@
         for (const file of fileInput.files) {
           const formData = new FormData();
           formData.append('file', file);
-          const resFile = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
-            method: 'POST',
-            headers: { 'Authorization': 'Token ' + BASEROW_TOKEN },
-            body: formData
-          });
-          if (!resFile.ok) throw new Error('Erreur upload: ' + await resFile.text());
+          const resFile = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: formData });
+          if (!resFile.ok) throw new Error('Erreur upload');
           const dataFile = await resFile.json();
           fichiersBaserow.push({ name: dataFile.name });
         }
@@ -2128,49 +2110,12 @@
     finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
   }
 
-  async function affecterDirectement(collabId, collabNom, chantier, dateStr, periode, existingAffId) {
-    pendingAff = { collabId: parseInt(collabId), collabNom, chantier, dateStr, periode, existingAffId: existingAffId || null };
-    document.getElementById('modal-notes-drop-title').textContent =
-      '👷 ' + collabNom.split(' ')[0] + ' → ' + chantier.nom + ' · ' + (periode === 'Matin' ? '🌅' : '🌆') + ' ' + periode;
-    document.getElementById('notes-drop-input').value = '';
-    document.getElementById('modal-notes-drop').classList.add('open');
-    setTimeout(() => document.getElementById('notes-drop-input').focus(), 300);
-  }
-
-  async function confirmerAvecNotes() {
-    document.getElementById('modal-notes-drop').classList.remove('open');
-    if (!pendingAff) return;
-    const notes = document.getElementById('notes-drop-input').value || '';
-    try {
-      if (pendingAff.existingAffId) {
-        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + pendingAff.existingAffId + '/', { method: 'DELETE', headers: HEADERS });
-      }
-      const payload = {
-        Collaborateurs: [pendingAff.collabId],
-        Chantier: [parseInt(pendingAff.chantier.id)],
-        Date: pendingAff.dateStr,
-        Periode: [pendingAff.periode],
-        Notes: notes,
-      };
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-      pendingAff = null;
-      await loadPlanningCollectif();
-    } catch(e) { alert('Erreur : ' + e.message); }
-  }
-
-  function closeModalNotesDrop(e) {
-    if (!e || e.target === document.getElementById('modal-notes-drop')) {
-      document.getElementById('modal-notes-drop').classList.remove('open');
-      pendingAff = null;
-    }
-  }
-
   async function supprimerAffCollectif(id) {
     if (!confirm('Supprimer cette affectation ?')) return;
-    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
-    await loadPlanningCollectif();
+    planningCollectifData = planningCollectifData.filter(p => p.id !== id);
+    renderGrilleCollectif();
+    fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS })
+      .catch(() => loadPlanningCollectif());
   }
 
   function openOptionsChantierCollectif() {
@@ -2250,7 +2195,6 @@
   const TABLE_COLLABS_ADMIN = '1014431';
 
   let COLLABORATEURS_ADMIN = []; // Chargé dynamiquement depuis Baserow
-
   let semaineAdmin = new Date();
   let chantiersAdmin = [];
   let planningAdminData = [];
@@ -2798,18 +2742,18 @@
       <button onclick="changerSemaineCollectif(1)" style="background:rgba(255,255,255,0.15);border:none;border-radius:6px;padding:4px 10px;color:#fff;font-size:16px;cursor:pointer">›</button>
     </div>
     <div style="display:flex;align-items:center;gap:6px">
-      <button onclick="ouvrirFiltrePoste()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:4px 10px;color:#fff;font-size:11px;cursor:pointer;white-space:nowrap" id="btn-filtre-poste">🔽 Postes</button>
+      <button onclick="ouvrirFiltrePoste()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:4px 10px;color:#fff;font-size:11px;cursor:pointer;white-space:nowrap" id="btn-filtre-poste">🔽 2 poste(s)</button>
       <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">📥</button>
     </div>
   </div>
   <div style="padding:3px 8px 4px;background:#1e2420;text-align:center">
     <div style="font-size:10px;color:rgba(255,255,255,0.6)" id="semaine-label-collectif">—</div>
   </div>
-
   <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
   <div style="overflow:auto;-webkit-overflow-scrolling:touch;flex:1">
     <table id="planning-collectif-grid" style="border-collapse:collapse;width:100%;min-width:340px;background:#fff"></table>
   </div>
+
   <div class="modal-backdrop" id="modal-aff-collectif" onclick="closeModalAffCollectif(event)">
     <div class="modal-sheet">
       <div class="modal-header">
@@ -2839,29 +2783,24 @@
       </div>
     </div>
   </div>
+
   <div class="modal-backdrop" id="modal-notes-drop" onclick="closeModalNotesDrop(event)">
     <div class="modal-sheet" style="max-height:50vh">
-      <div class="modal-header">
-        <h3 id="modal-notes-drop-title">Notes</h3>
-        <button class="modal-close" onclick="closeModalNotesDrop()">✕</button>
-      </div>
+      <div class="modal-header"><h3 id="modal-notes-drop-title">Notes</h3><button class="modal-close" onclick="closeModalNotesDrop()">✕</button></div>
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
         <textarea id="notes-drop-input" placeholder="Notes (optionnel)…" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:14px;min-height:80px;resize:none;outline:none"></textarea>
         <button onclick="confirmerAvecNotes()" style="background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer">✅ Confirmer</button>
       </div>
     </div>
   </div>
+
   <div class="modal-backdrop" id="modal-chantiers-collectif" style="display:none">
     <div class="modal-sheet"><div class="modal-options" id="liste-chantiers-collectif"></div></div>
   </div>
 
-  <!-- MODAL PJ CHANTIER -->
   <div class="modal-backdrop" id="modal-pj-chantier" onclick="fermerModalPJ(event)">
     <div class="modal-sheet" style="max-height:60vh">
-      <div class="modal-header">
-        <h3 id="modal-pj-titre">Pièces jointes</h3>
-        <button class="modal-close" onclick="fermerModalPJ()">✕</button>
-      </div>
+      <div class="modal-header"><h3 id="modal-pj-titre">Pièces jointes</h3><button class="modal-close" onclick="fermerModalPJ()">✕</button></div>
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
         <div id="modal-pj-liste" style="display:flex;flex-direction:column;gap:6px"></div>
         <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
@@ -2874,28 +2813,20 @@
     </div>
   </div>
 
-  <!-- MODAL COLLAB JOUR -->
   <div class="modal-backdrop" id="modal-collab-jour" onclick="fermerModalCollabJour(event)">
     <div class="modal-sheet" style="max-height:70vh">
-      <div class="modal-header">
-        <h3 id="modal-collab-jour-title">Choisir collaborateur(s)</h3>
-        <button class="modal-close" onclick="fermerModalCollabJour()">✕</button>
-      </div>
+      <div class="modal-header"><h3 id="modal-collab-jour-title">Choisir collaborateur(s)</h3><button class="modal-close" onclick="fermerModalCollabJour()">✕</button></div>
       <div class="modal-options" id="liste-collab-jour" style="overflow-y:auto;flex:1"></div>
       <div style="padding:12px 16px;display:flex;gap:8px">
         <button onclick="resetCollabJour()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Aucun</button>
-        <button onclick="fermerModalCollabJour()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ OK</button>
+        <button onclick="confirmerCollabCase()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ Affecter</button>
       </div>
     </div>
   </div>
 
-  <!-- MODAL FILTRE POSTES -->
   <div class="modal-backdrop" id="modal-filtre-poste" onclick="fermerFiltrePoste(event)">
     <div class="modal-sheet" style="max-height:60vh">
-      <div class="modal-header">
-        <h3>Filtrer par poste</h3>
-        <button class="modal-close" onclick="fermerFiltrePoste()">✕</button>
-      </div>
+      <div class="modal-header"><h3>Filtrer par poste</h3><button class="modal-close" onclick="fermerFiltrePoste()">✕</button></div>
       <div class="modal-options" id="liste-postes-filtre"></div>
       <div style="padding:12px 16px;display:flex;gap:8px">
         <button onclick="resetFiltrePoste()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Tous</button>
