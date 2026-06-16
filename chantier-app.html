@@ -1017,7 +1017,7 @@
             <span class="semaine-label">📅 Semaine du ${mondayStr} au ${sundayStr}</span>
             <span class="semaine-total">${totalSemaine}h</span>
           </div>
-          <div id="s${wi}" class="semaine-body">${joursHTML}</div>
+          <div id="s${wi}" class="semaine-body" style="display:${wi === 0 ? 'block' : 'none'}">${joursHTML}</div>
         </div>`;
       });
 
