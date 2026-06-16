@@ -3161,11 +3161,22 @@
 
   async function exportFeuilleCollaborateur(periode) {
     const sel = document.getElementById('export-collab-select');
-    const collabVal = sel?.value;
+    const collabVal = sel?.value; // Lire la valeur AVANT tout rechargement
+    // S'assurer que COLLABORATEURS_ADMIN est chargé (sans toucher au select)
+    if (!COLLABORATEURS_ADMIN.length) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const data = await res.json();
+        COLLABORATEURS_ADMIN = (data.results || []).map(r => ({
+          nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '',
+          initiales: (r['Nom Complet']||'').trim().split(' ').map(p=>p[0]).join('').toUpperCase().slice(0,2)
+        }));
+      } catch(e) {}
+    }
     const collabNom = sel?.options[sel.selectedIndex]?.textContent?.split(' — ')[0] || '';
     if (!collabVal) { alert('⚠️ Veuillez choisir un collaborateur.'); return; }
-    const collabId = collabVal === 'tous' ? null : parseInt(collabVal);
-    const tousLesCollabs = collabVal === 'tous';
+    const tousLesCollabs = (collabVal === 'tous');
+    const collabId = tousLesCollabs ? null : parseInt(collabVal);
 
     const btn = event.target.closest('button');
     const origText = btn.innerHTML;
@@ -3234,7 +3245,8 @@
         const sous = (r['Sous Taches'] || [])[0]?.value || '';
         const heures = r['Heures Normales'] || 0;
         const notes = (r['Notes'] || '').replace(/;/g, ',').split('\n').join(' ');
-        const collabInfo2 = COLLABORATEURS_ADMIN.find(c => c.nom === rCollab);
+        const rCollabNorm = rCollab.trim().toLowerCase();
+        const collabInfo2 = COLLABORATEURS_ADMIN.find(c => c.nom.trim().toLowerCase() === rCollabNorm);
         const poste2 = collabInfo2?.poste || '';
         csvRows.push([date, chantier, rCollab, poste2, tache, sous, heures, notes].join(';'));
       });
