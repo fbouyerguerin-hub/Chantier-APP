@@ -487,10 +487,13 @@
       <button class="modal-close" onclick="closeCongesModal()">✕</button>
     </div>
     <div class="modal-options">
-      <div class="modal-option" onclick="selectTypeConges('Congés payés')">🌴 Congés payés</div>
+      <div class="modal-option" onclick="selectTypeConges('Congés payés')">🏖️ Congés payés</div>
       <div class="modal-option" onclick="selectTypeConges('RTT')">📅 RTT</div>
       <div class="modal-option" onclick="selectTypeConges('Maladie')">🤒 Maladie</div>
+      <div class="modal-option" onclick="selectTypeConges('Formation')">🎓 Formation</div>
       <div class="modal-option" onclick="selectTypeConges('Sans solde')">📋 Sans solde</div>
+      <div class="modal-option" onclick="selectTypeConges('Maternité / Paternité')">👶 Maternité / Paternité</div>
+      <div class="modal-option" onclick="selectTypeConges('Accident')">🚑 Accident</div>
       <div class="modal-option" onclick="selectTypeConges('Autre')">📌 Autre</div>
     </div>
   </div>
@@ -1202,7 +1205,8 @@
       rows.reverse();
 
       container.innerHTML = rows.map(r => {
-        const type = r['Type de demande']?.value || '—';
+        const typeRaw = r['Type de demande']?.value || '—';
+        const type = typeRaw === '—' ? '—' : labelAbsence(typeRaw);
         const statut = r['Statut']?.value || 'En attente';
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
@@ -1350,7 +1354,7 @@
         const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
         let cellHTML = '';
         if (congeJour) {
-          cellHTML = `<div class="planning-cell-conge">🏖️ ${congeJour['Type de demande']?.value || 'Absence'}</div>`;
+          cellHTML = `<div class="planning-cell-conge">${labelAbsence(congeJour['Type de demande']?.value)}</div>`;
         } else if (byDate[dateStr]?.length > 0) {
           cellHTML = byDate[dateStr].map(r =>
             `<div class="planning-cell-chantier">🏗 ${r.chantier}
@@ -1687,6 +1691,34 @@
     if (!e.target.closest('td') && !e.target.closest('.aff-tag')) annulerDeplacement();
   });
 
+  // Swipe horizontal pour changer de semaine dans le collectif
+  (function() {
+    let swipeStartX = 0, swipeStartY = 0, swipeStartTime = 0, swipeScrollLeft = 0;
+    const zone = () => document.getElementById('collectif-scroll-zone');
+
+    document.addEventListener('touchstart', e => {
+      const z = zone();
+      if (!z || !z.contains(e.target)) return;
+      swipeStartX = e.touches[0].clientX;
+      swipeStartY = e.touches[0].clientY;
+      swipeStartTime = Date.now();
+      swipeScrollLeft = z.scrollLeft;
+    }, { passive: true });
+
+    document.addEventListener('touchend', e => {
+      const z = zone();
+      if (!z || !z.contains(e.target)) return;
+      if (collabDeplace) return;
+      const dx = e.changedTouches[0].clientX - swipeStartX;
+      const dy = Math.abs(e.changedTouches[0].clientY - swipeStartY);
+      const dt = Date.now() - swipeStartTime;
+      const scrolled = Math.abs(z.scrollLeft - swipeScrollLeft);
+      if (Math.abs(dx) > 50 && dy < 60 && dt < 500 && scrolled < 10) {
+        changerSemaineCollectif(dx > 0 ? -1 : 1);
+      }
+    }, { passive: true });
+  })();
+
   function annulerDeplacement() {
     document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor = 'grab'; });
     document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
@@ -2011,6 +2043,10 @@
     return '📌';
   }
 
+  function labelAbsence(type) {
+    return iconeAbsence(type) + ' ' + (type || 'Absence');
+  }
+
   function filtrerCollaborateurs() { loadPlanningCollectif(); }
 
   function changerSemaineCollectif(delta) {
@@ -2320,7 +2356,7 @@
         );
         html += '<td><div>';
         if (conge) {
-          html += '<div class="conge-tag-admin">🏖️ ' + (conge['Type de demande']?.value || 'Absence') + '</div>';
+          html += '<div class="conge-tag-admin">' + labelAbsence(conge['Type de demande']?.value) + '</div>';
         } else {
           affs.forEach(aff => {
             const chantier = (aff['Chantier'] || [])[0]?.value || '—';
@@ -2647,7 +2683,8 @@
       container.innerHTML = rows.map(r => {
         const statut = r['Statut']?.value || 'En attente';
         const collab = (r['Collaborateurs'] || [])[0]?.value || '—';
-        const type = r['Type de demande']?.value || '—';
+        const typeRaw2 = r['Type de demande']?.value || '—';
+        const type = typeRaw2 === '—' ? '—' : labelAbsence(typeRaw2);
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
         const isAttente = statut === 'En attente';
