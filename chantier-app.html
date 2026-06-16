@@ -318,19 +318,19 @@
   <div class="section">
     <div class="section-title">📋 Informations générales</div>
     <div class="field">
-      <label>Date</label>
+      <label>Date <span style="color:#c0392b">*</span></label>
       <input type="date" id="field-date" />
     </div>
 
     <div class="field">
-      <label>Véhicule</label>
+      <label>Véhicule <span style="color:#c0392b">*</span></label>
       <div class="selector" onclick="openModal('Vehicules', null)">
         <span class="selector-value empty" id="val-Vehicules">Sélectionner…</span>
         <span>▾</span>
       </div>
     </div>
     <div class="field">
-      <label>Chantier</label>
+      <label>Chantier <span style="color:#c0392b">*</span></label>
       <div class="selector" onclick="openModal('Chantiers', null)">
         <span class="selector-value empty" id="val-Chantiers">Sélectionner…</span>
         <span>▾</span>
@@ -664,14 +664,14 @@
           <button class="btn-delete" onclick="supprimerLigne(${l.id})">🗑 Supprimer</button>
         </div>
         <div class="field">
-          <label>Type de tâche</label>
+          <label>Type de tâche <span style="color:#c0392b">*</span></label>
           <div class="selector" onclick="openModal('TypeTaches',${l.id})">
             <span class="selector-value ${l.typeTache?'':'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache?l.typeTache.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
         <div class="field">
-          <label>Sous-tâche</label>
+          <label>Sous-tâche <span style="color:#c0392b">*</span></label>
           <div class="selector" onclick="openModal('SousTaches',${l.id})">
             <span class="selector-value ${l.sousTache?'':'empty'}" id="val-SousTaches-${l.id}">${l.sousTache?l.sousTache.value:'Sélectionner…'}</span>
             <span>▾</span>
@@ -689,7 +689,7 @@
           </div>
         </div>
         <div class="field">
-          <label>Heures</label>
+          <label>Heures <span style="color:#c0392b">*</span></label>
           <div class="hours-row">
             <input type="number" placeholder="Ex: 3.5" step="0.5" min="0" value="${l.heures}" oninput="updateHeures(${l.id},this.value)" />
             <div class="hours-suffix">h</div>
@@ -817,9 +817,19 @@
   }
 
   async function submitForm() {
-    if (!globalSelected.Chantiers) { alert('Veuillez sélectionner un chantier.'); return; }
+    // Vérification des champs obligatoires
+    if (!document.getElementById('field-date').value) { alert('⚠️ Veuillez sélectionner une date.'); return; }
+    if (!globalSelected.Vehicules) { alert('⚠️ Veuillez sélectionner un véhicule.'); return; }
+    if (!globalSelected.Chantiers) { alert('⚠️ Veuillez sélectionner un chantier.'); return; }
+    // Vérification des lignes de tâches
+    for (const l of lignes) {
+      if (!l.typeTache) { alert('⚠️ Veuillez sélectionner un type de tâche pour chaque ligne.'); return; }
+      if (!l.sousTache) { alert('⚠️ Veuillez sélectionner une sous-tâche pour chaque ligne.'); return; }
+      if (l.typeTache?.value === 'Pose' && !l.zone) { alert('⚠️ Veuillez sélectionner une zone pour chaque ligne de type "Pose".'); return; }
+      if (!l.heures || parseFloat(l.heures) <= 0) { alert('⚠️ Veuillez saisir les heures pour chaque tâche.'); return; }
+    }
     const totalH = lignes.reduce((s,l) => s+(parseFloat(l.heures)||0), 0);
-    if (totalH===0) { alert('Veuillez saisir les heures pour au moins une tâche.'); return; }
+    if (totalH===0) { alert('⚠️ Veuillez saisir les heures pour au moins une tâche.'); return; }
 
     const btn = document.getElementById('btn-submit');
     btn.disabled = true; btn.textContent = 'Envoi en cours…';
