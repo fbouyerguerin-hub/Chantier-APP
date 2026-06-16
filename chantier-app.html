@@ -2528,6 +2528,12 @@
     renderChantiersGestion(filtered);
   }
 
+  function formatDate(d) {
+    if (!d) return '—';
+    try { return new Date(d).toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit', year:'numeric'}); }
+    catch(e) { return d; }
+  }
+
   function renderChantiersGestion(chantiers) {
     const container = document.getElementById('liste-chantiers-gestion');
     if (!chantiers.length) { container.innerHTML = '<div class="feuille-empty">Aucun chantier</div>'; return; }
@@ -2535,18 +2541,253 @@
     chantiers.forEach(c => {
       const statue = c['Statue']?.value || c['Statue'] || '—';
       const color = statue === 'En cours' ? 'var(--vert)' : statue === 'Terminé' ? '#aaa' : 'var(--beige)';
+      // Chercher les dates avec différents noms possibles
+      const dateDebut = c['Date début'] || '';
+      const dateFin = c['Date fin'] || '';
       const div = document.createElement('div');
       div.style.cssText = 'background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ' + color;
-      div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">' +
-        '<div style="font-size:13px;font-weight:700;color:var(--gris);flex:1">' + (c['Nom du chantier'] || '#' + c.id) + '</div>' +
+
+      // En-tête : nom + statut
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px';
+      header.innerHTML = '<div style="font-size:13px;font-weight:700;color:var(--gris);flex:1">' + (c['Nom du chantier'] || '#' + c.id) + '</div>' +
+        '<button onclick="ouvrirFormChantier(' + c.id + ')" style="background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;margin-right:6px">✏️</button>' +
         '<select onchange="modifierStatueChantier(' + c.id + ', this.value)" style="background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;color:var(--gris);outline:none">' +
         '<option value="" disabled' + (!statue || statue === '—' ? ' selected' : '') + '>-- Statut --</option>' +
         '<option value="En cours"' + (statue === 'En cours' ? ' selected' : '') + '>🟢 En cours</option>' +
         '<option value="En pause"' + (statue === 'En pause' ? ' selected' : '') + '>🟡 En pause</option>' +
         '<option value="Terminé"' + (statue === 'Terminé' ? ' selected' : '') + '>⚫ Terminé</option>' +
-        '</select></div>';
+        '</select>';
+      div.appendChild(header);
+
+      // Dates
+      const dates = document.createElement('div');
+      dates.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap';
+
+      // Date début
+      const ddDiv = document.createElement('div');
+      ddDiv.style.cssText = 'display:flex;flex-direction:column;gap:3px;flex:1;min-width:120px';
+      ddDiv.innerHTML = '<label style="font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase">📅 Date début</label>';
+      const ddInput = document.createElement('input');
+      ddInput.type = 'date';
+      ddInput.value = dateDebut ? dateDebut.split('T')[0] : '';
+      ddInput.style.cssText = 'background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--gris);outline:none;width:100%';
+      ddInput.onchange = () => modifierDatesChantier(c.id, ddInput.value, dfInput.value, c);
+      ddDiv.appendChild(ddInput);
+      dates.appendChild(ddDiv);
+
+      // Date fin
+      const dfDiv = document.createElement('div');
+      dfDiv.style.cssText = 'display:flex;flex-direction:column;gap:3px;flex:1;min-width:120px';
+      dfDiv.innerHTML = '<label style="font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase">🏁 Date fin</label>';
+      const dfInput = document.createElement('input');
+      dfInput.type = 'date';
+      dfInput.value = dateFin ? dateFin.split('T')[0] : '';
+      dfInput.style.cssText = 'background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 10px;font-size:12px;color:var(--gris);outline:none;width:100%';
+      dfInput.onchange = () => modifierDatesChantier(c.id, ddInput.value, dfInput.value, c);
+      dfDiv.appendChild(dfInput);
+      dates.appendChild(dfDiv);
+
+      div.appendChild(dates);
       container.appendChild(div);
     });
+  }
+
+  function switchChantierTab(tab) {
+    document.getElementById('chantier-tab-info').style.display = tab === 'info' ? 'block' : 'none';
+    document.getElementById('chantier-tab-fichiers').style.display = tab === 'fichiers' ? 'block' : 'none';
+    document.getElementById('tab-chantier-info').style.background = tab === 'info' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-chantier-info').style.color = tab === 'info' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-chantier-fichiers').style.background = tab === 'fichiers' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-chantier-fichiers').style.color = tab === 'fichiers' ? '#fff' : 'var(--gris-moyen)';
+  }
+
+  function previewChantierFichiers(input) {
+    const preview = document.getElementById('chantier-fichiers-preview');
+    preview.innerHTML = '';
+    if (input.files.length) {
+      [...input.files].forEach(f => {
+        const tag = document.createElement('div');
+        tag.style.cssText = 'background:var(--vert-clair);border-radius:6px;padding:4px 10px;font-size:11px;color:var(--vert);font-weight:600';
+        tag.textContent = '📎 ' + f.name;
+        preview.appendChild(tag);
+      });
+      document.getElementById('btn-upload-chantier-fichiers').style.display = 'block';
+    }
+  }
+
+  async function uploaderFichiersChantier() {
+    const rowId = document.getElementById('chantier-row-id').value;
+    if (!rowId) { alert('Enregistrez d\'abord le chantier.'); return; }
+    const input = document.getElementById('chantier-fichiers-input');
+    if (!input.files.length) return;
+    const btn = document.getElementById('btn-upload-chantier-fichiers');
+    btn.disabled = true; btn.textContent = '⏳ Upload…';
+    try {
+      // Charger fichiers existants
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+      const data = await res.json();
+      const existants = (data['Fichiers'] || []).map(f => ({ name: f.name }));
+      // Uploader les nouveaux
+      const nouveaux = [];
+      for (const file of input.files) {
+        const fd = new FormData(); fd.append('file', file);
+        const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
+          method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd
+        });
+        if (!r.ok) throw new Error('Erreur upload ' + file.name);
+        nouveaux.push({ name: (await r.json()).name });
+      }
+      // Sauvegarder
+      const r2 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Fichiers: [...existants, ...nouveaux] }) });
+      if (!r2.ok) throw new Error(await r2.text());
+      input.value = '';
+      document.getElementById('chantier-fichiers-preview').innerHTML = '';
+      btn.style.display = 'none';
+      // Recharger la liste des fichiers
+      await chargerFichiersChantier(rowId);
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '📤 Uploader les fichiers'; }
+  }
+
+  async function chargerFichiersChantier(rowId) {
+    const liste = document.getElementById('chantier-fichiers-liste');
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+      const data = await res.json();
+      const fichiers = data['Fichiers'] || [];
+      if (!fichiers.length) {
+        liste.innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
+        return;
+      }
+      liste.innerHTML = '';
+      fichiers.forEach(f => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--vert-clair);border-radius:8px;padding:8px 12px';
+        // Lien fichier
+        const a = document.createElement('a');
+        a.href = f.url; a.target = '_blank';
+        a.style.cssText = 'flex:1;font-size:13px;color:var(--vert);font-weight:600;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+        a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
+        row.appendChild(a);
+        // Bouton supprimer
+        const btn = document.createElement('button');
+        btn.textContent = '🗑';
+        btn.title = 'Supprimer ce fichier';
+        btn.style.cssText = 'background:#fde8e8;border:none;border-radius:6px;padding:5px 8px;cursor:pointer;font-size:14px;flex-shrink:0';
+        btn.onclick = async () => {
+          if (!confirm('Supprimer "' + (f.visible_name || f.name) + '" ?')) return;
+          btn.textContent = '⏳';
+          btn.disabled = true;
+          try {
+            // Recharger les fichiers actuels pour avoir la liste à jour
+            const r2 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+            const d2 = await r2.json();
+            const nouveauxFichiers = (d2['Fichiers'] || []).filter(ff => ff.name !== f.name).map(ff => ({ name: ff.name }));
+            const r3 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true',
+              { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Fichiers: nouveauxFichiers }) });
+            if (!r3.ok) throw new Error(await r3.text());
+            row.remove();
+            // Afficher message si plus de fichiers
+            if (!liste.children.length) {
+              liste.innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
+            }
+          } catch(e) { alert('Erreur : ' + e.message); btn.textContent = '🗑'; btn.disabled = false; }
+        };
+        row.appendChild(btn);
+        liste.appendChild(row);
+      });
+    } catch(e) {
+      liste.innerHTML = '<div style="color:#c0392b;font-size:13px">Erreur de chargement</div>';
+    }
+  }
+
+  async function ouvrirFormChantier(rowId) {
+    document.getElementById('chantier-row-id').value = rowId || '';
+    document.getElementById('modal-chantier-titre').textContent = rowId ? 'Modifier chantier' : 'Nouveau chantier';
+    document.getElementById('chantier-nom').value = '';
+    document.getElementById('chantier-date-debut').value = '';
+    document.getElementById('chantier-date-fin').value = '';
+    document.getElementById('chantier-statue').value = 'En cours';
+    if (rowId) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+        const c = await res.json();
+        document.getElementById('chantier-nom').value = c['Nom du chantier'] || '';
+        document.getElementById('chantier-date-debut').value = c['Date début'] ? c['Date début'].split('T')[0] : '';
+        document.getElementById('chantier-date-fin').value = c['Date fin'] ? c['Date fin'].split('T')[0] : '';
+        document.getElementById('chantier-statue').value = c['Statue']?.value || c['Statue'] || 'En cours';
+        // Charger les fichiers
+        document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:10px">⏳ Chargement…</div>';
+        await chargerFichiersChantier(rowId);
+        // En modification, on peut uploader
+        document.getElementById('chantier-fichiers-liste').previousElementSibling && null;
+      } catch(e) {}
+    }
+    // Nouveau chantier : désactiver l'upload tant que pas sauvegardé
+    const lblUpload = document.querySelector('#chantier-tab-fichiers label');
+    if (lblUpload) lblUpload.style.opacity = rowId ? '1' : '0.4';
+    if (!rowId) {
+      document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Enregistrez d\u2019abord le chantier pour ajouter des fichiers</div>';
+    }
+    switchChantierTab('info');
+    document.getElementById('modal-chantier').style.display = 'flex';
+  }
+
+  function fermerFormChantier() {
+    document.getElementById('modal-chantier').style.display = 'none';
+  }
+
+  async function sauvegarderChantier() {
+    const rowId = document.getElementById('chantier-row-id').value;
+    const nom = document.getElementById('chantier-nom').value.trim();
+    if (!nom) { alert('⚠️ Veuillez saisir le nom du chantier.'); return; }
+    const payload = {
+      'Nom du chantier': nom,
+      'Date début': document.getElementById('chantier-date-debut').value || null,
+      'Date fin': document.getElementById('chantier-date-fin').value || null,
+      'Statue': document.getElementById('chantier-statue').value,
+    };
+    const btn = document.getElementById('btn-save-chantier');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
+      const method = rowId ? 'PATCH' : 'POST';
+      const res = await fetch(url, { method, headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      if (!rowId) {
+        // Nouveau chantier créé - proposer d'ajouter des fichiers
+        document.getElementById('chantier-row-id').value = saved.id;
+        document.getElementById('modal-chantier-titre').textContent = 'Chantier créé ✅';
+        const lblUpload = document.querySelector('#chantier-tab-fichiers label');
+        if (lblUpload) lblUpload.style.opacity = '1';
+        document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
+        switchChantierTab('fichiers');
+        await loadChantiersGestion();
+      } else {
+        fermerFormChantier();
+        await loadChantiersGestion();
+      }
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+  }
+
+  async function modifierDatesChantier(rowId, dateDebut, dateFin, c) {
+    try {
+      const payload = {
+        'Date début': dateDebut || null,
+        'Date fin': dateFin || null,
+      };
+      await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+      // Mettre à jour le cache local
+      const ch = chantiersGestionCache.find(ch => ch.id === rowId);
+      if (ch) {
+        Object.assign(ch, payload);
+      }
+    } catch(e) { alert('Erreur sauvegarde dates : ' + e.message); }
   }
 
   async function modifierStatueChantier(rowId, statue) {
@@ -2597,11 +2838,11 @@
       if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun utilisateur</div>'; return; }
       container.innerHTML = users.map(u => {
         const actif = u['Actif'] !== false;
-        const droit = u['Droit']?.value || u['Droit'] || 'Collaborateur';
+        const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
           <div>
             <div style="font-size:14px;font-weight:700;color:var(--gris)">${u['Nom complet'] || '—'}</div>
-            <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}${u['Poste / Métier'] ? ' · ' + u['Poste / Métier'] : ''}</div>
             <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
           </div>
           <div style="display:flex;gap:8px">
@@ -2621,8 +2862,29 @@
     document.getElementById('user-nom').value = '';
     document.getElementById('user-id').value = '';
     document.getElementById('user-mdp').value = '';
-    document.getElementById('user-droit').value = 'Collaborateur';
+    document.getElementById('user-droit').value = 'Utilisateur';
     document.getElementById('user-actif').value = 'true';
+    // Charger les postes depuis la table Collaborateurs
+    const selPoste = document.getElementById('user-poste');
+    selPoste.innerHTML = '<option value="">-- Sélectionner un poste --</option>';
+    try {
+      const resPostes = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const dataPostes = await resPostes.json();
+      const postesUniques = [...new Set((dataPostes.results || []).map(r => r['Poste / Métier']).filter(Boolean))].sort();
+      postesUniques.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p; opt.textContent = p;
+        selPoste.appendChild(opt);
+      });
+    } catch(e) {
+      // Postes par défaut si erreur
+      ['Pose','Apprenti','Chef de chantier','Conducteur de travaux','Bureau','Direction','Autre'].forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p; opt.textContent = p;
+        selPoste.appendChild(opt);
+      });
+    }
+    selPoste.value = '';
     if (rowId) {
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
@@ -2630,8 +2892,9 @@
         document.getElementById('user-nom').value = u['Nom complet'] || '';
         document.getElementById('user-id').value = u['Identifiant'] || '';
         document.getElementById('user-mdp').value = u['Mot de passe'] || '';
-        document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Collaborateur';
+        document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
+        document.getElementById('user-poste').value = u['Poste / Métier'] || '';
       } catch(e) {}
     }
     document.getElementById('modal-user').style.display = 'flex';
@@ -2649,6 +2912,7 @@
       'Mot de passe': document.getElementById('user-mdp').value,
       'Droit': document.getElementById('user-droit').value,
       'Actif': document.getElementById('user-actif').value === 'true',
+      'Poste / Métier': document.getElementById('user-poste').value || '',
     };
     const btn = document.getElementById('btn-save-user');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
@@ -2696,13 +2960,113 @@
           </div>
           <div style="font-size:12px;color:#aaa">${type} · Du ${debut} au ${fin}</div>
           ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
-          ${isAttente ? `<div style="display:flex;gap:8px;margin-top:10px">
+          <div style="display:flex;gap:8px;margin-top:10px">
+            ${isAttente ? `
             <button onclick="validerConge(${r.id},'Validé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
             <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
-          </div>` : ''}
+            ` : ''}
+            <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
+            <button onclick="supprimerCongeAdmin(${r.id})" style="background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">🗑</button>
+          </div>
         </div>`;
       }).join('');
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  function calcJoursAdmin() {
+    const debut = document.getElementById('conge-admin-debut').value;
+    const fin = document.getElementById('conge-admin-fin').value;
+    const el = document.getElementById('conge-admin-nb-jours');
+    if (debut && fin) {
+      const diff = Math.round((new Date(fin) - new Date(debut)) / 86400000) + 1;
+      el.textContent = diff > 0 ? diff + (diff > 1 ? ' jours' : ' jour') : '⚠️ Invalide';
+    } else { el.textContent = '—'; }
+  }
+
+  async function ouvrirFormCongeAdmin(rowId) {
+    document.getElementById('conge-admin-row-id').value = rowId || '';
+    document.getElementById('modal-conge-admin-titre').textContent = rowId ? 'Modifier demande' : 'Nouvelle demande';
+    document.getElementById('conge-admin-debut').value = '';
+    document.getElementById('conge-admin-fin').value = '';
+    document.getElementById('conge-admin-notes').value = '';
+    document.getElementById('conge-admin-statut').value = 'En attente';
+    document.getElementById('conge-admin-type').value = 'Congés payés';
+    document.getElementById('conge-admin-nb-jours').textContent = '—';
+    // Charger la liste des collaborateurs
+    const sel = document.getElementById('conge-admin-collab');
+    sel.innerHTML = '<option value="">-- Choisir --</option>';
+    if (COLLABORATEURS_ADMIN.length) {
+      COLLABORATEURS_ADMIN.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.collabId; opt.textContent = c.nom;
+        sel.appendChild(opt);
+      });
+    } else {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const data = await res.json();
+        (data.results || []).sort((a,b) => (a['Nom Complet']||'').localeCompare(b['Nom Complet']||'')).forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.id; opt.textContent = c['Nom Complet'] || '#' + c.id;
+          sel.appendChild(opt);
+        });
+      } catch(e) {}
+    }
+    if (rowId) {
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
+        const r = await res.json();
+        const collabId = (r['Collaborateurs'] || [])[0]?.id;
+        if (collabId) sel.value = collabId;
+        document.getElementById('conge-admin-type').value = r['Type de demande']?.value || r['Type de demande'] || 'Congés payés';
+        document.getElementById('conge-admin-debut').value = r['Date de début'] || '';
+        document.getElementById('conge-admin-fin').value = r['Date de fin journée (inclus)'] || '';
+        document.getElementById('conge-admin-statut').value = r['Statut']?.value || r['Statut'] || 'En attente';
+        document.getElementById('conge-admin-notes').value = r['Notes'] || '';
+        calcJoursAdmin();
+      } catch(e) {}
+    }
+    document.getElementById('modal-conge-admin').style.display = 'flex';
+  }
+
+  function fermerFormCongeAdmin() {
+    document.getElementById('modal-conge-admin').style.display = 'none';
+  }
+
+  async function sauvegarderCongeAdmin() {
+    const rowId = document.getElementById('conge-admin-row-id').value;
+    const collabId = document.getElementById('conge-admin-collab').value;
+    const debut = document.getElementById('conge-admin-debut').value;
+    const fin = document.getElementById('conge-admin-fin').value;
+    if (!collabId) { alert('⚠️ Veuillez choisir un collaborateur.'); return; }
+    if (!debut || !fin) { alert('⚠️ Veuillez saisir les dates.'); return; }
+    if (new Date(fin) < new Date(debut)) { alert('⚠️ La date de fin doit être après la date de début.'); return; }
+    const payload = {
+      Collaborateurs: [parseInt(collabId)],
+      'Type de demande': document.getElementById('conge-admin-type').value,
+      'Date de début': debut,
+      'Date de fin journée (inclus)': fin,
+      Statut: document.getElementById('conge-admin-statut').value,
+      Notes: document.getElementById('conge-admin-notes').value || '',
+    };
+    const btn = document.getElementById('btn-save-conge-admin');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
+      const res = await fetch(url, { method: rowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      fermerFormCongeAdmin();
+      await loadCongesAdmin();
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+  }
+
+  async function supprimerCongeAdmin(rowId) {
+    if (!confirm('Supprimer cette demande de congé ?')) return;
+    try {
+      await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
+      await loadCongesAdmin();
+    } catch(e) { alert('Erreur : ' + e.message); }
   }
 
   async function validerConge(rowId, statut) {
@@ -2975,8 +3339,8 @@
   <!-- CHANTIERS -->
   <div id="gestion-chantiers" style="display:none">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
-      <div style="font-size:13px;font-weight:700;color:var(--gris)">Statut des chantiers</div>
-      <div style="font-size:11px;color:#aaa">Modifier le statut</div>
+      <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
+      <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
     <div style="margin:0 16px 10px">
       <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none" />
@@ -2986,7 +3350,10 @@
 
   <!-- CONGÉS ADMIN -->
   <div id="gestion-conges-admin" style="display:none">
-    <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Demandes de congés</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
+      <div style="font-size:13px;font-weight:700;color:var(--gris)">Demandes de congés</div>
+      <button onclick="ouvrirFormCongeAdmin(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouvelle</button>
+    </div>
     <div id="liste-conges-admin"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
@@ -3077,9 +3444,15 @@
       <div class="field"><label>Identifiant</label><input type="text" id="user-id" placeholder="prenom.nom" autocapitalize="none" /></div>
       <div class="field"><label>Mot de passe</label><input type="text" id="user-mdp" placeholder="Mot de passe" /></div>
       <div class="field">
+        <label>Poste / Métier</label>
+        <select id="user-poste" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+          <option value="">-- Sélectionner un poste --</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Droit</label>
         <select id="user-droit" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
-          <option value="Collaborateur">Collaborateur</option>
+          <option value="Utilisateur">Utilisateur</option>
           <option value="Gestionnaire">Gestionnaire</option>
           <option value="Administrateur">Administrateur</option>
         </select>
@@ -3096,6 +3469,106 @@
     </div>
   </div>
 
+</div>
+
+<!-- MODAL CONGÉ ADMIN -->
+<div id="modal-conge-admin" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:flex-end">
+  <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;padding:24px 20px;max-height:85vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div style="font-size:16px;font-weight:800;color:var(--gris)" id="modal-conge-admin-titre">Nouvelle demande</div>
+      <button onclick="fermerFormCongeAdmin()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa">✕</button>
+    </div>
+    <div class="field">
+      <label>Collaborateur <span style="color:#c0392b">*</span></label>
+      <select id="conge-admin-collab" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+        <option value="">-- Choisir --</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Type de demande <span style="color:#c0392b">*</span></label>
+      <select id="conge-admin-type" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+        <option value="Congés payés">🏖️ Congés payés</option>
+        <option value="RTT">📅 RTT</option>
+        <option value="Maladie">🤒 Maladie</option>
+        <option value="Formation">🎓 Formation</option>
+        <option value="Sans solde">📋 Sans solde</option>
+        <option value="Maternité / Paternité">👶 Maternité / Paternité</option>
+        <option value="Accident">🚑 Accident</option>
+        <option value="Autre">📌 Autre</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:12px">
+      <div class="field" style="flex:1"><label>Date de début <span style="color:#c0392b">*</span></label><input type="date" id="conge-admin-debut" oninput="calcJoursAdmin()" /></div>
+      <div class="field" style="flex:1"><label>Date de fin <span style="color:#c0392b">*</span></label><input type="date" id="conge-admin-fin" oninput="calcJoursAdmin()" /></div>
+    </div>
+    <div class="field">
+      <label>Nombre de jours</label>
+      <div style="background:var(--vert-clair);border:1.5px solid #c5d9c3;border-radius:10px;padding:11px 14px;font-size:16px;font-weight:800;color:var(--vert);text-align:center" id="conge-admin-nb-jours">—</div>
+    </div>
+    <div class="field">
+      <label>Statut</label>
+      <select id="conge-admin-statut" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+        <option value="En attente">⏳ En attente</option>
+        <option value="Validé">✅ Validé</option>
+        <option value="Refusé">❌ Refusé</option>
+      </select>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="conge-admin-notes" placeholder="Précisions…" style="min-height:60px"></textarea></div>
+    <input type="hidden" id="conge-admin-row-id" value="" />
+    <button onclick="sauvegarderCongeAdmin()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;margin-top:4px" id="btn-save-conge-admin">💾 Enregistrer</button>
+  </div>
+</div>
+
+<!-- MODAL CHANTIER -->
+<div id="modal-chantier" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:flex-end">
+  <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;max-height:85vh;display:flex;flex-direction:column">
+    <div style="padding:24px 20px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:800;color:var(--gris)" id="modal-chantier-titre">Nouveau chantier</div>
+        <button onclick="fermerFormChantier()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa">✕</button>
+      </div>
+      <!-- Onglets -->
+      <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;margin-bottom:16px">
+        <button id="tab-chantier-info" onclick="switchChantierTab('info')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Infos</button>
+        <button id="tab-chantier-fichiers" onclick="switchChantierTab('fichiers')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📎 Fichiers</button>
+      </div>
+    </div>
+
+    <!-- Onglet Infos -->
+    <div id="chantier-tab-info" style="padding:0 20px;overflow-y:auto;flex:1">
+      <div class="field"><label>Nom du chantier <span style="color:#c0392b">*</span></label><input type="text" id="chantier-nom" placeholder="Ex: CH1234 - Nom du chantier" /></div>
+      <div style="display:flex;gap:12px">
+        <div class="field" style="flex:1"><label>📅 Date début</label><input type="date" id="chantier-date-debut" /></div>
+        <div class="field" style="flex:1"><label>🏁 Date fin</label><input type="date" id="chantier-date-fin" /></div>
+      </div>
+      <div class="field">
+        <label>Statut</label>
+        <select id="chantier-statue" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+          <option value="En cours">🟢 En cours</option>
+          <option value="En pause">🟡 En pause</option>
+          <option value="Terminé">⚫ Terminé</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Onglet Fichiers -->
+    <div id="chantier-tab-fichiers" style="padding:0 20px;overflow-y:auto;flex:1;display:none">
+      <div id="chantier-fichiers-liste" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+        <div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Enregistrez d'abord le chantier pour ajouter des fichiers</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
+        📎 Ajouter des fichiers
+        <input type="file" id="chantier-fichiers-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none" onchange="previewChantierFichiers(this)" />
+      </label>
+      <div id="chantier-fichiers-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+      <button onclick="uploaderFichiersChantier()" id="btn-upload-chantier-fichiers" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;margin-top:10px;display:none">📤 Uploader les fichiers</button>
+    </div>
+
+    <div style="padding:16px 20px">
+      <input type="hidden" id="chantier-row-id" value="" />
+      <button onclick="sauvegarderChantier()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer" id="btn-save-chantier">💾 Enregistrer</button>
+    </div>
+  </div>
 </div>
 
 <!-- NAVIGATION BAS -->
