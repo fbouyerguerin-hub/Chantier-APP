@@ -2297,14 +2297,24 @@
     if (!collabsAdminLoaded) {
       const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const dataC = await resC.json();
-      (dataC.results || []).forEach(r => {
-        const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
-        if (c) c.collabId = r.id;
-      });
+      // Reconstruire COLLABORATEURS_ADMIN si vide
+      if (!COLLABORATEURS_ADMIN.length) {
+        COLLABORATEURS_ADMIN = (dataC.results || []).map(r => {
+          const nom = r['Nom Complet'] || '';
+          const parts = nom.trim().split(' ');
+          const initiales = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
+          return { nom, initiales, collabId: r.id, poste: r['Poste / Métier'] || '' };
+        });
+      } else {
+        (dataC.results || []).forEach(r => {
+          const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
+          if (c) c.collabId = r.id;
+        });
+      }
       if (!chantiersAdmin.length) {
         const resC2 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
         const dataC2 = await resC2.json();
-        chantiersAdmin = (dataC2.results || []).map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id }));
+        chantiersAdmin = (dataC2.results || []).map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || '' }));
       }
       collabsAdminLoaded = true;
     }
@@ -2363,7 +2373,8 @@
             const notes = aff['Notes'] || '';
             html += '<div class="aff-tag">🏗 ' + chantier + (notes ? '<div class="aff-notes">' + notes + '</div>' : '') + '<button class="btn-del-aff" onclick="supprimerAffAdmin(' + aff.id + ', event)">✕</button></div>';
           });
-          html += '<button class="btn-add-aff-admin" onclick="ouvrirModalAffAdmin(' + JSON.stringify(collab.nom) + ',' + collab.collabId + ',\'' + dateStr + '\')"  >+</button>';
+          const btnAff = '<button class="btn-add-aff-admin" data-nom="' + collab.nom.replace(/"/g, '&quot;') + '" data-id="' + collab.collabId + '" data-date="' + dateStr + '" onclick="ouvrirModalAffAdminFromBtn(this)">+</button>';
+      html += btnAff;
         }
         html += '</div></td>';
       });
@@ -2393,6 +2404,13 @@
     document.getElementById('semaine-label-admin').textContent =
       'Du ' + lundi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) +
       ' au ' + vendredi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function ouvrirModalAffAdminFromBtn(btn) {
+    const nom = btn.getAttribute('data-nom');
+    const id = parseInt(btn.getAttribute('data-id'));
+    const date = btn.getAttribute('data-date');
+    ouvrirModalAffAdmin(nom, id, date);
   }
 
   function ouvrirModalAffAdmin(collabNom, collabId, dateStr) {
@@ -2456,9 +2474,23 @@
   }
 
   function renderChantiersAdmin(list) {
-    document.getElementById('liste-chantiers-admin').innerHTML = list.map(c =>
-      '<div class="modal-option" onclick="selectChantierAdmin(' + c.id + ',\'' + c.nom.replace(/'/g, "\\'") + '\')">' + c.nom + '</div>'
-    ).join('');
+    const container = document.getElementById('liste-chantiers-admin');
+    container.innerHTML = '';
+    const sorted = [...list].sort((a, b) => {
+      const order = { 'En cours': 0, 'En pause': 1, 'Terminé': 2 };
+      return ((order[a.statue] ?? 3) - (order[b.statue] ?? 3)) || a.nom.localeCompare(b.nom);
+    });
+    sorted.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'modal-option';
+      div.style.cssText = 'display:flex;align-items:center;gap:6px';
+      const color = c.statue === 'En cours' ? 'var(--vert)' : c.statue === 'Terminé' ? '#aaa' : 'var(--beige)';
+      const dot = c.statue ? '<span style="width:7px;height:7px;border-radius:50%;background:' + color + ';display:inline-block;flex-shrink:0"></span>' : '';
+      div.innerHTML = dot + '<span style="flex:1">' + c.nom + '</span>' +
+        (c.statue ? '<span style="font-size:10px;color:' + color + ';font-weight:600">' + c.statue + '</span>' : '');
+      div.onclick = () => selectChantierAdmin(c.id, c.nom);
+      container.appendChild(div);
+    });
   }
 
   function selectChantierAdmin(id, nom) {
@@ -3105,6 +3137,86 @@
     await loadCongesAdmin();
   }
 
+  const VUE_FEUILLE_HEURES = '1990719'; // Vue filtrée saisies des temps
+
+  async function exportFeuilleHeures(periode) {
+    const btn = event.target.closest('button');
+    const origText = btn.innerHTML;
+    btn.innerHTML = '<span>⏳</span><span>Export en cours…</span>';
+    btn.disabled = true;
+    try {
+      const now = new Date();
+      let dateDebut, dateFin, nomFichier;
+      if (periode === 'semaine') {
+        const lundi = new Date(now);
+        const day = lundi.getDay();
+        lundi.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+        lundi.setHours(0,0,0,0);
+        const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+        dateDebut = lundi.toISOString().split('T')[0];
+        dateFin = vendredi.toISOString().split('T')[0];
+        nomFichier = 'analyse_chantiers_semaine_' + dateDebut;
+      } else if (periode === 'mois') {
+        const y = now.getFullYear(), m = now.getMonth();
+        dateDebut = new Date(y, m, 1).toISOString().split('T')[0];
+        dateFin = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        nomFichier = 'analyse_chantiers_mois_' + y + '_' + String(m+1).padStart(2,'0');
+      } else if (periode === 'annee') {
+        const y = now.getFullYear();
+        dateDebut = y + '-01-01';
+        dateFin = y + '-12-31';
+        nomFichier = 'analyse_chantiers_annee_' + y;
+      } else {
+        dateDebut = null;
+        dateFin = null;
+        nomFichier = 'analyse_chantiers_complet_' + now.toISOString().split('T')[0];
+      }
+
+      let allRows = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore) {
+        let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
+          '/?user_field_names=true&size=200&page=' + page +
+          '&view_id=' + VUE_FEUILLE_HEURES;
+        if (dateDebut) url += '&filter__Date__date_after_or_equal=' + dateDebut;
+        if (dateFin) url += '&filter__Date__date_before_or_equal=' + dateFin;
+        const res = await fetch(url, { headers: HEADERS });
+        const data = await res.json();
+        allRows = allRows.concat(data.results || []);
+        hasMore = !!data.next;
+        page++;
+      }
+
+      if (!allRows.length) { alert('Aucune saisie pour cette période.'); return; }
+
+      // Construire CSV avec les colonnes attendues par guerin_analyse_chantier.py
+      const cols = ['Date','Chantier','Collaborateur','Poste','Type de tache','Sous-tache','Total Heures','Notes'];
+      const csvRows = [cols.join(';')];
+      allRows.forEach(r => {
+        const date = (r['Date'] || '').split('T')[0];
+        const chantier = (r['Chantiers'] || [])[0]?.value || '';
+        const collab = (r['Collaborateur'] || [])[0]?.value || '';
+        const tache = (r['Type de taches'] || [])[0]?.value || '';
+        const sous = (r['Sous Taches'] || [])[0]?.value || '';
+        const heures = r['Heures Normales'] || 0;
+        const notes = (r['Notes'] || '').replace(/;/g, ',').split('\n').join(' ');
+        const collabInfo = COLLABORATEURS_ADMIN.find(c => c.nom === collab);
+        const poste = collabInfo ? collabInfo.poste || '' : '';
+        csvRows.push([date, chantier, collab, poste, tache, sous, heures, notes].join(';'));
+      });
+
+      const csv = '\uFEFF' + csvRows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = nomFichier + '.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch(e) { alert('Erreur export : ' + e.message); }
+    finally { btn.innerHTML = origText; btn.disabled = false; }
+  }
+
   async function exportCSVSaisies(periode) {
     const btn = event.target;
     btn.textContent = '⏳ Export…';
@@ -3389,20 +3501,30 @@
 
   <!-- EXPORT -->
   <div id="gestion-export" style="display:none">
-    <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Exporter en CSV</div>
+    <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Export Feuille d'heures</div>
     <div style="margin:0 16px;display:flex;flex-direction:column;gap:10px">
-      <div style="background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;overflow:hidden">
-        <div style="padding:12px 14px;font-size:13px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3">📊 Saisies des temps</div>
-        <button onclick="exportCSVSaisies('semaine')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1ece3;padding:12px 14px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris)">📅 Semaine courante</button>
-        <button onclick="exportCSVSaisies('mois')" style="width:100%;background:none;border:none;padding:12px 14px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris)">🗓️ Mois courant</button>
+      <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;overflow:hidden">
+        <div style="padding:14px 16px;font-size:13px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3;display:flex;align-items:center;gap:8px">
+          <span>📊</span><span>Saisies des temps</span>
+          <span style="font-size:10px;color:#aaa;margin-left:auto">Vue filtrée par collaborateur</span>
+        </div>
+        <button onclick="exportFeuilleHeures('semaine')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1ece3;padding:14px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
+          <span>📅</span><span>Semaine courante</span>
+        </button>
+        <button onclick="exportFeuilleHeures('mois')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1ece3;padding:14px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
+          <span>🗓️</span><span>Mois courant</span>
+        </button>
+        <button onclick="exportFeuilleHeures('annee')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1ece3;padding:14px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
+          <span>📆</span><span>Année courante</span>
+        </button>
+        <button onclick="exportFeuilleHeures('tout')" style="width:100%;background:none;border:none;padding:14px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
+          <span>📋</span><span>Toutes les saisies</span>
+        </button>
       </div>
-      <button onclick="exportCSV('1014431','Collaborateurs')" class="btn-export">👥 Collaborateurs</button>
-      <button onclick="exportCSV('1022869','Demandes Congés RTT')" class="btn-export">🏖️ Demandes Congés RTT</button>
-      <button onclick="exportCSV('1014444','Types de taches')" class="btn-export">⚙️ Types de tâches</button>
-      <button onclick="exportCSV('1015608','Sous Taches')" class="btn-export">📋 Sous-tâches</button>
-      <button onclick="exportCSV('1014441','Chantiers')" class="btn-export">🏗️ Chantiers</button>
-      <button onclick="exportCSV('1017158','Vehicules')" class="btn-export">🚗 Véhicules</button>
-      <button onclick="exportCSV('1023480','Planning')" class="btn-export">📅 Planning</button>
+      <div style="background:#f8fafc;border-radius:10px;padding:12px 14px;font-size:11px;color:#aaa;line-height:1.6">
+        ℹ️ L'export utilise la vue filtrée par collaborateur.<br>
+        Le fichier CSV est compatible avec l'outil d'analyse Excel Guérin Bâtiments.
+      </div>
     </div>
   </div>
 
