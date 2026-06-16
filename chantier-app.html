@@ -1528,16 +1528,17 @@
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
       th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
-      const absents = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
+      const absentsDetail = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
         (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) &&
         dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
       )).map(c => {
         const cg = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
-        return c.nom.split(' ')[0] + ' (' + (cg?.['Type de demande']?.value||'Abs') + ')';
+        return { nom: c.nom.split(' ')[0], raison: cg?.['Type de demande']?.value || 'Absence' };
       });
+      const absents = absentsDetail;
       const absentId = 'abs-' + dateStr;
       th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR',{day:'numeric',month:'short'}) + '</div>' +
-        (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absents.map(a=>'🚫 '+a).join('<br>') + '</div>' : '');
+        (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absentsDetail.map(a => iconeAbsence(a.raison) + ' ' + a.nom + ' (' + a.raison + ')').join('<br>') + '</div>' : '');
       trH.appendChild(th);
     });
     thead.appendChild(trH);
@@ -1996,6 +1997,18 @@
   function toggleAbsents(id) {
     const el = document.getElementById(id);
     if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  }
+
+  function iconeAbsence(type) {
+    const t = (type || '').toLowerCase();
+    if (t.includes('maladie')) return '🤒';
+    if (t.includes('formation')) return '🎓';
+    if (t.includes('congé') || t.includes('conge') || t.includes('payé')) return '🏖️';
+    if (t.includes('rtt')) return '📅';
+    if (t.includes('sans solde')) return '📋';
+    if (t.includes('maternité') || t.includes('paternité')) return '👶';
+    if (t.includes('accident')) return '🚑';
+    return '📌';
   }
 
   function filtrerCollaborateurs() { loadPlanningCollectif(); }
