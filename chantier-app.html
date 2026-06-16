@@ -1287,10 +1287,6 @@
         if (found) feuilleCollab = found;
       }
 
-      const todayDate = new Date(); todayDate.setHours(0,0,0,0);
-      const lundiDate = new Date(lundi); lundiDate.setHours(0,0,0,0);
-      const isPast = lundiDate < todayDate;
-
       // Charger congés
       const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100`;
       const resConges = await fetch(urlConges, { headers: HEADERS });
@@ -1299,40 +1295,31 @@
         (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id) && r['Statut']?.value !== 'Refusé'
       );
 
-      const byDate = {};
+      // Charger planning prévu ET saisies réelles en parallèle
+      const byDatePlanning = {};
+      const byDateSaisies = {};
 
-      if (isPast) {
-        // Semaine passée → charger les saisies réelles
-        const viewParam = connectedViewId ? `&view_id=${connectedViewId}` : '';
-        const urlSaisies = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${viewParam}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
-        const resSaisies = await fetch(urlSaisies, { headers: HEADERS });
-        const dataSaisies = await resSaisies.json();
-        (dataSaisies.results || []).forEach(r => {
-          const d = r['Date'];
-          if (!byDate[d]) byDate[d] = [];
-          byDate[d].push({ chantier: (r['Chantiers'] || [])[0]?.value || '—', notes: r['Notes'] || '', heures: r['Heures Normales'] || '', isSaisie: true });
-        });
-      } else {
-        // Semaine future/courante → charger le planning prévu
-        const url = `https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
-        const res = await fetch(url, { headers: HEADERS });
-        const data = await res.json();
-        const rows = (data.results || []).filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
-        rows.forEach(r => {
-          const d = r['Date'];
-          if (!byDate[d]) byDate[d] = [];
-          const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
-          byDate[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', isSaisie: false, periode });
-        });
-      }
+      const [resPlan, resSaisies] = await Promise.all([
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS })
+      ]);
 
-      // Badge semaine passée ou future
-      const badgeHTML = isPast
-        ? `<div style="margin:0 16px 8px;background:#e8f0e7;border-radius:8px;padding:8px 12px;font-size:11px;color:#4a7c3f;font-weight:600">📋 Saisies réelles de la semaine</div>`
-        : `<div style="margin:0 16px 8px;background:#f7f2ea;border-radius:8px;padding:8px 12px;font-size:11px;color:#c8a96e;font-weight:600">📅 Planning prévu de la semaine</div>`;
+      const planRows = (await resPlan.json()).results || [];
+      planRows.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
+        const d = r['Date'];
+        if (!byDatePlanning[d]) byDatePlanning[d] = [];
+        const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
+        byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', periode });
+      });
 
-      // En-têtes
-      let thHTML = jours.map((j, i) => {
+      (await resSaisies.json()).results?.forEach(r => {
+        const d = r['Date'];
+        if (!byDateSaisies[d]) byDateSaisies[d] = [];
+        byDateSaisies[d].push({ chantier: (r['Chantiers'] || [])[0]?.value || '—', notes: r['Notes'] || '', heures: r['Heures Normales'] || '' });
+      });
+
+      // En-têtes communs
+      const thHTML = jours.map((j, i) => {
         const dateStr = j.toISOString().split('T')[0];
         const isToday = dateStr === today;
         const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -1342,30 +1329,39 @@
         </th>`;
       }).join('');
 
-      // Cellules
-      let tdHTML = jours.map(j => {
+      const mkRow = (byDate, isSaisie) => jours.map(j => {
         const dateStr = j.toISOString().split('T')[0];
         const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
         let cellHTML = '';
         if (congeJour) {
           cellHTML = `<div class="planning-cell-conge">🏖️ ${congeJour['Type de demande']?.value || 'Absence'}</div>`;
-        } else if (byDate[dateStr] && byDate[dateStr].length > 0) {
-          cellHTML = byDate[dateStr].map(r => {
-            const heuresLabel = r.isSaisie && r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : '';
-            const periodeLabel = !r.isSaisie && r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : '';
-            return `<div class="planning-cell-chantier">🏗 ${r.chantier}${periodeLabel}${heuresLabel}${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}</div>`;
-          }).join('');
+        } else if (byDate[dateStr]?.length > 0) {
+          cellHTML = byDate[dateStr].map(r =>
+            `<div class="planning-cell-chantier">🏗 ${r.chantier}
+              ${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}
+              ${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}
+              ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
+            </div>`
+          ).join('');
         } else {
           cellHTML = `<div class="planning-cell-vide">—</div>`;
         }
         return `<td>${cellHTML}</td>`;
       }).join('');
 
-      container.innerHTML = badgeHTML + `
+      container.innerHTML = `
+        <div style="margin:0 16px 8px;background:#f7f2ea;border-radius:8px;padding:8px 12px;font-size:11px;color:#c8a96e;font-weight:600">📅 Planning prévu</div>
         <div class="planning-grid">
           <table class="planning-table">
             <thead><tr>${thHTML}</tr></thead>
-            <tbody><tr>${tdHTML}</tr></tbody>
+            <tbody><tr>${mkRow(byDatePlanning, false)}</tr></tbody>
+          </table>
+        </div>
+        <div style="margin:8px 16px;background:#e8f0e7;border-radius:8px;padding:8px 12px;font-size:11px;color:#4a7c3f;font-weight:600">📋 Saisies réelles</div>
+        <div class="planning-grid">
+          <table class="planning-table">
+            <thead><tr>${thHTML}</tr></thead>
+            <tbody><tr>${mkRow(byDateSaisies, true)}</tr></tbody>
           </table>
         </div>
         <div style="height:16px"></div>`;
@@ -1376,6 +1372,7 @@
     }
   }
 
+  
   function imprimerPage(page) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('print-active'));
 
@@ -1480,10 +1477,10 @@
     congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
-    // Semaine passée → saisies réelles
-    const lundiC = getLundiAdmin(semaineCollectif); lundiC.setHours(0,0,0,0);
-    const todayC = new Date(); todayC.setHours(0,0,0,0);
-    isPasseCollectif = lundiC < todayC;
+    // Semaine passée → saisies réelles (on compare le vendredi, pas le lundi)
+    const vendreC = new Date(getLundiAdmin(semaineCollectif)); vendreC.setDate(vendreC.getDate() + 4); vendreC.setHours(23,59,59,0);
+    const todayC = new Date();
+    isPasseCollectif = vendreC < todayC;
 
     collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
       if (!c.collabId) return false;
@@ -1539,8 +1536,12 @@
       const chData = dataChantiers.results.find(r => r.id === chantier.id);
       const fichiers = chData?.['Fichiers'] || [];
       const nomDiv = document.createElement('div');
-      nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px';
+      nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px;cursor:pointer;color:var(--vert);text-decoration:underline dotted;';
       nomDiv.textContent = chantier.nom;
+      nomDiv.title = 'Cliquer pour changer de chantier';
+      if (isGestAdmin) {
+        nomDiv.onclick = e => { e.stopPropagation(); ouvrirModalChangerChantier(chantier); };
+      }
       tdNom.appendChild(nomDiv);
       fichiers.forEach(f => {
         const a = document.createElement('a');
@@ -1741,6 +1742,46 @@
     document.getElementById('modal-collab-jour').classList.add('open');
   }
 
+  // Collaborateurs saisis manuellement { nom, collabId: null }
+  let collabsManuels = [];
+
+  function filtrerListeCollabModal(q) {
+    const liste = document.getElementById('liste-collab-jour');
+    if (!liste) return;
+    const items = liste.querySelectorAll('.modal-option');
+    items.forEach(el => {
+      const nom = el.querySelector('span:nth-child(2)')?.textContent || el.textContent;
+      el.style.display = q && !nom.toLowerCase().includes(q.toLowerCase()) ? 'none' : '';
+    });
+  }
+
+  function ajouterCollabManuel() {
+    const input = document.getElementById('collab-manuel-input');
+    const nom = input.value.trim();
+    if (!nom) return;
+    input.value = '';
+    // Vérifier que le nom n'est pas déjà dans la liste
+    if (collabsManuels.find(c => c.nom.toLowerCase() === nom.toLowerCase())) return;
+    const id = 'manuel-' + Date.now();
+    collabsManuels.push({ nom, tempId: id });
+    const container = document.getElementById('collabs-manuels');
+    const tag = document.createElement('div');
+    tag.id = id;
+    tag.style.cssText = 'background:var(--beige-clair);border:1.5px solid var(--beige);border-radius:8px;padding:5px 10px;font-size:12px;font-weight:600;color:var(--gris);display:flex;align-items:center;gap:6px';
+    const btnDel = document.createElement('button');
+    btnDel.textContent = '✕';
+    btnDel.style.cssText = 'background:none;border:none;cursor:pointer;color:#c0392b;font-size:14px;padding:0;line-height:1';
+    btnDel.onclick = () => supprimerCollabManuel(id, nom);
+    tag.textContent = '👷 ' + nom + ' ';
+    tag.appendChild(btnDel);
+    container.appendChild(tag);
+  }
+
+  function supprimerCollabManuel(id, nom) {
+    collabsManuels = collabsManuels.filter(c => c.tempId !== id);
+    document.getElementById(id)?.remove();
+  }
+
   function toggleCollabCase(collabId, el) {
     const dateStr = document.getElementById('modal-collab-jour').dataset.date;
     if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
@@ -1793,6 +1834,8 @@
   function fermerModalCollabJour(e) {
     if (!e || e.target === document.getElementById('modal-collab-jour')) {
       document.getElementById('modal-collab-jour').classList.remove('open');
+      const si = document.getElementById('search-collab-jour');
+      if (si) { si.value = ''; filtrerListeCollabModal(''); }
       currentDateCollab = null; currentBtnCollab = null;
     }
   }
@@ -1886,6 +1929,86 @@
   function previewFichiers(input) {
     const liste = document.getElementById('modal-aff-fichiers-liste'); if (!liste) return;
     [...input.files].forEach(f => { const t = document.createElement('div'); t.style.cssText='background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600'; t.textContent='📎 '+f.name; liste.appendChild(t); });
+  }
+
+  let chantierAChanger = null;
+  let tousLesChantiersDispo = [];
+
+  async function ouvrirModalChangerChantier(chantier) {
+    chantierAChanger = chantier;
+    document.getElementById('modal-changer-chantier-sub').textContent = 'Actuellement : ' + chantier.nom;
+    document.getElementById('search-changer-chantier').value = '';
+
+    // Charger tous les chantiers (pas seulement "En cours")
+    document.getElementById('liste-changer-chantier').innerHTML = '<div style="padding:20px;text-align:center;color:#aaa">⏳ Chargement…</div>';
+    document.getElementById('modal-changer-chantier').classList.add('open');
+
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      tousLesChantiersDispo = (data.results || []).map(r => ({
+        id: r.id,
+        nom: r['Nom du chantier'] || '#' + r.id,
+        statue: r['Statue']?.value || ''
+      })).sort((a, b) => a.nom.localeCompare(b.nom));
+      filtrerListeChantiers('');
+    } catch(e) {
+      document.getElementById('liste-changer-chantier').innerHTML = '<div style="padding:20px;text-align:center;color:#c0392b">Erreur de chargement</div>';
+    }
+  }
+
+  function filtrerListeChantiers(q) {
+    const liste = document.getElementById('liste-changer-chantier');
+    const filtres = q ? tousLesChantiersDispo.filter(c => c.nom.toLowerCase().includes(q.toLowerCase())) : tousLesChantiersDispo;
+    if (!filtres.length) {
+      liste.innerHTML = '<div style="padding:20px;text-align:center;color:#aaa">Aucun chantier trouvé</div>';
+      return;
+    }
+    liste.innerHTML = '';
+    filtres.forEach(c => {
+      const div = document.createElement('div');
+      div.className = 'modal-option' + (chantierAChanger && c.id === chantierAChanger.id ? ' selected' : '');
+      const color = c.statue === 'En cours' ? 'var(--vert)' : c.statue === 'Terminé' ? '#aaa' : 'var(--beige)';
+      div.innerHTML = `<span style="flex:1;font-weight:${c.id === chantierAChanger?.id ? '700' : '400'}">${c.nom}</span>` +
+        (c.statue ? `<span style="font-size:10px;color:${color};font-weight:600">${c.statue}</span>` : '') +
+        (c.id === chantierAChanger?.id ? '<span class="check">✓</span>' : '');
+      div.style.gap = '10px';
+      div.onclick = () => selectionnerNouveauChantier(c);
+      liste.appendChild(div);
+    });
+  }
+
+  async function selectionnerNouveauChantier(nouveauChantier) {
+    if (!chantierAChanger || nouveauChantier.id === chantierAChanger.id) {
+      fermerModalChangerChantier();
+      return;
+    }
+    // Trouver toutes les affectations de l'ancien chantier cette semaine et les déplacer
+    const affsAncien = planningCollectifData.filter(p =>
+      (p['Chantier'] || p['Chantiers'] || []).some(c => c.id === chantierAChanger.id)
+    );
+    fermerModalChangerChantier();
+    if (!affsAncien.length) {
+      // Pas d'affectations, juste recharger pour afficher le nouveau chantier
+      await loadPlanningCollectif();
+      return;
+    }
+    // Mettre à jour chaque affectation vers le nouveau chantier
+    const promises = affsAncien.map(aff =>
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + aff.id + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Chantier: [parseInt(nouveauChantier.id)] }) })
+    );
+    try {
+      await Promise.all(promises);
+    } catch(e) { alert('Erreur : ' + e.message); }
+    await loadPlanningCollectif();
+  }
+
+  function fermerModalChangerChantier(e) {
+    if (!e || e.target === document.getElementById('modal-changer-chantier')) {
+      document.getElementById('modal-changer-chantier').classList.remove('open');
+      chantierAChanger = null;
+    }
   }
 
   function filtrerCollaborateurs() { loadPlanningCollectif(); }
@@ -2744,13 +2867,34 @@
   </div>
 
   <div class="modal-backdrop" id="modal-collab-jour" onclick="fermerModalCollabJour(event)">
-    <div class="modal-sheet" style="max-height:70vh">
+    <div class="modal-sheet" style="max-height:75vh">
       <div class="modal-header"><h3 id="modal-collab-jour-title">Choisir collaborateur(s)</h3><button class="modal-close" onclick="fermerModalCollabJour()">✕</button></div>
+      <div class="modal-search">
+        <input type="text" id="search-collab-jour" placeholder="🔍 Rechercher…" oninput="filtrerListeCollabModal(this.value)" />
+      </div>
       <div class="modal-options" id="liste-collab-jour" style="overflow-y:auto;flex:1"></div>
+
       <div style="padding:12px 16px;display:flex;gap:8px">
         <button onclick="resetCollabJour()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Aucun</button>
         <button onclick="confirmerCollabCase()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ Affecter</button>
       </div>
+    </div>
+  </div>
+
+  <!-- MODAL CHANGER CHANTIER -->
+  <div class="modal-backdrop" id="modal-changer-chantier" onclick="fermerModalChangerChantier(event)">
+    <div class="modal-sheet" style="max-height:75vh">
+      <div class="modal-header">
+        <div>
+          <h3>🏗 Changer de chantier</h3>
+          <div style="font-size:11px;color:#aaa;margin-top:2px" id="modal-changer-chantier-sub"></div>
+        </div>
+        <button class="modal-close" onclick="fermerModalChangerChantier()">✕</button>
+      </div>
+      <div class="modal-search">
+        <input type="text" id="search-changer-chantier" placeholder="Rechercher un chantier…" oninput="filtrerListeChantiers(this.value)" />
+      </div>
+      <div class="modal-options" id="liste-changer-chantier" style="overflow-y:auto;flex:1"></div>
     </div>
   </div>
 
