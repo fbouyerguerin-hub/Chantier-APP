@@ -1134,7 +1134,7 @@
         'Date de début': debut,
         'Date de fin journée (inclus)': fin,
         Notes: document.getElementById('conges-notes').value || '',
-        Statut: 'En attente',
+        'Statut': 'En attente',
       };
 
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true`,
@@ -2867,17 +2867,22 @@
     // Charger les postes depuis la table Collaborateurs
     const selPoste = document.getElementById('user-poste');
     selPoste.innerHTML = '<option value="">-- Sélectionner un poste --</option>';
-    try {
-      const resPostes = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const dataPostes = await resPostes.json();
-      const postesUniques = [...new Set((dataPostes.results || []).map(r => r['Poste / Métier']).filter(Boolean))].sort();
+    let collabsData = COLLABORATEURS_ADMIN;
+    if (!collabsData.length) {
+      try {
+        const resPostes = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const dataPostes = await resPostes.json();
+        collabsData = (dataPostes.results || []).map(r => ({ nom: r['Nom Complet'] || '', poste: r['Poste / Métier'] || '', collabId: r.id }));
+      } catch(e) {}
+    }
+    const postesUniques = [...new Set(collabsData.map(c => c.poste).filter(Boolean))].sort();
+    if (postesUniques.length) {
       postesUniques.forEach(p => {
         const opt = document.createElement('option');
         opt.value = p; opt.textContent = p;
         selPoste.appendChild(opt);
       });
-    } catch(e) {
-      // Postes par défaut si erreur
+    } else {
       ['Pose','Apprenti','Chef de chantier','Conducteur de travaux','Bureau','Direction','Autre'].forEach(p => {
         const opt = document.createElement('option');
         opt.value = p; opt.textContent = p;
@@ -2894,7 +2899,14 @@
         document.getElementById('user-mdp').value = u['Mot de passe'] || '';
         document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
-        document.getElementById('user-poste').value = u['Poste / Métier'] || '';
+        // Chercher le poste dans la table Collaborateurs via le nom
+        const nomUser = u['Nom complet'] || '';
+        const collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
+        if (collabFound) {
+          document.getElementById('user-poste').value = collabFound.poste || '';
+        } else if (u['Poste / Métier']) {
+          document.getElementById('user-poste').value = u['Poste / Métier'];
+        }
       } catch(e) {}
     }
     document.getElementById('modal-user').style.display = 'flex';
@@ -2906,13 +2918,14 @@
 
   async function sauvegarderUser() {
     const rowId = document.getElementById('user-row-id').value;
+    const nomComplet = document.getElementById('user-nom').value;
+    const posteVal = document.getElementById('user-poste').value || '';
     const payload = {
-      'Nom complet': document.getElementById('user-nom').value,
+      'Nom complet': nomComplet,
       'Identifiant': document.getElementById('user-id').value,
       'Mot de passe': document.getElementById('user-mdp').value,
       'Droit': document.getElementById('user-droit').value,
       'Actif': document.getElementById('user-actif').value === 'true',
-      'Poste / Métier': document.getElementById('user-poste').value || '',
     };
     const btn = document.getElementById('btn-save-user');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
@@ -2921,6 +2934,18 @@
       const method = rowId ? 'PATCH' : 'POST';
       const res = await fetch(url, { method, headers: HEADERS, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(await res.text());
+      // Mettre à jour le poste dans la table Collaborateurs si le collab existe
+      if (posteVal) {
+        try {
+          const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+          const dataC = await resC.json();
+          const collab = (dataC.results || []).find(c => c['Nom Complet'] === nomComplet);
+          if (collab) {
+            await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collab.id + '/?user_field_names=true',
+              { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Poste / Métier': posteVal }) });
+          }
+        } catch(e) { console.log('Poste non mis à jour dans Collaborateurs', e); }
+      }
       fermerFormUser();
       await loadUtilisateurs();
     } catch(e) { alert('Erreur : ' + e.message); }
@@ -2989,7 +3014,7 @@
     document.getElementById('conge-admin-debut').value = '';
     document.getElementById('conge-admin-fin').value = '';
     document.getElementById('conge-admin-notes').value = '';
-    document.getElementById('conge-admin-statut').value = 'En attente';
+    document.getElementById('conge-admin-statut').value = 'En attente'; // Valeur par défaut
     document.getElementById('conge-admin-type').value = 'Congés payés';
     document.getElementById('conge-admin-nb-jours').textContent = '—';
     // Charger la liste des collaborateurs
@@ -3041,14 +3066,19 @@
     if (!collabId) { alert('⚠️ Veuillez choisir un collaborateur.'); return; }
     if (!debut || !fin) { alert('⚠️ Veuillez saisir les dates.'); return; }
     if (new Date(fin) < new Date(debut)) { alert('⚠️ La date de fin doit être après la date de début.'); return; }
+    const statutVal = document.getElementById('conge-admin-statut').value || 'En attente';
+    const typeVal = document.getElementById('conge-admin-type').value || 'Congés payés';
+    const collabIdInt = parseInt(collabId);
+    if (!collabIdInt) { alert('⚠️ Collaborateur invalide.'); return; }
     const payload = {
-      Collaborateurs: [parseInt(collabId)],
-      'Type de demande': document.getElementById('conge-admin-type').value,
+      Collaborateurs: [collabIdInt],
+      'Type de demande': typeVal,
       'Date de début': debut,
       'Date de fin journée (inclus)': fin,
-      Statut: document.getElementById('conge-admin-statut').value,
-      Notes: document.getElementById('conge-admin-notes').value || '',
+      'Statut': statutVal,
+      'Notes': document.getElementById('conge-admin-notes').value || '',
     };
+    console.log('Payload congé:', JSON.stringify(payload));
     const btn = document.getElementById('btn-save-conge-admin');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
     try {
