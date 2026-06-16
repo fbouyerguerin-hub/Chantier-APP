@@ -241,7 +241,7 @@
     #page-collectif.active { display: flex !important; }
     .aff-tag.dragging { opacity: 0.3; }
     #drag-cursor { position:fixed;pointer-events:none;z-index:9999;background:#fff3cd;border:2px solid #c8a96e;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:700;color:#2c2c2c;box-shadow:0 4px 20px rgba(0,0,0,0.25);transform:rotate(-2deg);white-space:nowrap;display:none;transition:none }
-    #drag-cursor::after { content:'✕ annuler';display:block;font-size:8px;color:#c0392b;font-weight:600;text-align:center;margin-top:2px;opacity:0.8 }
+
     .drop-hover { background:#e8f5e9 !important; outline:2px dashed #4a7c3f; }
     .aff-tag.selected-move { background:#fff3cd !important; border-color:#c8a96e !important; }
     .drop-zone-active { background: #e8f5e9 !important; border: 2px dashed var(--vert) !important; }
@@ -1535,8 +1535,9 @@
         const cg = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
         return c.nom.split(' ')[0] + ' (' + (cg?.['Type de demande']?.value||'Abs') + ')';
       });
+      const absentId = 'abs-' + dateStr;
       th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR',{day:'numeric',month:'short'}) + '</div>' +
-        (absents.length ? '<div style="background:rgba(255,100,100,0.25);border-radius:4px;padding:2px 3px;margin-top:2px;font-size:8px;line-height:1.5">' + absents.map(a=>'🚫 '+a).join('<br>') + '</div>' : '');
+        (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absents.map(a=>'🚫 '+a).join('<br>') + '</div>' : '');
       trH.appendChild(th);
     });
     thead.appendChild(trH);
@@ -1602,10 +1603,11 @@
 
           if (isGestAdmin && !isSaisie) {
             div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
-            // Démarrer le drag (PC: clic, Mobile: touchstart)
-            const startSelect = (x, y) => {
+            // Sélection au clic/tap — 2 taps pour déplacer
+            div.onclick = e => {
+              if (e.target.classList.contains('btn-del-aff')) return;
               if (collabDeplace) return;
-              document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor='grab'; });
+              document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor = 'grab'; });
               div.classList.add('selected-move');
               collabDeplace = { affId: aff.id, collabNom, chantier, dateStr };
               div.style.cursor = 'grabbing';
@@ -1613,27 +1615,29 @@
               const cursor = document.getElementById('drag-cursor');
               cursor.textContent = '👷 ' + collabNom.split(' ')[0];
               cursor.style.display = 'block';
-              cursor.style.left = (x + 14) + 'px';
-              cursor.style.top = (y - 40) + 'px';
+              cursor.style.left = (e.clientX + 14) + 'px';
+              cursor.style.top = (e.clientY - 14) + 'px';
             };
-            div.onclick = e => {
-              if (e.target.classList.contains('btn-del-aff')) return;
-              if (collabDeplace) return;
-              startSelect(e.clientX, e.clientY);
-            };
-            div.addEventListener('touchstart', e => {
-              if (e.target.classList.contains('btn-del-aff')) return;
-              if (collabDeplace) return;
-              e.stopPropagation();
-              const t = e.touches[0];
-              startSelect(t.clientX, t.clientY);
-            }, { passive: true });
           }
           td.appendChild(div);
         });
 
-        // Clic sur la case (PC)
+        // Clic/tap sur case
         if (isGestAdmin && !isPasseCollectif) {
+          let touchMoved = false;
+          td.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
+          td.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
+          td.addEventListener('touchend', e => {
+            if (touchMoved) return; // ignore scroll
+            if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+            e.preventDefault(); // bloque le click synthétique qui suit
+            if (collabDeplace) {
+              deplacerCollab(collabDeplace, chantier, dateStr);
+            } else {
+              ouvrirModalCollabCase(chantier, dateStr);
+            }
+          }, { passive: false });
+          // PC uniquement (touch a déjà appelé preventDefault donc click ne se déclenche pas)
           td.onclick = e => {
             if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
             if (collabDeplace) {
@@ -1642,13 +1646,6 @@
               ouvrirModalCollabCase(chantier, dateStr);
             }
           };
-          // Tap sur case vide (mobile, sans drag actif)
-          td.addEventListener('touchend', e => {
-            if (collabDeplace) return; // géré par le touchend global
-            if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
-            e.preventDefault();
-            ouvrirModalCollabCase(chantier, dateStr);
-          }, { passive: false });
         }
         tr.appendChild(td);
       });
@@ -1678,38 +1675,7 @@
     if (targetTd && targetTd._chantier) targetTd.classList.add('drop-hover');
   });
 
-  // Touch : ghost suit le doigt (mobile)
-  document.addEventListener('touchmove', e => {
-    if (!collabDeplace) return;
-    e.preventDefault();
-    const t = e.touches[0];
-    const cursor = document.getElementById('drag-cursor');
-    cursor.style.left = (t.clientX + 14) + 'px';
-    cursor.style.top = (t.clientY - 40) + 'px';
-    document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
-    const under = document.elementFromPoint(t.clientX, t.clientY);
-    const targetTd = under?.closest('td');
-    if (targetTd && targetTd._chantier) targetTd.classList.add('drop-hover');
-  }, { passive: false });
 
-  // Touch : déposer au relâchement (mobile)
-  document.addEventListener('touchend', e => {
-    if (!collabDeplace) return;
-    const t = e.changedTouches[0];
-    document.querySelectorAll('.drop-hover').forEach(el => el.classList.remove('drop-hover'));
-    const under = document.elementFromPoint(t.clientX, t.clientY);
-    const targetTd = under?.closest('td');
-    // Tap sur le curseur fantôme ou sur le collab sélectionné = annuler
-    const onGhost = under?.id === 'drag-cursor' || under?.closest('#drag-cursor');
-    const onSelectedTag = under?.closest('.aff-tag.selected-move');
-    if (onGhost || onSelectedTag) {
-      annulerDeplacement();
-    } else if (targetTd && targetTd._chantier && targetTd._dateStr) {
-      deplacerCollab(collabDeplace, targetTd._chantier, targetTd._dateStr);
-    } else {
-      annulerDeplacement();
-    }
-  });
 
   // Echap ou clic en dehors = annuler
   document.addEventListener('keydown', e => {
@@ -2025,6 +1991,11 @@
       document.getElementById('modal-changer-chantier').classList.remove('open');
       chantierAChanger = null;
     }
+  }
+
+  function toggleAbsents(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
   }
 
   function filtrerCollaborateurs() { loadPlanningCollectif(); }
@@ -2820,7 +2791,7 @@
     <div style="font-size:10px;color:rgba(255,255,255,0.6)" id="semaine-label-collectif">—</div>
   </div>
   <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
-  <div style="overflow:auto;-webkit-overflow-scrolling:touch;flex:1">
+  <div id="collectif-scroll-zone" style="overflow:auto;-webkit-overflow-scrolling:touch;flex:1">
     <table id="planning-collectif-grid" style="border-collapse:collapse;width:100%;min-width:340px;background:#fff"></table>
   </div>
 
