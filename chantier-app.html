@@ -765,13 +765,16 @@
     const filtered = q ? options.filter(o => o.value.toLowerCase().includes(q)) : options;
     const container = document.getElementById('modal-options');
     if (!filtered.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucun résultat</div>'; return; }
-    container.innerHTML = filtered.map(opt => {
+    container.innerHTML = '';
+    filtered.forEach(opt => {
       const isSel = current && current.id === opt.id;
-      const desc = modalKey === 'Zones' && ZONE_DESC[opt.value] ? `<span style="font-size:11px;color:#aaa;margin-left:8px">${ZONE_DESC[opt.value]}</span>` : '';
-      return `<div class="modal-option ${isSel?'selected':''}" onclick="selectOption(${opt.id},'${String(opt.value).replace(/'/g,"\'")}')">
-        <span>${opt.value}${desc}</span>${isSel?'<span class="check">✓</span>':''}
-      </div>`;
-    }).join('');
+      const desc = modalKey === 'Zones' && ZONE_DESC[opt.value] ? '<span style="font-size:11px;color:#aaa;margin-left:8px">' + ZONE_DESC[opt.value] + '</span>' : '';
+      const div = document.createElement('div');
+      div.className = 'modal-option' + (isSel ? ' selected' : '');
+      div.innerHTML = '<span>' + opt.value + desc + '</span>' + (isSel ? '<span class="check">✓</span>' : '');
+      div.onclick = () => selectOption(opt.id, opt.value);
+      container.appendChild(div);
+    });
   }
 
   function renderModalOptions() {
@@ -779,12 +782,15 @@
     const current = getCurrentValue();
     const container = document.getElementById('modal-options');
     if (!options.length) { container.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucune option trouvée</div>'; return; }
-    container.innerHTML = options.map(opt => {
+    container.innerHTML = '';
+    options.forEach(opt => {
       const isSel = current && current.id === opt.id;
-      return `<div class="modal-option ${isSel?'selected':''}" onclick="selectOption(${opt.id},'${String(opt.value).replace(/'/g,"\\'")}')">
-        ${opt.value}${isSel?'<span class="check">✓</span>':''}
-      </div>`;
-    }).join('');
+      const div = document.createElement('div');
+      div.className = 'modal-option' + (isSel ? ' selected' : '');
+      div.innerHTML = opt.value + (isSel ? '<span class="check">✓</span>' : '');
+      div.onclick = () => selectOption(opt.id, opt.value);
+      container.appendChild(div);
+    });
   }
 
   function selectOption(id, value) {
