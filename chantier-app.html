@@ -1833,26 +1833,28 @@
 
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
           const heuresSupSoldeInitial = parseFloat(c['Heures sup solde initial (h)']) || 0;
+          const soldeDeBasePrevisionnel = parseFloat(c['Solde de base prévisionnel (h)']) || 0;
 
           const heuresSup = calculerHeuresSupplementaires(toutesLesSaisies, c.id).total + heuresSupSoldeInitial;
           syncHeuresSupplementaires(c.id, heuresSup);
+          syncDejaPrisPrevisionnel(c.id, prisHeures);
 
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
-          const restantHeures = acquis - prisHeures;
+          const restePrevisionnel = Math.max(0, HEURES_PREVISIONNEL_ANNUEL_RTT - prisHeures) - soldeDeBasePrevisionnel;
 
           return `<tr>
             <td>${c['Nom Complet']}</td>
             <td class="valeur">${formatJoursRtt(acquis)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(acquis))} j${heuresSup > 0 ? ', +' + formatJoursRtt(heuresSup) + 'h sup' : ''})</span></td>
             <td class="valeur">${formatJoursRtt(pris)} j <span class="rtt-sub">(${formatJoursRtt(prisHeures)} h)</span></td>
-            <td class="valeur" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restantHeures)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</span></td>
+            <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base</span>` : ''}</td>
             <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
           </tr>`;
         }).join('');
 
       container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
-        <div class="rtt-note-annuelle">📌 Le cumul RTT théorique sur une année civile complète est d'environ <b>${HEURES_PREVISIONNEL_ANNUEL_RTT} h</b> par collaborateur. Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
+        <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
         (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
-          <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Restant</th><th>Attente</th></tr></thead>
+          <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
           <tbody>${lignes}</tbody>
         </table></div>` : '<div class="feuille-empty">Aucun collaborateur</div>');
     } catch(e) {
