@@ -1376,11 +1376,11 @@
         if (found) feuilleCollab = found;
       }
 
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100`;
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
       const res = await fetch(url, { headers: HEADERS });
       const data = await res.json();
 
-      // Filtrer par collaborateur connecté
+      // Filtrer par collaborateur connecté (sécurité, en plus du filtre serveur ci-dessus)
       const rows = (data.results || []).filter(r => {
         const collabs = r['Collaborateurs'] || [];
         return collabs.some(c => c.id === feuilleCollab.id);
