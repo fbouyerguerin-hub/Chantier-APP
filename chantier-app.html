@@ -172,6 +172,26 @@
     .demande-dates { font-size: 12px; color: var(--gris-moyen); margin-bottom: 4px; }
     .demande-jours { font-size: 12px; font-weight: 600; color: var(--vert); }
 
+    /* COMPTEUR RTT */
+    .rtt-solde-card { background: linear-gradient(135deg, var(--vert), #3a6331); border-radius: 16px; margin: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(44,44,44,0.12); }
+    .rtt-solde-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.85); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; text-align: center; }
+    .rtt-solde-grid { display: flex; justify-content: space-around; text-align: center; }
+    .rtt-solde-val { font-size: 26px; font-weight: 800; color: #fff; }
+    .rtt-solde-label { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 4px; font-weight: 600; }
+    .rtt-solde-sub { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 1px; }
+    .rtt-attente-info { margin: 0 16px; background: #fef3cd; border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #856404; font-weight: 600; text-align: center; }
+    .rtt-admin-row { background: #fff; border-radius: 12px; margin: 0 16px 10px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); }
+    .rtt-admin-nom { font-size: 14px; font-weight: 700; color: var(--gris); margin-bottom: 8px; }
+    .rtt-admin-stats { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .rtt-admin-quota-input { width: 60px; background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 8px; padding: 6px 8px; font-size: 13px; text-align: center; }
+    .rtt-admin-stat { font-size: 12px; color: var(--gris-moyen); font-weight: 600; }
+    .rtt-admin-stat b { color: var(--vert); }
+    .rtt-dates-title { font-size: 12px; font-weight: 700; color: var(--gris-moyen); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 16px 8px; }
+    .rtt-date-row { background: #fff; border-radius: 12px; margin: 0 16px 8px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); border-left: 4px solid var(--vert); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .rtt-date-row-dates { font-size: 13px; font-weight: 600; color: var(--gris); }
+    .rtt-date-row-jours { font-size: 12px; font-weight: 700; color: var(--vert); white-space: nowrap; }
+    .rtt-legende { text-align: center; font-size: 11px; color: var(--gris-moyen); font-style: italic; margin: 8px 16px 0; }
+
     /* PLANNING HORIZONTAL */
     .planning-header { background: linear-gradient(135deg, #2c2c2c 0%, #4a5240 100%); margin: 16px; border-radius: 14px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(44,44,44,0.15); }
     .planning-semaine { font-size: 14px; font-weight: 700; color: #fff; }
@@ -663,6 +683,8 @@
     if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
+    const tabRttAdmin = document.getElementById('tab-rtt-admin');
+    if (tabRttAdmin) tabRttAdmin.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none';
     // Masquer la section bulles si collaborateur simple
     const sectionBulles = document.getElementById('section-bulles-collectif');
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
@@ -965,6 +987,9 @@
     } else if (nav === 'planning') {
       showPage('page-planning');
       loadPlanning();
+    } else if (nav === 'rtt') {
+      showPage('page-rtt');
+      loadRTT();
     } else if (nav === 'collectif') {
       showPage('page-collectif');
       loadPlanningCollectif();
@@ -1307,6 +1332,244 @@
         </div>`;
       }).join('') + '<div style="height:20px"></div>';
 
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
+    }
+  }
+
+  // ── COMPTEUR RTT ──
+  const TYPES_ABSENCE_BLOQUANTS_RTT = ['Congés payés', 'Maladie', 'Sans solde', 'Accident'];
+  const HEURES_RTT_PAR_SEMAINE = 4;
+  const HEURES_PAR_JOUR_RTT = 8; // 1 journée prise = 8h déduites
+
+  function switchRttTab(tab) {
+    document.getElementById('tab-rtt-perso').classList.toggle('active', tab === 'perso');
+    document.getElementById('tab-rtt-admin').classList.toggle('active', tab === 'admin');
+    document.getElementById('rtt-perso').style.display = tab === 'perso' ? 'block' : 'none';
+    document.getElementById('rtt-admin').style.display = tab === 'admin' ? 'block' : 'none';
+    if (tab === 'admin') loadRTTAdmin();
+  }
+
+  async function loadRTT() {
+    switchRttTab('perso');
+    await loadRTTPerso();
+  }
+
+  function formatJoursRtt(n) {
+    return (Math.round(n * 10) / 10).toString().replace('.', ',');
+  }
+
+  function heuresEnJoursRtt(h) { return h / HEURES_PAR_JOUR_RTT; }
+  function joursEnHeuresRtt(j) { return j * HEURES_PAR_JOUR_RTT; }
+
+  function dateYMD(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // Calcule le nombre d'heures de RTT acquises sur l'année civile en cours :
+  // 4h par semaine complète (lundi-vendredi) entièrement passée, sans absence bloquante
+  // ET avec au moins une saisie de temps dans la semaine.
+  function calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie) {
+    const annee = new Date().getFullYear();
+    const aujourdHuiStr = dateYMD(new Date());
+    let lundi = new Date(annee, 0, 1);
+    while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
+
+    const plages = absencesBloquantes.map(r => ({
+      debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
+      fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
+    })).filter(p => p.debut);
+
+    let semainesCompletes = 0;
+    while (lundi.getFullYear() === annee) {
+      const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+      const vendrediStr = dateYMD(vendredi);
+      if (vendrediStr > aujourdHuiStr) break; // semaine pas encore terminée
+      const lundiStr = dateYMD(lundi);
+      const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
+      const sansSaisie = semainesAvecSaisie ? !semainesAvecSaisie.has(lundiStr) : false;
+      if (!semaineBloquee && !sansSaisie) semainesCompletes++;
+      lundi.setDate(lundi.getDate() + 7);
+    }
+    return semainesCompletes * HEURES_RTT_PAR_SEMAINE;
+  }
+
+  // Récupère toutes les saisies de temps sur une période (pagination incluse), pour un collaborateur ou tous
+  async function fetchSaisiesPeriodeRtt(dateDebut, dateFin, collabId) {
+    let allRows = [], page = 1, hasMore = true;
+    while (hasMore) {
+      let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
+        '/?user_field_names=true&size=200&page=' + page +
+        '&filter__Date__date_after_or_equal=' + dateDebut +
+        '&filter__Date__date_before_or_equal=' + dateFin;
+      if (collabId) url += '&filter__Collaborateur__link_row_has=' + collabId;
+      const res = await fetch(url, { headers: HEADERS });
+      const data = await res.json();
+      allRows = allRows.concat(data.results || []);
+      hasMore = !!data.next;
+      page++;
+    }
+    return allRows;
+  }
+
+  // À partir de lignes de saisies, construit un Set des lundis (YMD) des semaines ayant au moins une saisie.
+  // Si collabId est fourni, ne prend en compte que les lignes de ce collaborateur (utile pour la vue admin groupée).
+  function semainesAvecSaisieDepuisLignes(saisies, collabId) {
+    const set = new Set();
+    saisies.forEach(r => {
+      if (!r['Date']) return;
+      if (collabId !== undefined) {
+        const id = (r['Collaborateur'] || [])[0]?.id;
+        if (id !== collabId) return;
+      }
+      const dateStr = String(r['Date']).split('T')[0];
+      const d = new Date(dateStr + 'T12:00:00');
+      const day = d.getDay();
+      const diff = (day === 0 ? -6 : 1 - day);
+      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+      set.add(dateYMD(lundi));
+    });
+    return set;
+  }
+
+  async function loadRTTPerso() {
+    const container = document.getElementById('rtt-perso-content');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      if (!feuilleCollab || !feuilleCollab.id) {
+        await loadTable('Collaborateur');
+        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
+        if (found) feuilleCollab = found;
+      }
+      if (!feuilleCollab || !feuilleCollab.id) {
+        container.innerHTML = '<div class="feuille-empty">❌ Collaborateur introuvable.</div>';
+        return;
+      }
+
+      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const dataConges = await resConges.json();
+      const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
+
+      const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
+      let pris = 0, enAttente = 0;
+      demandesRtt.forEach(r => {
+        const jours = parseFloat(r['Nombre de jour']) || 0;
+        const statut = r['Statut']?.value || 'En attente';
+        if (statut === 'Validé' || statut === 'Approuvé') pris += jours;
+        else if (statut === 'En attente') enAttente += jours;
+      });
+
+      const absencesBloquantes = congesCollab.filter(r => {
+        const type = r['Type de demande']?.value;
+        const statut = r['Statut']?.value || 'En attente';
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+      });
+
+      const anneeEnCours = new Date().getFullYear();
+      const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
+      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
+
+      const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+      const restantHeures = acquis - joursEnHeuresRtt(pris);
+
+      const validees = demandesRtt
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
+        .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
+
+      const listeDatesHtml = validees.length ? `
+        <div class="rtt-dates-title">📅 Dates RTT validées</div>
+        ${validees.map(r => {
+          const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+          const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+          const jours = parseFloat(r['Nombre de jour']) || 0;
+          const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
+          return `<div class="rtt-date-row">
+            <div class="rtt-date-row-dates">${datesLabel}</div>
+            <div class="rtt-date-row-jours">${formatJoursRtt(jours)} j</div>
+          </div>`;
+        }).join('')}
+      ` : '';
+
+      container.innerHTML = `
+        <div class="rtt-solde-card">
+          <div class="rtt-solde-title">🔄 Solde RTT — ${feuilleCollab.value}</div>
+          <div class="rtt-solde-grid">
+            <div>
+              <div class="rtt-solde-val">${formatJoursRtt(acquis)} h</div>
+              <div class="rtt-solde-sub">${formatJoursRtt(heuresEnJoursRtt(acquis))} j</div>
+              <div class="rtt-solde-label">Acquis</div>
+            </div>
+            <div>
+              <div class="rtt-solde-val">${formatJoursRtt(pris)} j</div>
+              <div class="rtt-solde-sub">${formatJoursRtt(joursEnHeuresRtt(pris))} h</div>
+              <div class="rtt-solde-label">Pris</div>
+            </div>
+            <div>
+              <div class="rtt-solde-val" style="${restantHeures < 0 ? 'color:#f5b7b1' : ''}">${formatJoursRtt(restantHeures)} h</div>
+              <div class="rtt-solde-sub">${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j</div>
+              <div class="rtt-solde-label">Restant</div>
+            </div>
+          </div>
+        </div>
+        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+        ${enAttente > 0 ? `<div class="rtt-attente-info">⏳ ${formatJoursRtt(enAttente)} j (${formatJoursRtt(joursEnHeuresRtt(enAttente))} h) en attente de validation</div>` : ''}
+        ${listeDatesHtml}
+      `;
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
+    }
+  }
+
+  async function loadRTTAdmin() {
+    const container = document.getElementById('rtt-admin-content');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const collabs = (await resCollabs.json()).results || [];
+
+      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const conges = (await resConges.json()).results || [];
+
+      const anneeEnCours = new Date().getFullYear();
+      const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), null);
+
+      const lignes = collabs
+        .filter(c => c['Nom Complet'])
+        .sort((a, b) => (a['Nom Complet'] || '').localeCompare(b['Nom Complet'] || ''))
+        .map(c => {
+          const congesCollab = conges.filter(r => (r['Collaborateurs'] || []).some(co => co.id === c.id));
+          const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
+
+          let pris = 0, enAttente = 0;
+          demandesRtt.forEach(r => {
+            const jours = parseFloat(r['Nombre de jour']) || 0;
+            const statut = r['Statut']?.value || 'En attente';
+            if (statut === 'Validé' || statut === 'Approuvé') pris += jours;
+            else if (statut === 'En attente') enAttente += jours;
+          });
+
+          const absencesBloquantes = congesCollab.filter(r => {
+            const type = r['Type de demande']?.value;
+            const statut = r['Statut']?.value || 'En attente';
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+          });
+          const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
+          const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+          const restantHeures = acquis - joursEnHeuresRtt(pris);
+
+          return `<div class="rtt-admin-row">
+            <div class="rtt-admin-nom">${c['Nom Complet']}</div>
+            <div class="rtt-admin-stats">
+              <span class="rtt-admin-stat">Acquis : <b>${formatJoursRtt(acquis)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(acquis))} j)</i></span>
+              <span class="rtt-admin-stat">Pris : <b>${formatJoursRtt(pris)} j</b> <i>(${formatJoursRtt(joursEnHeuresRtt(pris))} h)</i></span>
+              <span class="rtt-admin-stat" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">Restant : <b>${formatJoursRtt(restantHeures)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</i></span>
+              ${enAttente > 0 ? `<span class="rtt-admin-stat" style="color:#856404">⏳ ${formatJoursRtt(enAttente)} j</span>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+
+      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>` +
+        (lignes || '<div class="feuille-empty">Aucun collaborateur</div>');
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
     }
@@ -4153,6 +4416,30 @@
   </div>
 </div>
 
+<!-- PAGE RTT -->
+<div id="page-rtt" class="page">
+
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-rtt-perso" onclick="switchRttTab('perso')">📊 Mon solde</button>
+    <button class="tab-btn" id="tab-rtt-admin" style="display:none" onclick="switchRttTab('admin')">👥 Vue équipe</button>
+  </div>
+
+  <div id="rtt-perso">
+    <div id="rtt-perso-content" style="padding:8px 0">
+      <div class="feuille-loading">⏳ Chargement…</div>
+    </div>
+  </div>
+
+  <div id="rtt-admin" style="display:none">
+    <div style="padding:8px 16px 0">
+      <div id="rtt-admin-content">
+        <div class="feuille-loading">⏳ Chargement…</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
 <!-- NAVIGATION BAS -->
 <div class="bottom-nav">
   <div class="nav-bar" id="nav-bar"></div>
@@ -4171,6 +4458,10 @@
   <button class="nav-btn" id="nav-planning" onclick="switchPage('planning')">
     <span class="nav-icon">📅</span>
     Mon planning
+  </button>
+  <button class="nav-btn" id="nav-rtt" onclick="switchPage('rtt')">
+    <span class="nav-icon">🔄</span>
+    RTT
   </button>
   <button class="nav-btn" id="nav-collectif" style="display:none" onclick="switchPage('collectif')">
     <span class="nav-icon">📋</span>
