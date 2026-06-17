@@ -122,7 +122,7 @@
     .nav-btn { flex: 1; padding: 14px 8px 18px; display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; border: none; background: none; color: #94a3b8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
     .nav-btn.active { color: var(--beige); }
     .nav-btn .nav-icon { font-size: 25px; }
-    .nav-bar { height: 3px; background: linear-gradient(90deg, var(--beige), var(--vert)); position: absolute; top: 0; transition: left 0.3s; width: 50%; }
+    .nav-bar { height: 3px; background: linear-gradient(90deg, var(--beige), var(--vert)); position: absolute; top: 0; transition: left 0.25s, width 0.25s; }
     body { padding-bottom: 80px; }
 
     /* FEUILLE D'HEURES */
@@ -704,6 +704,7 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     showPage('page-form');
     chargerMessage();
+    setTimeout(positionnerNavBar, 0);
   }
 
   const TABLES = {
@@ -986,11 +987,24 @@
   // ── NAVIGATION ──
   let currentNav = 'saisie';
 
+  function positionnerNavBar() {
+    const nav = document.querySelector('.bottom-nav');
+    const navBarEl = document.getElementById('nav-bar');
+    const actif = document.querySelector('.nav-btn.active');
+    if (!nav || !navBarEl || !actif || actif.offsetParent === null) return;
+    const rectNav = nav.getBoundingClientRect();
+    const rectBtn = actif.getBoundingClientRect();
+    navBarEl.style.width = rectBtn.width + 'px';
+    navBarEl.style.left = (rectBtn.left - rectNav.left) + 'px';
+  }
+  window.addEventListener('resize', () => positionnerNavBar());
+
   function switchPage(nav) {
     currentNav = nav;
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const navBtn = document.getElementById('nav-' + nav);
     if (navBtn) navBtn.classList.add('active');
+    positionnerNavBar();
     if (nav === 'saisie') {
       showPage('page-form');
     } else if (nav === 'feuille') {
@@ -4981,6 +4995,61 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
+
+  // Permet de changer de page en glissant le doigt latéralement sur la barre de navigation,
+  // sans avoir besoin de relâcher puis de retaper un autre bouton.
+  (function initGlissementNav() {
+    const nav = document.querySelector('.bottom-nav');
+    if (!nav) return;
+    nav.style.touchAction = 'none';
+
+    let enGlissement = false;
+    let dernierBtn = null;
+    let aGlisse = false;
+
+    function boutonSousLePoint(x, y) {
+      const el = document.elementFromPoint(x, y);
+      const btn = el && el.closest('.nav-btn');
+      if (!btn || btn.offsetParent === null) return null; // ignore les boutons masqués (display:none)
+      return btn;
+    }
+
+    nav.addEventListener('pointerdown', (e) => {
+      const btn = e.target.closest('.nav-btn');
+      if (!btn) return;
+      enGlissement = true;
+      aGlisse = false;
+      dernierBtn = btn;
+      try { nav.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+
+    nav.addEventListener('pointermove', (e) => {
+      if (!enGlissement) return;
+      const btn = boutonSousLePoint(e.clientX, e.clientY);
+      if (btn && btn !== dernierBtn) {
+        dernierBtn = btn;
+        aGlisse = true;
+        const action = btn.getAttribute('onclick');
+        if (action) new Function(action)();
+      }
+    });
+
+    function finGlissement() {
+      enGlissement = false;
+      dernierBtn = null;
+    }
+    nav.addEventListener('pointerup', finGlissement);
+    nav.addEventListener('pointercancel', finGlissement);
+
+    // Si un glissement a eu lieu, on annule le clic de relâchement pour éviter un double déclenchement.
+    nav.addEventListener('click', (e) => {
+      if (aGlisse) {
+        e.preventDefault();
+        e.stopPropagation();
+        aGlisse = false;
+      }
+    }, true);
+  })();
 </script>
 </body>
 </html>
