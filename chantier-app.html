@@ -1471,14 +1471,36 @@
 
   // Calcule le nombre d'heures déduites pour une demande RTT donnée.
   // Si la demande a été saisie en heures (champ "Nombre d'heures" rempli), on l'utilise directement.
-  // Sinon (saisie en jour(s)), on compte 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés.
-  function heuresRttDemande(r) {
+  // Sinon (saisie en jour(s)), on compte 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés —
+  // SAUF si la demande ne porte que sur un seul jour ET qu'une saisie réelle existe ce jour-là sur le
+  // chantier "ABSENCE" pour ce collaborateur avec un nombre d'heures différent : dans ce cas, on utilise
+  // la saisie réelle (heures réellement saisies) à la place de la valeur théorique.
+  function heuresRttDemande(r, saisies, collabId) {
     const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
     if (heuresExplicites > 0) return heuresExplicites;
 
     const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
     const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
     if (!debutStr) return 0;
+
+    if (saisies && collabId !== undefined && debutStr === finStr) {
+      const dUnique = new Date(debutStr + 'T12:00:00');
+      const jourUnique = dUnique.getDay();
+      if (jourUnique >= 1 && jourUnique <= 5) {
+        const theorique = (jourUnique === 5) ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+        const saisieAbsence = saisies.find(s => {
+          const sid = (s['Collaborateur'] || [])[0]?.id;
+          const sdate = s['Date'] ? String(s['Date']).split('T')[0] : null;
+          const chantiers = s['Chantiers'] || [];
+          return sid === collabId && sdate === debutStr && chantiers.some(ch => ch.value === 'ABSENCE');
+        });
+        if (saisieAbsence) {
+          const heuresReelles = parseFloat(saisieAbsence['Heures Normales']) || 0;
+          if (heuresReelles !== theorique) return heuresReelles;
+        }
+      }
+    }
+
     let total = 0;
     let d = new Date(debutStr + 'T12:00:00');
     const fin = new Date((finStr || debutStr) + 'T12:00:00');
@@ -1647,11 +1669,15 @@
       const dataConges = await resConges.json();
       const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
 
+      const anneeEnCours = new Date().getFullYear();
+      const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
+      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
+
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
       let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
       demandesRtt.forEach(r => {
         const jours = joursRttDemande(r);
-        const heures = heuresRttDemande(r);
+        const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
         const statut = r['Statut']?.value || 'En attente';
         if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
         else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
@@ -1662,10 +1688,6 @@
         const statut = r['Statut']?.value || 'En attente';
         return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
       });
-
-      const anneeEnCours = new Date().getFullYear();
-      const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
-      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
 
       const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
       const collabRow = await resCollabRow.json();
@@ -1699,7 +1721,7 @@
                 const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
                 const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
                 const jours = joursRttDemande(r);
-                const heures = heuresRttDemande(r);
+                const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
                 const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
                 return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td><td class="valeur" style="color:#856404">⏳ En attente</td></tr>`;
               }).join('')}
@@ -1721,7 +1743,7 @@
                 const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
                 const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
                 const jours = joursRttDemande(r);
-                const heures = heuresRttDemande(r);
+                const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
                 const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
                 return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td></tr>`;
               }).join('')}
@@ -1791,7 +1813,7 @@
           <table class="rtt-table">
             <tbody>
               <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
-              <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span></td></tr>
+              <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span><span class="rtt-sub" style="font-style:italic">à titre indicatif : correspond aux heures validées mais non consommées</span></td></tr>
               <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - soldeDeBasePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h de solde de base</span>` : ''}</td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody>
@@ -1832,7 +1854,7 @@
           let pris = 0, enAttente = 0, prisHeures = 0;
           demandesRtt.forEach(r => {
             const jours = joursRttDemande(r);
-            const heures = heuresRttDemande(r);
+            const heures = heuresRttDemande(r, toutesLesSaisies, c.id);
             const statut = r['Statut']?.value || 'En attente';
             if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
             else if (statut === 'En attente') enAttente += jours;
@@ -3687,7 +3709,7 @@
           ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
           <div style="display:flex;gap:8px;margin-top:10px">
             ${isAttente ? `
-            <button onclick="validerConge(${r.id},'Validé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
+            <button onclick="validerConge(${r.id},'Approuvé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
             <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
             ` : ''}
             <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
@@ -3883,9 +3905,12 @@
   }
 
   async function validerConge(rowId, statut) {
-    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true',
-      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statut }) });
-    await loadCongesAdmin();
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statut }) });
+      if (!res.ok) throw new Error(await res.text());
+      await loadCongesAdmin();
+    } catch(e) { alert('Erreur lors de la mise à jour du statut : ' + e.message); }
   }
 
   const VUE_FEUILLE_HEURES = '1990719';
