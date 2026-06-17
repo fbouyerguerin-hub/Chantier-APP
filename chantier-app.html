@@ -1201,6 +1201,7 @@
     el.textContent = type;
     el.classList.remove('empty');
     document.getElementById('modal-conges').classList.remove('open');
+    calcJours();
   }
 
   let uniteCongesSelected = 'jour';
@@ -1213,6 +1214,18 @@
     document.getElementById('champ-conges-nb-jours').style.display = unite === 'jour' ? '' : 'none';
     document.getElementById('champ-conges-nb-heures').style.display = unite === 'heure' ? '' : 'none';
     calcJours();
+  }
+
+  // Compte le nombre de jours entre deux dates (inclus) en excluant certains jours de la semaine.
+  // joursExclus : tableau de numéros de jour à exclure (0=dimanche, 6=samedi).
+  function compterJoursSelonType(debutStr, finStr, joursExclus) {
+    const d1 = new Date(debutStr + 'T12:00:00');
+    const d2 = new Date(finStr + 'T12:00:00');
+    let count = 0;
+    for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
+      if (!joursExclus.includes(d.getDay())) count++;
+    }
+    return count;
   }
 
   function calcJours() {
@@ -1241,8 +1254,16 @@
     if (debut && fin) {
       const d1 = new Date(debut + 'T12:00:00');
       const d2 = new Date(fin + 'T12:00:00');
-      const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
-      el.textContent = diff > 0 ? diff + (diff > 1 ? ' jours' : ' jour') : '⚠️ Date invalide';
+      let diff;
+      if (typeCongesSelected === 'RTT') {
+        diff = compterJoursSelonType(debut, fin, [0, 6]); // exclut samedi et dimanche
+      } else if (typeCongesSelected === 'Congés payés') {
+        diff = compterJoursSelonType(debut, fin, [0]); // exclut uniquement le dimanche
+      } else {
+        diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+      }
+      const labelUnite = typeCongesSelected === 'RTT' ? ' jour(s) ouvré(s) (lun-ven)' : typeCongesSelected === 'Congés payés' ? ' jour(s) ouvrable(s) (lun-sam)' : (diff > 1 ? ' jours' : ' jour');
+      el.textContent = diff > 0 ? diff + labelUnite : '⚠️ Date invalide';
 
       if (elFeries && diff > 0) {
         const feriesInclus = [];
@@ -1719,8 +1740,6 @@
               <tr><th>Prévisionnel annuel</th><td class="valeur">${HEURES_PREVISIONNEL_ANNUEL_RTT} h</td></tr>
               <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h</td></tr>
               <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)} h de solde de base</span>` : ''}</td></tr>
-              <tr><th>Jours restants</th><td class="valeur">${joursRestants} j <span class="rtt-sub">(${semainesRestantes} semaine${semainesRestantes > 1 ? 's' : ''})</span></td></tr>
-              ${rythmeIndicatif > 0 ? `<tr><th>Rythme indicatif</th><td class="valeur">≈ ${formatJoursRtt(rythmeIndicatif)} h/semaine</td></tr>` : ''}
             </tbody>
           </table>
         </div>
@@ -3669,9 +3688,18 @@
     const fin = document.getElementById('conge-admin-fin').value;
     const el = document.getElementById('conge-admin-nb-jours');
     const elFeries = document.getElementById('conge-admin-feries-info');
+    const typeSelectionne = document.getElementById('conge-admin-type').value;
     if (debut && fin) {
-      const diff = Math.round((new Date(fin) - new Date(debut)) / 86400000) + 1;
-      el.textContent = diff > 0 ? diff + (diff > 1 ? ' jours' : ' jour') : '⚠️ Invalide';
+      let diff;
+      if (typeSelectionne === 'RTT') {
+        diff = compterJoursSelonType(debut, fin, [0, 6]); // exclut samedi et dimanche
+      } else if (typeSelectionne === 'Congés payés') {
+        diff = compterJoursSelonType(debut, fin, [0]); // exclut uniquement le dimanche
+      } else {
+        diff = Math.round((new Date(fin) - new Date(debut)) / 86400000) + 1;
+      }
+      const labelUnite = typeSelectionne === 'RTT' ? ' j. ouvré(s) (lun-ven)' : typeSelectionne === 'Congés payés' ? ' j. ouvrable(s) (lun-sam)' : (diff > 1 ? ' jours' : ' jour');
+      el.textContent = diff > 0 ? diff + labelUnite : '⚠️ Invalide';
 
       if (elFeries && diff > 0) {
         const d1 = new Date(debut + 'T12:00:00');
@@ -4637,7 +4665,7 @@
     </div>
     <div class="field">
       <label>Type de demande <span style="color:#c0392b">*</span></label>
-      <select id="conge-admin-type" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+      <select id="conge-admin-type" onchange="calcJoursAdmin()" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
         <option value="Congés payés">🏖️ Congés payés</option>
         <option value="RTT">📅 RTT</option>
         <option value="Maladie">🤒 Maladie</option>
