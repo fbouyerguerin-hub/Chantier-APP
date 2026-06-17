@@ -1391,6 +1391,11 @@
         return;
       }
 
+      // Récupère les saisies de l'année en cours pour corriger l'affichage des demandes RTT d'un seul
+      // jour avec la valeur réellement saisie (chantier ABSENCE / sous-tâche RTT), si elle diffère.
+      const anneeEnCoursSuivi = new Date().getFullYear();
+      const saisiesCollabSuivi = await fetchSaisiesPeriodeRtt(anneeEnCoursSuivi + '-01-01', dateYMD(new Date()), feuilleCollab.id);
+
       // Trier par date de création (plus récent en premier)
       rows.reverse();
 
@@ -1401,7 +1406,14 @@
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
         const jours = r['Nombre de jour'] || '—';
-        const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+        let heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+        if (!heuresExplicites && typeRaw === 'RTT' && r['Date de début'] && r['Date de fin journée (inclus)']
+            && String(r['Date de début']).split('T')[0] === String(r['Date de fin journée (inclus)']).split('T')[0]) {
+          const dUnique = new Date(String(r['Date de début']).split('T')[0] + 'T12:00:00');
+          const theoriqueUnique = dUnique.getDay() === 5 ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+          const heuresCorrigees = heuresRttDemande(r, saisiesCollabSuivi, feuilleCollab.id);
+          if (heuresCorrigees !== theoriqueUnique) heuresExplicites = heuresCorrigees;
+        }
 
         let statutClass = 'attente';
         let statutEmoji = '⏳';
@@ -1469,12 +1481,23 @@
   function heuresEnJoursRtt(h) { return h / HEURES_PAR_JOUR_RTT; }
   function joursEnHeuresRtt(j) { return j * HEURES_PAR_JOUR_RTT; }
 
+  // Synchronise la valeur réelle d'heures dans la demande de congé elle-même (champ "Nombre d'heures"),
+  // sans bloquer l'affichage. Une fois écrite, la demande devient "en mode heure" et affichera directement
+  // cette valeur partout (Mes demandes, Vue équipe, export…).
+  async function syncHeuresReellesConge(rowId, heures) {
+    try {
+      await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ "Nombre d'heures": heures }) });
+    } catch(e) {}
+  }
+
   // Calcule le nombre d'heures déduites pour une demande RTT donnée.
   // Si la demande a été saisie en heures (champ "Nombre d'heures" rempli), on l'utilise directement.
   // Sinon (saisie en jour(s)), on compte 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés —
   // SAUF si la demande ne porte que sur un seul jour ET qu'une saisie réelle existe ce jour-là sur le
-  // chantier "ABSENCE" pour ce collaborateur avec un nombre d'heures différent : dans ce cas, on utilise
-  // la saisie réelle (heures réellement saisies) à la place de la valeur théorique.
+  // chantier "ABSENCE" / sous-tâche "RTT" pour ce collaborateur, avec un total d'heures différent : dans ce
+  // cas, on utilise la saisie réelle (heures réellement saisies) à la place de la valeur théorique, ET on
+  // écrit cette valeur réelle directement dans la demande de congé (champ "Nombre d'heures").
   function heuresRttDemande(r, saisies, collabId) {
     const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
     if (heuresExplicites > 0) return heuresExplicites;
@@ -1488,15 +1511,21 @@
       const jourUnique = dUnique.getDay();
       if (jourUnique >= 1 && jourUnique <= 5) {
         const theorique = (jourUnique === 5) ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
-        const saisieAbsence = saisies.find(s => {
+        const lignesAbsenceRtt = saisies.filter(s => {
           const sid = (s['Collaborateur'] || [])[0]?.id;
           const sdate = s['Date'] ? String(s['Date']).split('T')[0] : null;
           const chantiers = s['Chantiers'] || [];
-          return sid === collabId && sdate === debutStr && chantiers.some(ch => ch.value === 'ABSENCE');
+          const sousTaches = s['Sous Taches'] || [];
+          return sid === collabId && sdate === debutStr
+            && chantiers.some(ch => ch.value === 'ABSENCE')
+            && sousTaches.some(st => st.value === 'RTT');
         });
-        if (saisieAbsence) {
-          const heuresReelles = parseFloat(saisieAbsence['Heures Normales']) || 0;
-          if (heuresReelles !== theorique) return heuresReelles;
+        if (lignesAbsenceRtt.length) {
+          const heuresReelles = lignesAbsenceRtt.reduce((sum, s) => sum + (parseFloat(s['Heures Normales']) || 0), 0);
+          if (heuresReelles !== theorique) {
+            if (r.id) syncHeuresReellesConge(r.id, heuresReelles);
+            return heuresReelles;
+          }
         }
       }
     }
