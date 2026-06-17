@@ -184,8 +184,12 @@
     .rtt-legende { text-align: center; font-size: 11px; color: var(--gris-moyen); font-style: italic; margin: 8px 16px 0; }
     .rtt-note-annuelle { margin: 10px 16px 0; background: var(--beige-clair); border: 1px solid #ddd5c5; border-radius: 10px; padding: 12px 14px; font-size: 12px; color: var(--gris); line-height: 1.5; text-align: center; }
     .rtt-note-annuelle b { color: var(--vert); }
-    .rtt-progress-wrap { margin: 4px 16px 0; background: #ece6d8; border-radius: 8px; height: 10px; overflow: hidden; }
-    .rtt-progress-bar { height: 100%; background: linear-gradient(90deg, var(--vert), #3a6331); border-radius: 8px; transition: width 0.3s; }
+    .rtt-progress-wrap { margin: 4px 16px 0; background: #ece6d8; border-radius: 8px; height: 14px; overflow: hidden; display: flex; }
+    .rtt-progress-seg { height: 100%; transition: width 0.3s; }
+    .rtt-progress-seg-pris { background: linear-gradient(90deg, var(--vert), #3a6331); }
+    .rtt-progress-seg-base { background: linear-gradient(90deg, #d99a3d, #b97a1f); }
+    .rtt-progress-legend { display: flex; justify-content: center; gap: 16px; margin: 6px 16px 0; font-size: 11px; color: var(--gris-moyen); }
+    .rtt-progress-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
     .rtt-progress-label { text-align: center; font-size: 11px; color: var(--gris-moyen); margin: 6px 16px 0; }
 
     /* PLANNING HORIZONTAL */
@@ -1644,6 +1648,7 @@
       const collabRow = await resCollabRow.json();
       const rttSoldeInitial = parseFloat(collabRow['RTT solde initial (h)']) || 0;
       const heuresSupSoldeInitial = parseFloat(collabRow['Heures sup solde initial (h)']) || 0;
+      const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
 
       const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
 
@@ -1652,7 +1657,6 @@
       syncHeuresSupplementaires(feuilleCollab.id, heuresSup);
 
       const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
-      const restantHeures = acquis - prisHeures;
 
       const validees = demandesRtt
         .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
@@ -1695,28 +1699,40 @@
       ` : '';
 
       const { joursRestants, semainesRestantes } = decompteAnneeRtt();
-      const soldeDeBase = rttSoldeInitial + heuresSupSoldeInitial;
-      const dejaPrisPrevisionnel = prisHeures + soldeDeBase;
-      syncDejaPrisPrevisionnel(feuilleCollab.id, dejaPrisPrevisionnel);
-      const restePrevisionnel = Math.max(0, HEURES_PREVISIONNEL_ANNUEL_RTT - dejaPrisPrevisionnel);
-      const pctAtteint = Math.min(100, Math.round((dejaPrisPrevisionnel / HEURES_PREVISIONNEL_ANNUEL_RTT) * 100));
+      syncDejaPrisPrevisionnel(feuilleCollab.id, prisHeures);
+      const restePrevisionnel = Math.max(0, HEURES_PREVISIONNEL_ANNUEL_RTT - prisHeures) - soldeDeBasePrevisionnel;
+      const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
+      const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / HEURES_PREVISIONNEL_ANNUEL_RTT) * 100));
       const rythmeIndicatif = semainesRestantes > 0 && restePrevisionnel > 0 ? restePrevisionnel / semainesRestantes : 0;
+
+      const pctPris = Math.min(100, (prisHeures / HEURES_PREVISIONNEL_ANNUEL_RTT) * 100);
+      const pctSoldeBase = Math.min(100 - pctPris, (soldeDeBasePrevisionnel / HEURES_PREVISIONNEL_ANNUEL_RTT) * 100);
+      const depassement = totalConsommePrevisionnel - HEURES_PREVISIONNEL_ANNUEL_RTT;
+      const couleurBarre = totalConsommePrevisionnel > HEURES_PREVISIONNEL_ANNUEL_RTT ? '#c0392b' : totalConsommePrevisionnel > HEURES_PREVISIONNEL_ANNUEL_RTT * 0.85 ? '#d99a3d' : 'var(--vert)';
 
       const decompteurHtml = `
         <div class="rtt-table-title">⏳ Décompte de l'année ${anneeEnCours}</div>
+        <div class="rtt-legende" style="margin-top:0">ℹ️ Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif)</div>
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <tbody>
               <tr><th>Prévisionnel annuel</th><td class="valeur">${HEURES_PREVISIONNEL_ANNUEL_RTT} h</td></tr>
-              <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(dejaPrisPrevisionnel)} h${soldeDeBase > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(soldeDeBase)} h de solde de base</span>` : ''}</td></tr>
-              <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel <= 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
+              <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h</td></tr>
+              <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)} h de solde de base</span>` : ''}</td></tr>
               <tr><th>Jours restants</th><td class="valeur">${joursRestants} j <span class="rtt-sub">(${semainesRestantes} semaine${semainesRestantes > 1 ? 's' : ''})</span></td></tr>
               ${rythmeIndicatif > 0 ? `<tr><th>Rythme indicatif</th><td class="valeur">≈ ${formatJoursRtt(rythmeIndicatif)} h/semaine</td></tr>` : ''}
             </tbody>
           </table>
         </div>
-        <div class="rtt-progress-wrap"><div class="rtt-progress-bar" style="width:${pctAtteint}%"></div></div>
-        <div class="rtt-progress-label">${pctAtteint}% du prévisionnel annuel (${HEURES_PREVISIONNEL_ANNUEL_RTT} h) déjà pris</div>
+        <div class="rtt-progress-wrap">
+          <div class="rtt-progress-seg rtt-progress-seg-pris" style="width:${pctPris}%"></div>
+          <div class="rtt-progress-seg rtt-progress-seg-base" style="width:${pctSoldeBase}%"></div>
+        </div>
+        <div class="rtt-progress-legend">
+          <span><span class="dot" style="background:var(--vert)"></span>Pris (${formatJoursRtt(prisHeures)} h)</span>
+          ${soldeDeBasePrevisionnel > 0 ? `<span><span class="dot" style="background:#d99a3d"></span>Solde de base (${formatJoursRtt(soldeDeBasePrevisionnel)} h)</span>` : ''}
+        </div>
+        <div class="rtt-progress-label" style="color:${couleurBarre};font-weight:700">${pctAtteint}% du prévisionnel annuel (${HEURES_PREVISIONNEL_ANNUEL_RTT} h) déjà consommé${depassement > 0 ? ` — ⚠️ dépassement de ${formatJoursRtt(depassement)} h` : ''}</div>
       `;
 
       container.innerHTML = `
@@ -1726,7 +1742,6 @@
             <tbody>
               <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(acquis))} j${heuresSup > 0 ? ', +' + formatJoursRtt(heuresSup) + 'h sup' : ''}${rttSoldeInitial > 0 ? ', +' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''})</span></td></tr>
               <tr><th>Pris</th><td class="valeur">${formatJoursRtt(pris)} j <span class="rtt-sub">(${formatJoursRtt(prisHeures)} h)</span></td></tr>
-              <tr><th>Restant</th><td class="valeur" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restantHeures)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</span></td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody>
           </table>
