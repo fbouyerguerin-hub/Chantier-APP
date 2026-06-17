@@ -4027,6 +4027,109 @@
     finally { btn.innerHTML = origText; btn.disabled = false; }
   }
 
+  async function exportRecapCongesCollaborateurs() {
+    const btn = event.target.closest('button');
+    const origText = btn.innerHTML;
+    btn.innerHTML = '<span>⏳</span><span>Export en cours…</span>';
+    btn.disabled = true;
+    try {
+      const anneeEnCours = new Date().getFullYear();
+      const aujourdHuiStr = dateYMD(new Date());
+
+      const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const collabs = (await resCollabs.json()).results || [];
+
+      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const conges = (await resConges.json()).results || [];
+
+      const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', aujourdHuiStr, null);
+
+      const headerRecap = ['Collaborateur', 'RTT Acquis (h)', 'RTT Pris (j)', 'RTT Pris (h)', 'RTT En attente (j)', 'Solde prévisionnel restant (h)', 'Congés payés pris (j)', 'Congés payés en attente (j)'];
+      const rowsRecap = [headerRecap.join(';')];
+      const headerDetail = ['Collaborateur', 'Type', 'Date début', 'Date fin', 'Jours', 'Heures', 'Statut', 'Notes'];
+      const detailRows = [];
+
+      collabs
+        .filter(c => c['Nom Complet'])
+        .sort((a, b) => (a['Nom Complet'] || '').localeCompare(b['Nom Complet'] || ''))
+        .forEach(c => {
+          const congesCollab = conges.filter(r => (r['Collaborateurs'] || []).some(co => co.id === c.id));
+          const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
+          const demandesCP = congesCollab.filter(r => r['Type de demande']?.value === 'Congés payés');
+
+          let prisRtt = 0, prisRttH = 0, attenteRtt = 0;
+          demandesRtt.forEach(r => {
+            const statut = r['Statut']?.value || 'En attente';
+            const j = joursRttDemande(r), h = heuresRttDemande(r);
+            if (statut === 'Validé' || statut === 'Approuvé') { prisRtt += j; prisRttH += h; }
+            else if (statut === 'En attente') attenteRtt += j;
+          });
+
+          let prisCP = 0, attenteCP = 0;
+          demandesCP.forEach(r => {
+            const statut = r['Statut']?.value || 'En attente';
+            const j = joursDemandeSelonType(r);
+            if (statut === 'Validé' || statut === 'Approuvé') prisCP += j;
+            else if (statut === 'En attente') attenteCP += j;
+          });
+
+          const absencesBloquantes = congesCollab.filter(r => {
+            const type = r['Type de demande']?.value;
+            const statut = r['Statut']?.value || 'En attente';
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+          });
+          const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
+          const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+          const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
+          const heuresSupSoldeInitial = parseFloat(c['Heures sup solde initial (h)']) || 0;
+          const soldeDeBasePrevisionnel = parseFloat(c['Solde de base prévisionnel (h)']) || 0;
+          const heuresSup = calculerHeuresSupplementaires(toutesLesSaisies, c.id).total + heuresSupSoldeInitial;
+          const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+          const restePrevisionnel = Math.max(0, HEURES_PREVISIONNEL_ANNUEL_RTT - prisRttH) - soldeDeBasePrevisionnel;
+
+          rowsRecap.push([
+            c['Nom Complet'],
+            formatJoursRtt(acquis),
+            formatJoursRtt(prisRtt),
+            formatJoursRtt(prisRttH),
+            formatJoursRtt(attenteRtt),
+            formatJoursRtt(restePrevisionnel),
+            formatJoursRtt(prisCP),
+            formatJoursRtt(attenteCP)
+          ].join(';'));
+
+          congesCollab
+            .filter(r => r['Statut']?.value !== 'Refusé')
+            .sort((a, b) => (a['Date de début'] || '').localeCompare(b['Date de début'] || ''))
+            .forEach(r => {
+              const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '';
+              const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '';
+              const type = r['Type de demande']?.value || '';
+              const jours = type === 'RTT' ? joursRttDemande(r) : type === 'Congés payés' ? joursDemandeSelonType(r) : (r['Nombre de jour'] || '');
+              const heures = type === 'RTT' ? heuresRttDemande(r) : '';
+              const notes = (r['Notes'] || '').toString().replace(/;/g, ',').replace(/\n/g, ' ');
+              detailRows.push([c['Nom Complet'], type, debut, fin, formatJoursRtt(jours), heures ? formatJoursRtt(heures) : '', r['Statut']?.value || '', notes].join(';'));
+            });
+        });
+
+      const rows = [
+        'RÉCAPITULATIF ' + anneeEnCours, '',
+        ...rowsRecap, '',
+        'DÉTAIL DES DEMANDES', '',
+        headerDetail.join(';'), ...detailRows
+      ];
+      const csv = '\uFEFF' + rows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'recap_conges_' + anneeEnCours + '.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch(e) { alert('Erreur export : ' + e.message); }
+    finally { btn.innerHTML = origText; btn.disabled = false; }
+  }
+
+
   async function exportFeuilleCollaborateur(periode) {
     const sel = document.getElementById('export-collab-select');
     const collabVal = sel?.value; // Lire la valeur AVANT tout rechargement
@@ -4564,6 +4667,16 @@
         <div id="export-conges-mois-grid" style="padding:10px 16px;border-bottom:1px solid #f1f5f9;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"></div>
         <button onclick="exportPlanningConges()" style="width:100%;background:none;border:none;padding:12px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
           <span>📥</span><span>Exporter en CSV</span>
+        </button>
+      </div>
+
+      <!-- Export récapitulatif congés par collaborateur -->
+      <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;overflow:hidden">
+        <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3;background:#f8fafc;display:flex;align-items:center;gap:8px">
+          <span>📊</span><span>Récapitulatif congés par collaborateur</span>
+        </div>
+        <button onclick="exportRecapCongesCollaborateurs()" style="width:100%;background:none;border:none;padding:12px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
+          <span>📥</span><span>Exporter en CSV (année en cours)</span>
         </button>
       </div>
 
