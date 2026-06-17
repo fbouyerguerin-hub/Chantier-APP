@@ -173,23 +173,14 @@
     .demande-jours { font-size: 12px; font-weight: 600; color: var(--vert); }
 
     /* COMPTEUR RTT */
-    .rtt-solde-card { background: linear-gradient(135deg, var(--vert), #3a6331); border-radius: 16px; margin: 16px; padding: 20px; box-shadow: 0 2px 8px rgba(44,44,44,0.12); }
-    .rtt-solde-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.85); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; text-align: center; }
-    .rtt-solde-grid { display: flex; justify-content: space-around; text-align: center; }
-    .rtt-solde-val { font-size: 26px; font-weight: 800; color: #fff; }
-    .rtt-solde-label { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 4px; font-weight: 600; }
-    .rtt-solde-sub { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 1px; }
-    .rtt-attente-info { margin: 0 16px; background: #fef3cd; border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #856404; font-weight: 600; text-align: center; }
-    .rtt-admin-row { background: #fff; border-radius: 12px; margin: 0 16px 10px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); }
-    .rtt-admin-nom { font-size: 14px; font-weight: 700; color: var(--gris); margin-bottom: 8px; }
-    .rtt-admin-stats { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .rtt-admin-quota-input { width: 60px; background: var(--beige-clair); border: 1.5px solid #ddd5c5; border-radius: 8px; padding: 6px 8px; font-size: 13px; text-align: center; }
-    .rtt-admin-stat { font-size: 12px; color: var(--gris-moyen); font-weight: 600; }
-    .rtt-admin-stat b { color: var(--vert); }
-    .rtt-dates-title { font-size: 12px; font-weight: 700; color: var(--gris-moyen); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 16px 8px; }
-    .rtt-date-row { background: #fff; border-radius: 12px; margin: 0 16px 8px; padding: 12px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); border-left: 4px solid var(--vert); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-    .rtt-date-row-dates { font-size: 13px; font-weight: 600; color: var(--gris); }
-    .rtt-date-row-jours { font-size: 12px; font-weight: 700; color: var(--vert); white-space: nowrap; }
+    .rtt-table-title { font-size: 12px; font-weight: 700; color: var(--gris-moyen); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 16px 8px; }
+    .rtt-table-wrap { margin: 16px; overflow-x: auto; border-radius: 12px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); }
+    .rtt-table { width: 100%; min-width: 480px; border-collapse: collapse; background: #fff; }
+    .rtt-table th, .rtt-table td { padding: 11px 13px; font-size: 12px; text-align: left; border-bottom: 1px solid #f0ece0; white-space: nowrap; }
+    .rtt-table th { background: var(--beige-clair); color: var(--gris-moyen); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; }
+    .rtt-table tbody tr:last-child td { border-bottom: none; }
+    .rtt-table td.valeur { font-weight: 700; color: var(--vert); }
+    .rtt-sub { display: block; font-size: 10px; font-weight: 500; color: var(--gris-moyen); white-space: nowrap; }
     .rtt-legende { text-align: center; font-size: 11px; color: var(--gris-moyen); font-style: italic; margin: 8px 16px 0; }
 
     /* PLANNING HORIZONTAL */
@@ -432,19 +423,33 @@
     </div>
 
     <div class="field">
+      <label>Unité de la demande</label>
+      <div class="tabs" style="margin:0">
+        <button type="button" class="tab-btn active" id="conges-unite-jour" onclick="changerUniteConges('jour')">📅 Jour(s)</button>
+        <button type="button" class="tab-btn" id="conges-unite-heure" onclick="changerUniteConges('heure')">⏱️ Heures</button>
+      </div>
+    </div>
+
+    <div class="field">
       <label>Date de début</label>
       <input type="date" id="conges-date-debut" oninput="calcJours()" />
     </div>
 
-    <div class="field">
+    <div class="field" id="champ-conges-date-fin">
       <label>Date de fin (inclus)</label>
       <input type="date" id="conges-date-fin" oninput="calcJours()" />
     </div>
 
-    <div class="field">
+    <div class="field" id="champ-conges-nb-jours">
       <label>Nombre de jours</label>
       <div style="background:var(--vert-clair);border:1.5px solid #c5d9c3;border-radius:10px;padding:13px 14px;font-size:18px;font-weight:800;color:var(--vert);text-align:center" id="conges-nb-jours">—</div>
       <div id="conges-feries-info" style="font-size:11px;color:#c0392b;font-weight:600;margin-top:6px;text-align:center;display:none"></div>
+    </div>
+
+    <div class="field" id="champ-conges-nb-heures" style="display:none">
+      <label>Nombre d'heures</label>
+      <input type="number" step="0.5" min="0.5" max="12" id="conges-nb-heures" placeholder="Ex : 3,5" oninput="calcJours()" />
+      <div id="conges-heures-equiv" style="font-size:11px;color:var(--gris-moyen);margin-top:6px;text-align:center"></div>
     </div>
 
     <div class="field">
@@ -684,7 +689,7 @@
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
     const tabRttAdmin = document.getElementById('tab-rtt-admin');
-    if (tabRttAdmin) tabRttAdmin.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none';
+    if (tabRttAdmin) tabRttAdmin.style.display = (connectedDroit === 'Administrateur') ? '' : 'none';
     // Masquer la section bulles si collaborateur simple
     const sectionBulles = document.getElementById('section-bulles-collectif');
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
@@ -1189,7 +1194,37 @@
     document.getElementById('modal-conges').classList.remove('open');
   }
 
+  let uniteCongesSelected = 'jour';
+
+  function changerUniteConges(unite) {
+    uniteCongesSelected = unite;
+    document.getElementById('conges-unite-jour').classList.toggle('active', unite === 'jour');
+    document.getElementById('conges-unite-heure').classList.toggle('active', unite === 'heure');
+    document.getElementById('champ-conges-date-fin').style.display = unite === 'jour' ? '' : 'none';
+    document.getElementById('champ-conges-nb-jours').style.display = unite === 'jour' ? '' : 'none';
+    document.getElementById('champ-conges-nb-heures').style.display = unite === 'heure' ? '' : 'none';
+    calcJours();
+  }
+
   function calcJours() {
+    if (uniteCongesSelected === 'heure') {
+      const debut = document.getElementById('conges-date-debut').value;
+      const heures = parseFloat(document.getElementById('conges-nb-heures').value) || 0;
+      const elEquiv = document.getElementById('conges-heures-equiv');
+      if (debut && heures > 0) {
+        const d = new Date(debut + 'T12:00:00');
+        const estVendredi = d.getDay() === 5;
+        const heuresJournee = estVendredi ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+        const joursEquiv = heures / heuresJournee;
+        elEquiv.textContent = '≈ ' + formatJoursRtt(joursEquiv) + ' jour(s)' + (estVendredi ? ' (vendredi = 7h/jour)' : '');
+        const nomFerie = nomJourFerie(debut);
+        if (nomFerie) elEquiv.textContent += ' — 🔴 ' + nomFerie;
+      } else {
+        elEquiv.textContent = '';
+      }
+      return;
+    }
+
     const debut = document.getElementById('conges-date-debut').value;
     const fin = document.getElementById('conges-date-fin').value;
     const el = document.getElementById('conges-nb-jours');
@@ -1222,17 +1257,28 @@
 
   async function submitConges() {
     const debut = document.getElementById('conges-date-debut').value;
-    const fin = document.getElementById('conges-date-fin').value;
     if (!typeCongesSelected) { alert('Veuillez sélectionner un type de demande.'); return; }
     if (!debut) { alert('Veuillez sélectionner une date de début.'); return; }
-    if (!fin) { alert('Veuillez sélectionner une date de fin.'); return; }
-    if (new Date(fin) < new Date(debut)) { alert('La date de fin doit être après la date de début.'); return; }
 
-    const btn = document.getElementById('btn-conges');
-    btn.disabled = true; btn.textContent = 'Envoi en cours…';
+    let payload;
 
-    try {
-      const payload = {
+    if (uniteCongesSelected === 'heure') {
+      const heures = parseFloat(document.getElementById('conges-nb-heures').value) || 0;
+      if (!heures || heures <= 0) { alert('Veuillez indiquer un nombre d\'heures.'); return; }
+      payload = {
+        Collaborateurs: feuilleCollab ? [feuilleCollab.id] : [],
+        'Type de demande': typeCongesSelected,
+        'Date de début': debut,
+        'Date de fin journée (inclus)': debut,
+        "Nombre d'heures": heures,
+        Notes: document.getElementById('conges-notes').value || '',
+        'Statut': 'En attente',
+      };
+    } else {
+      const fin = document.getElementById('conges-date-fin').value;
+      if (!fin) { alert('Veuillez sélectionner une date de fin.'); return; }
+      if (new Date(fin) < new Date(debut)) { alert('La date de fin doit être après la date de début.'); return; }
+      payload = {
         Collaborateurs: feuilleCollab ? [feuilleCollab.id] : [],
         'Type de demande': typeCongesSelected,
         'Date de début': debut,
@@ -1240,7 +1286,12 @@
         Notes: document.getElementById('conges-notes').value || '',
         'Statut': 'En attente',
       };
+    }
 
+    const btn = document.getElementById('btn-conges');
+    btn.disabled = true; btn.textContent = 'Envoi en cours…';
+
+    try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true`,
         { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
 
@@ -1252,8 +1303,11 @@
       document.getElementById('val-type-conges').classList.add('empty');
       document.getElementById('conges-date-debut').value = '';
       document.getElementById('conges-date-fin').value = '';
+      document.getElementById('conges-nb-heures').value = '';
       document.getElementById('conges-notes').value = '';
       document.getElementById('conges-nb-jours').textContent = '—';
+      document.getElementById('conges-heures-equiv').textContent = '';
+      changerUniteConges('jour');
 
       alert('✅ Demande envoyée ! Elle sera traitée par l\'administrateur.');
       switchCongesTab('suivi');
@@ -1315,19 +1369,23 @@
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
         const jours = r['Nombre de jour'] || '—';
+        const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
 
         let statutClass = 'attente';
         let statutEmoji = '⏳';
         if (statut === 'Validé' || statut === 'Approuvé') { statutClass = 'valide'; statutEmoji = '✅'; }
         if (statut === 'Refusé') { statutClass = 'refuse'; statutEmoji = '❌'; }
 
+        const dateLigne = heuresExplicites > 0 ? `📅 Le ${debut}` : `📅 Du ${debut} au ${fin}`;
+        const dureeLigne = heuresExplicites > 0 ? `⏱ ${formatJoursRtt(heuresExplicites)} heure${heuresExplicites > 1 ? 's' : ''}` : `⏱ ${jours} jour${jours > 1 ? 's' : ''}`;
+
         return `<div class="demande-card ${statutClass}">
           <div class="demande-header">
             <span class="demande-type">${type}</span>
             <span class="demande-statut ${statutClass}">${statutEmoji} ${statut}</span>
           </div>
-          <div class="demande-dates">📅 Du ${debut} au ${fin}</div>
-          <div class="demande-jours">⏱ ${jours} jour${jours > 1 ? 's' : ''}</div>
+          <div class="demande-dates">${dateLigne}</div>
+          <div class="demande-jours">${dureeLigne}</div>
           ${r['Notes'] ? `<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ${r['Notes']}</div>` : ''}
         </div>`;
       }).join('') + '<div style="height:20px"></div>';
@@ -1363,9 +1421,13 @@
   function heuresEnJoursRtt(h) { return h / HEURES_PAR_JOUR_RTT; }
   function joursEnHeuresRtt(j) { return j * HEURES_PAR_JOUR_RTT; }
 
-  // Calcule le nombre d'heures déduites pour une demande RTT donnée,
-  // en comptant 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés (lun-jeu).
+  // Calcule le nombre d'heures déduites pour une demande RTT donnée.
+  // Si la demande a été saisie en heures (champ "Nombre d'heures" rempli), on l'utilise directement.
+  // Sinon (saisie en jour(s)), on compte 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés.
   function heuresRttDemande(r) {
+    const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+    if (heuresExplicites > 0) return heuresExplicites;
+
     const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
     const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
     if (!debutStr) return 0;
@@ -1380,6 +1442,18 @@
       d.setDate(d.getDate() + 1);
     }
     return total;
+  }
+
+  // Calcule le nombre de jours équivalent pour une demande RTT donnée (utile pour les saisies en heures).
+  function joursRttDemande(r) {
+    const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+    if (heuresExplicites > 0) {
+      const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+      const estVendredi = debutStr ? (new Date(debutStr + 'T12:00:00')).getDay() === 5 : false;
+      const diviseur = estVendredi ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+      return heuresExplicites / diviseur;
+    }
+    return parseFloat(r['Nombre de jour']) || 0;
   }
 
   function dateYMD(d) {
@@ -1452,6 +1526,53 @@
     return set;
   }
 
+  // Calcule le total des heures supplémentaires cumulées sur l'année civile en cours, ainsi que le détail
+  // par semaine. Les heures entre 39h et 42,5h sont payées directement (heures sup payées) et ne sont donc
+  // pas comptabilisées dans le cumul ; seul l'excédent au-delà de 42,5h est ajouté au cumul.
+  const HEURES_NORMALES_SEMAINE = 39;
+  const HEURES_SEUIL_PAYEES = 42.5; // au-delà de ce seuil, les heures sont comptabilisées dans le cumul
+  function calculerHeuresSupplementaires(saisies, collabId) {
+    const annee = new Date().getFullYear();
+    const totauxSemaine = {};
+    saisies.forEach(r => {
+      if (!r['Date']) return;
+      if (collabId !== undefined) {
+        const id = (r['Collaborateur'] || [])[0]?.id;
+        if (id !== collabId) return;
+      }
+      const dateStr = String(r['Date']).split('T')[0];
+      const d = new Date(dateStr + 'T12:00:00');
+      if (d.getFullYear() !== annee) return;
+      const day = d.getDay();
+      const diff = (day === 0 ? -6 : 1 - day);
+      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+      const lundiStr = dateYMD(lundi);
+      const heures = parseFloat(r['Heures Normales']) || 0;
+      totauxSemaine[lundiStr] = (totauxSemaine[lundiStr] || 0) + heures;
+    });
+    let total = 0;
+    const detail = [];
+    Object.entries(totauxSemaine)
+      .sort((a, b) => b[0].localeCompare(a[0])) // plus récent en premier
+      .forEach(([lundiStr, h]) => {
+        if (h > HEURES_SEUIL_PAYEES) {
+          const heuresPayees = HEURES_SEUIL_PAYEES - HEURES_NORMALES_SEMAINE;
+          const surplus = h - HEURES_SEUIL_PAYEES;
+          total += surplus;
+          detail.push({ lundi: lundiStr, totalHeures: h, heuresPayees, surplus });
+        }
+      });
+    return { total, detail };
+  }
+
+  // Synchronise le cumul d'heures supplémentaires dans Baserow (fiche Collaborateur), sans bloquer l'affichage.
+  async function syncHeuresSupplementaires(collabId, valeur) {
+    try {
+      await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Heures supplémentaires (cumul)': valeur }) });
+    } catch(e) { /* synchro non bloquante */ }
+  }
+
   async function loadRTTPerso() {
     const container = document.getElementById('rtt-perso-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -1473,7 +1594,7 @@
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
       let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
       demandesRtt.forEach(r => {
-        const jours = parseFloat(r['Nombre de jour']) || 0;
+        const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r);
         const statut = r['Statut']?.value || 'En attente';
         if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
@@ -1490,7 +1611,13 @@
       const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
       const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
 
-      const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+      const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+
+      const heuresSupResult = calculerHeuresSupplementaires(saisiesCollab);
+      const heuresSup = heuresSupResult.total;
+      syncHeuresSupplementaires(feuilleCollab.id, heuresSup);
+
+      const acquis = acquisSemaines + heuresSup;
       const restantHeures = acquis - prisHeures;
 
       const validees = demandesRtt
@@ -1498,44 +1625,56 @@
         .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
 
       const listeDatesHtml = validees.length ? `
-        <div class="rtt-dates-title">📅 Dates RTT validées</div>
-        ${validees.map(r => {
-          const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
-          const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
-          const jours = parseFloat(r['Nombre de jour']) || 0;
-          const heures = heuresRttDemande(r);
-          const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
-          return `<div class="rtt-date-row">
-            <div class="rtt-date-row-dates">${datesLabel}</div>
-            <div class="rtt-date-row-jours">${formatJoursRtt(jours)} j (${formatJoursRtt(heures)} h)</div>
-          </div>`;
-        }).join('')}
+        <div class="rtt-table-title">📅 Dates RTT validées</div>
+        <div class="rtt-table-wrap">
+          <table class="rtt-table">
+            <thead><tr><th>Date</th><th>Jours</th><th>Heures</th></tr></thead>
+            <tbody>
+              ${validees.map(r => {
+                const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+                const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+                const jours = joursRttDemande(r);
+                const heures = heuresRttDemande(r);
+                const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
+                return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : '';
+
+      const listeHeuresSupHtml = heuresSupResult.detail.length ? `
+        <div class="rtt-table-title">⚡ Détail des heures supplémentaires</div>
+        <div class="rtt-table-wrap">
+          <table class="rtt-table">
+            <thead><tr><th>Semaine</th><th>Travaillées</th><th>Payées (39-42,5h)</th><th>Sup (&gt;42,5h)</th></tr></thead>
+            <tbody>
+              ${heuresSupResult.detail.map(d => {
+                const lundi = new Date(d.lundi + 'T12:00:00');
+                const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+                const label = lundi.toLocaleDateString('fr-FR') + ' au ' + vendredi.toLocaleDateString('fr-FR');
+                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${formatJoursRtt(d.heuresPayees)} h</td><td class="valeur" style="color:#1a4f8b">+${formatJoursRtt(d.surplus)} h</td></tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
       ` : '';
 
       container.innerHTML = `
-        <div class="rtt-solde-card">
-          <div class="rtt-solde-title">🔄 Solde RTT — ${feuilleCollab.value}</div>
-          <div class="rtt-solde-grid">
-            <div>
-              <div class="rtt-solde-val">${formatJoursRtt(acquis)} h</div>
-              <div class="rtt-solde-sub">${formatJoursRtt(heuresEnJoursRtt(acquis))} j</div>
-              <div class="rtt-solde-label">Acquis</div>
-            </div>
-            <div>
-              <div class="rtt-solde-val">${formatJoursRtt(pris)} j</div>
-              <div class="rtt-solde-sub">${formatJoursRtt(prisHeures)} h</div>
-              <div class="rtt-solde-label">Pris</div>
-            </div>
-            <div>
-              <div class="rtt-solde-val" style="${restantHeures < 0 ? 'color:#f5b7b1' : ''}">${formatJoursRtt(restantHeures)} h</div>
-              <div class="rtt-solde-sub">${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j</div>
-              <div class="rtt-solde-label">Restant</div>
-            </div>
-          </div>
+        <div class="rtt-table-title">🔄 Solde RTT — ${feuilleCollab.value}</div>
+        <div class="rtt-table-wrap">
+          <table class="rtt-table">
+            <tbody>
+              <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(acquis))} j${heuresSup > 0 ? ', dont +' + formatJoursRtt(heuresSup) + 'h sup' : ''})</span></td></tr>
+              <tr><th>Pris</th><td class="valeur">${formatJoursRtt(pris)} j <span class="rtt-sub">(${formatJoursRtt(prisHeures)} h)</span></td></tr>
+              <tr><th>Restant</th><td class="valeur" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restantHeures)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</span></td></tr>
+              ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
+            </tbody>
+          </table>
         </div>
-        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
-        ${enAttente > 0 ? `<div class="rtt-attente-info">⏳ ${formatJoursRtt(enAttente)} j (${formatJoursRtt(enAttenteHeures)} h) en attente de validation</div>` : ''}
+        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
         ${listeDatesHtml}
+        ${listeHeuresSupHtml}
       `;
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
@@ -1564,7 +1703,7 @@
 
           let pris = 0, enAttente = 0, prisHeures = 0;
           demandesRtt.forEach(r => {
-            const jours = parseFloat(r['Nombre de jour']) || 0;
+            const jours = joursRttDemande(r);
             const heures = heuresRttDemande(r);
             const statut = r['Statut']?.value || 'En attente';
             if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
@@ -1577,22 +1716,28 @@
             return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
           });
           const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
-          const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+          const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+
+          const heuresSup = calculerHeuresSupplementaires(toutesLesSaisies, c.id).total;
+          syncHeuresSupplementaires(c.id, heuresSup);
+
+          const acquis = acquisSemaines + heuresSup;
           const restantHeures = acquis - prisHeures;
 
-          return `<div class="rtt-admin-row">
-            <div class="rtt-admin-nom">${c['Nom Complet']}</div>
-            <div class="rtt-admin-stats">
-              <span class="rtt-admin-stat">Acquis : <b>${formatJoursRtt(acquis)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(acquis))} j)</i></span>
-              <span class="rtt-admin-stat">Pris : <b>${formatJoursRtt(pris)} j</b> <i>(${formatJoursRtt(prisHeures)} h)</i></span>
-              <span class="rtt-admin-stat" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">Restant : <b>${formatJoursRtt(restantHeures)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</i></span>
-              ${enAttente > 0 ? `<span class="rtt-admin-stat" style="color:#856404">⏳ ${formatJoursRtt(enAttente)} j</span>` : ''}
-            </div>
-          </div>`;
+          return `<tr>
+            <td>${c['Nom Complet']}</td>
+            <td class="valeur">${formatJoursRtt(acquis)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(acquis))} j${heuresSup > 0 ? ', +' + formatJoursRtt(heuresSup) + 'h sup' : ''})</span></td>
+            <td class="valeur">${formatJoursRtt(pris)} j <span class="rtt-sub">(${formatJoursRtt(prisHeures)} h)</span></td>
+            <td class="valeur" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restantHeures)} h <span class="rtt-sub">(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</span></td>
+            <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
+          </tr>`;
         }).join('');
 
-      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>` +
-        (lignes || '<div class="feuille-empty">Aucun collaborateur</div>');
+      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>` +
+        (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
+          <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Restant</th><th>Attente</th></tr></thead>
+          <tbody>${lignes}</tbody>
+        </table></div>` : '<div class="feuille-empty">Aucun collaborateur</div>');
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
     }
@@ -3385,6 +3530,8 @@
         const type = typeRaw2 === '—' ? '—' : labelAbsence(typeRaw2);
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+        const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+        const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
         const isAttente = statut === 'En attente';
         const color = isAttente ? 'var(--beige)' : statut.includes('Valid') || statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
         return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
@@ -3392,7 +3539,7 @@
             <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
             <div style="font-size:11px;font-weight:700;color:${color}">${statut}</div>
           </div>
-          <div style="font-size:12px;color:#aaa">${type} · Du ${debut} au ${fin}</div>
+          <div style="font-size:12px;color:#aaa">${type} · ${periodeLabel}</div>
           ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
           <div style="display:flex;gap:8px;margin-top:10px">
             ${isAttente ? `
@@ -3407,7 +3554,37 @@
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
   }
 
+  let uniteCongeAdminSelected = 'jour';
+
+  function changerUniteCongeAdmin(unite) {
+    uniteCongeAdminSelected = unite;
+    document.getElementById('conge-admin-unite-jour').classList.toggle('active', unite === 'jour');
+    document.getElementById('conge-admin-unite-heure').classList.toggle('active', unite === 'heure');
+    document.getElementById('champ-conge-admin-fin').style.display = unite === 'jour' ? '' : 'none';
+    document.getElementById('champ-conge-admin-nb-jours').style.display = unite === 'jour' ? '' : 'none';
+    document.getElementById('champ-conge-admin-nb-heures').style.display = unite === 'heure' ? '' : 'none';
+    calcJoursAdmin();
+  }
+
   function calcJoursAdmin() {
+    if (uniteCongeAdminSelected === 'heure') {
+      const debut = document.getElementById('conge-admin-debut').value;
+      const heures = parseFloat(document.getElementById('conge-admin-nb-heures').value) || 0;
+      const elEquiv = document.getElementById('conge-admin-heures-equiv');
+      if (debut && heures > 0) {
+        const d = new Date(debut + 'T12:00:00');
+        const estVendredi = d.getDay() === 5;
+        const heuresJournee = estVendredi ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+        const joursEquiv = heures / heuresJournee;
+        elEquiv.textContent = '≈ ' + formatJoursRtt(joursEquiv) + ' jour(s)' + (estVendredi ? ' (vendredi = 7h/jour)' : '');
+        const nomFerie = nomJourFerie(debut);
+        if (nomFerie) elEquiv.textContent += ' — 🔴 ' + nomFerie;
+      } else {
+        elEquiv.textContent = '';
+      }
+      return;
+    }
+
     const debut = document.getElementById('conge-admin-debut').value;
     const fin = document.getElementById('conge-admin-fin').value;
     const el = document.getElementById('conge-admin-nb-jours');
@@ -3439,10 +3616,13 @@
     document.getElementById('modal-conge-admin-titre').textContent = rowId ? 'Modifier demande' : 'Nouvelle demande';
     document.getElementById('conge-admin-debut').value = '';
     document.getElementById('conge-admin-fin').value = '';
+    document.getElementById('conge-admin-nb-heures').value = '';
     document.getElementById('conge-admin-notes').value = '';
     document.getElementById('conge-admin-statut').value = 'En attente'; // Valeur par défaut
     document.getElementById('conge-admin-type').value = 'Congés payés';
     document.getElementById('conge-admin-nb-jours').textContent = '—';
+    document.getElementById('conge-admin-heures-equiv').textContent = '';
+    changerUniteCongeAdmin('jour');
     // Charger la liste des collaborateurs
     const sel = document.getElementById('conge-admin-collab');
     sel.innerHTML = '<option value="">-- Choisir --</option>';
@@ -3474,6 +3654,13 @@
         document.getElementById('conge-admin-fin').value = r['Date de fin journée (inclus)'] || '';
         document.getElementById('conge-admin-statut').value = r['Statut']?.value || r['Statut'] || 'En attente';
         document.getElementById('conge-admin-notes').value = r['Notes'] || '';
+        const heuresExistantes = parseFloat(r["Nombre d'heures"]) || 0;
+        if (heuresExistantes > 0) {
+          changerUniteCongeAdmin('heure');
+          document.getElementById('conge-admin-nb-heures').value = heuresExistantes;
+        } else {
+          changerUniteCongeAdmin('jour');
+        }
         calcJoursAdmin();
       } catch(e) {}
     }
@@ -3488,22 +3675,39 @@
     const rowId = document.getElementById('conge-admin-row-id').value;
     const collabId = document.getElementById('conge-admin-collab').value;
     const debut = document.getElementById('conge-admin-debut').value;
-    const fin = document.getElementById('conge-admin-fin').value;
     if (!collabId) { alert('⚠️ Veuillez choisir un collaborateur.'); return; }
-    if (!debut || !fin) { alert('⚠️ Veuillez saisir les dates.'); return; }
-    if (new Date(fin) < new Date(debut)) { alert('⚠️ La date de fin doit être après la date de début.'); return; }
+    if (!debut) { alert('⚠️ Veuillez saisir la date de début.'); return; }
     const statutVal = document.getElementById('conge-admin-statut').value || 'En attente';
     const typeVal = document.getElementById('conge-admin-type').value || 'Congés payés';
     const collabIdInt = parseInt(collabId);
     if (!collabIdInt) { alert('⚠️ Collaborateur invalide.'); return; }
-    const payload = {
-      Collaborateurs: [collabIdInt],
-      'Type de demande': typeVal,
-      'Date de début': debut,
-      'Date de fin journée (inclus)': fin,
-      'Statut': statutVal,
-      'Notes': document.getElementById('conge-admin-notes').value || '',
-    };
+
+    let payload;
+    if (uniteCongeAdminSelected === 'heure') {
+      const heures = parseFloat(document.getElementById('conge-admin-nb-heures').value) || 0;
+      if (!heures || heures <= 0) { alert('⚠️ Veuillez indiquer un nombre d\'heures.'); return; }
+      payload = {
+        Collaborateurs: [collabIdInt],
+        'Type de demande': typeVal,
+        'Date de début': debut,
+        'Date de fin journée (inclus)': debut,
+        "Nombre d'heures": heures,
+        'Statut': statutVal,
+        'Notes': document.getElementById('conge-admin-notes').value || '',
+      };
+    } else {
+      const fin = document.getElementById('conge-admin-fin').value;
+      if (!fin) { alert('⚠️ Veuillez saisir la date de fin.'); return; }
+      if (new Date(fin) < new Date(debut)) { alert('⚠️ La date de fin doit être après la date de début.'); return; }
+      payload = {
+        Collaborateurs: [collabIdInt],
+        'Type de demande': typeVal,
+        'Date de début': debut,
+        'Date de fin journée (inclus)': fin,
+        'Statut': statutVal,
+        'Notes': document.getElementById('conge-admin-notes').value || '',
+      };
+    }
     console.log('Payload congé:', JSON.stringify(payload));
     const btn = document.getElementById('btn-save-conge-admin');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
@@ -4364,14 +4568,26 @@
         <option value="Autre">📌 Autre</option>
       </select>
     </div>
+    <div class="field">
+      <label>Unité de la demande</label>
+      <div class="tabs" style="margin:0">
+        <button type="button" class="tab-btn active" id="conge-admin-unite-jour" onclick="changerUniteCongeAdmin('jour')">📅 Jour(s)</button>
+        <button type="button" class="tab-btn" id="conge-admin-unite-heure" onclick="changerUniteCongeAdmin('heure')">⏱️ Heures</button>
+      </div>
+    </div>
     <div style="display:flex;gap:12px">
       <div class="field" style="flex:1"><label>Date de début <span style="color:#c0392b">*</span></label><input type="date" id="conge-admin-debut" oninput="calcJoursAdmin()" /></div>
-      <div class="field" style="flex:1"><label>Date de fin <span style="color:#c0392b">*</span></label><input type="date" id="conge-admin-fin" oninput="calcJoursAdmin()" /></div>
+      <div class="field" style="flex:1" id="champ-conge-admin-fin"><label>Date de fin <span style="color:#c0392b">*</span></label><input type="date" id="conge-admin-fin" oninput="calcJoursAdmin()" /></div>
     </div>
-    <div class="field">
+    <div class="field" id="champ-conge-admin-nb-jours">
       <label>Nombre de jours</label>
       <div style="background:var(--vert-clair);border:1.5px solid #c5d9c3;border-radius:10px;padding:11px 14px;font-size:16px;font-weight:800;color:var(--vert);text-align:center" id="conge-admin-nb-jours">—</div>
       <div id="conge-admin-feries-info" style="font-size:11px;color:#c0392b;font-weight:600;margin-top:6px;text-align:center;display:none"></div>
+    </div>
+    <div class="field" id="champ-conge-admin-nb-heures" style="display:none">
+      <label>Nombre d'heures</label>
+      <input type="number" step="0.5" min="0.5" max="12" id="conge-admin-nb-heures" placeholder="Ex : 3,5" oninput="calcJoursAdmin()" />
+      <div id="conge-admin-heures-equiv" style="font-size:11px;color:var(--gris-moyen);margin-top:6px;text-align:center"></div>
     </div>
     <div class="field">
       <label>Statut</label>
