@@ -1407,12 +1407,31 @@
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
         const jours = r['Nombre de jour'] || '—';
         let heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+        let debugLigne = '';
         if (!heuresExplicites && typeRaw === 'RTT' && r['Date de début'] && r['Date de fin journée (inclus)']
             && String(r['Date de début']).split('T')[0] === String(r['Date de fin journée (inclus)']).split('T')[0]) {
-          const dUnique = new Date(String(r['Date de début']).split('T')[0] + 'T12:00:00');
+          const dateUniqueStr = String(r['Date de début']).split('T')[0];
+          const dUnique = new Date(dateUniqueStr + 'T12:00:00');
           const theoriqueUnique = dUnique.getDay() === 5 ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
           const heuresCorrigees = heuresRttDemande(r, saisiesCollabSuivi, feuilleCollab.id);
           if (heuresCorrigees !== theoriqueUnique) heuresExplicites = heuresCorrigees;
+
+          // Diagnostic temporaire : liste les saisies de ce collaborateur ce jour-là, peu importe le match.
+          const saisiesCeJour = saisiesCollabSuivi.filter(s => {
+            const sid = (s['Collaborateur'] || [])[0]?.id;
+            const sdate = s['Date'] ? String(s['Date']).split('T')[0] : null;
+            return sid === feuilleCollab.id && sdate === dateUniqueStr;
+          });
+          if (saisiesCeJour.length) {
+            debugLigne = `<div style="font-size:10px;color:#1a4f8b;margin-top:4px">🔍 Diag — ${saisiesCeJour.map(s => {
+              const ch = (s['Chantiers']||[])[0]?.value || '∅';
+              const tt = (s['Type de taches']||[])[0]?.value || '∅';
+              const h = s['Heures Normales'] || '∅';
+              return `[chantier="${ch}", type tâche="${tt}", h=${h}]`;
+            }).join(' ')} — théorique=${theoriqueUnique}h</div>`;
+          } else {
+            debugLigne = `<div style="font-size:10px;color:#c0392b;margin-top:4px">🔍 Diag — aucune saisie trouvée pour ce collaborateur (id=${feuilleCollab.id}) le ${dateUniqueStr}</div>`;
+          }
         }
 
         let statutClass = 'attente';
@@ -1430,6 +1449,7 @@
           </div>
           <div class="demande-dates">${dateLigne}</div>
           <div class="demande-jours">${dureeLigne}</div>
+          ${debugLigne}
           ${r['Notes'] ? `<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ${r['Notes']}</div>` : ''}
         </div>`;
       }).join('') + '<div style="height:20px"></div>';
@@ -1515,10 +1535,10 @@
           const sid = (s['Collaborateur'] || [])[0]?.id;
           const sdate = s['Date'] ? String(s['Date']).split('T')[0] : null;
           const chantiers = s['Chantiers'] || [];
-          const sousTaches = s['Sous Taches'] || [];
+          const typeTaches = s['Type de taches'] || [];
           return sid === collabId && sdate === debutStr
             && chantiers.some(ch => ch.value === 'ABSENCE')
-            && sousTaches.some(st => st.value === 'RTT');
+            && typeTaches.some(t => t.value === 'RTT');
         });
         if (lignesAbsenceRtt.length) {
           const heuresReelles = lignesAbsenceRtt.reduce((sum, s) => sum + (parseFloat(s['Heures Normales']) || 0), 0);
