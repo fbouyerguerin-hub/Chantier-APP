@@ -1216,14 +1216,16 @@
     calcJours();
   }
 
-  // Compte le nombre de jours entre deux dates (inclus) en excluant certains jours de la semaine.
-  // joursExclus : tableau de numéros de jour à exclure (0=dimanche, 6=samedi).
+  // Compte le nombre de jours entre deux dates (inclus) en excluant certains jours de la semaine
+  // ainsi que les jours fériés français. joursExclus : numéros de jour à exclure (0=dimanche, 6=samedi).
   function compterJoursSelonType(debutStr, finStr, joursExclus) {
     const d1 = new Date(debutStr + 'T12:00:00');
     const d2 = new Date(finStr + 'T12:00:00');
     let count = 0;
     for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
-      if (!joursExclus.includes(d.getDay())) count++;
+      if (joursExclus.includes(d.getDay())) continue;
+      if (nomJourFerie(d.toISOString().split('T')[0])) continue;
+      count++;
     }
     return count;
   }
@@ -1262,7 +1264,7 @@
       } else {
         diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
       }
-      const labelUnite = typeCongesSelected === 'RTT' ? ' jour(s) ouvré(s) (lun-ven)' : typeCongesSelected === 'Congés payés' ? ' jour(s) ouvrable(s) (lun-sam)' : (diff > 1 ? ' jours' : ' jour');
+      const labelUnite = typeCongesSelected === 'RTT' ? ' jour(s) ouvré(s) (lun-ven, hors fériés)' : typeCongesSelected === 'Congés payés' ? ' jour(s) ouvrable(s) (lun-sam, hors fériés)' : (diff > 1 ? ' jours' : ' jour');
       el.textContent = diff > 0 ? diff + labelUnite : '⚠️ Date invalide';
 
       if (elFeries && diff > 0) {
@@ -1363,6 +1365,18 @@
     }
   }
 
+  // Calcule le nombre de jours à afficher pour une demande, selon son type :
+  // RTT = lundi-vendredi, Congés payés = lundi-samedi, autres types = champ Baserow (calendaire).
+  function joursDemandeSelonType(r) {
+    const typeVal = r['Type de demande']?.value;
+    const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+    const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+    if (!debutStr || !finStr) return r['Nombre de jour'] || 0;
+    if (typeVal === 'RTT') return compterJoursSelonType(debutStr, finStr, [0, 6]);
+    if (typeVal === 'Congés payés') return compterJoursSelonType(debutStr, finStr, [0]);
+    return r['Nombre de jour'] || 0;
+  }
+
   async function loadSuiviDemandes() {
     const container = document.getElementById('suivi-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -1398,7 +1412,7 @@
         const statut = r['Statut']?.value || 'En attente';
         const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
         const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
-        const jours = r['Nombre de jour'] || '—';
+        const jours = joursDemandeSelonType(r) || '—';
         const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
 
         let statutClass = 'attente';
@@ -1491,15 +1505,19 @@
   }
 
   // Calcule le nombre de jours équivalent pour une demande RTT donnée (utile pour les saisies en heures).
+  // Pour les saisies en jour(s), recalcule directement depuis les dates (lun-ven uniquement) plutôt que
+  // de se fier au champ "Nombre de jour" de Baserow (qui compte tous les jours calendaires).
   function joursRttDemande(r) {
     const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+    const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
     if (heuresExplicites > 0) {
-      const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
       const estVendredi = debutStr ? (new Date(debutStr + 'T12:00:00')).getDay() === 5 : false;
       const diviseur = estVendredi ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
       return heuresExplicites / diviseur;
     }
-    return parseFloat(r['Nombre de jour']) || 0;
+    const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+    if (!debutStr || !finStr) return parseFloat(r['Nombre de jour']) || 0;
+    return compterJoursSelonType(debutStr, finStr, [0, 6]); // RTT : lundi-vendredi uniquement
   }
 
   function dateYMD(d) {
@@ -3698,7 +3716,7 @@
       } else {
         diff = Math.round((new Date(fin) - new Date(debut)) / 86400000) + 1;
       }
-      const labelUnite = typeSelectionne === 'RTT' ? ' j. ouvré(s) (lun-ven)' : typeSelectionne === 'Congés payés' ? ' j. ouvrable(s) (lun-sam)' : (diff > 1 ? ' jours' : ' jour');
+      const labelUnite = typeSelectionne === 'RTT' ? ' j. ouvré(s) (lun-ven, hors fériés)' : typeSelectionne === 'Congés payés' ? ' j. ouvrable(s) (lun-sam, hors fériés)' : (diff > 1 ? ' jours' : ' jour');
       el.textContent = diff > 0 ? diff + labelUnite : '⚠️ Invalide';
 
       if (elFeries && diff > 0) {
