@@ -1341,6 +1341,7 @@
   const TYPES_ABSENCE_BLOQUANTS_RTT = ['Congés payés', 'Maladie', 'Sans solde', 'Accident'];
   const HEURES_RTT_PAR_SEMAINE = 4;
   const HEURES_PAR_JOUR_RTT = 8; // 1 journée prise = 8h déduites
+  const HEURES_PAR_JOUR_RTT_VENDREDI = 7; // sauf le vendredi = 7h déduites
 
   function switchRttTab(tab) {
     document.getElementById('tab-rtt-perso').classList.toggle('active', tab === 'perso');
@@ -1361,6 +1362,25 @@
 
   function heuresEnJoursRtt(h) { return h / HEURES_PAR_JOUR_RTT; }
   function joursEnHeuresRtt(j) { return j * HEURES_PAR_JOUR_RTT; }
+
+  // Calcule le nombre d'heures déduites pour une demande RTT donnée,
+  // en comptant 7h pour chaque vendredi inclus et 8h pour les autres jours ouvrés (lun-jeu).
+  function heuresRttDemande(r) {
+    const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+    const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+    if (!debutStr) return 0;
+    let total = 0;
+    let d = new Date(debutStr + 'T12:00:00');
+    const fin = new Date((finStr || debutStr) + 'T12:00:00');
+    while (d <= fin) {
+      const jourSemaine = d.getDay(); // 0=dim, 1=lun, …, 5=ven, 6=sam
+      if (jourSemaine >= 1 && jourSemaine <= 5) {
+        total += (jourSemaine === 5) ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return total;
+  }
 
   function dateYMD(d) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -1451,12 +1471,13 @@
       const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
 
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
-      let pris = 0, enAttente = 0;
+      let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
       demandesRtt.forEach(r => {
         const jours = parseFloat(r['Nombre de jour']) || 0;
+        const heures = heuresRttDemande(r);
         const statut = r['Statut']?.value || 'En attente';
-        if (statut === 'Validé' || statut === 'Approuvé') pris += jours;
-        else if (statut === 'En attente') enAttente += jours;
+        if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
+        else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
       });
 
       const absencesBloquantes = congesCollab.filter(r => {
@@ -1470,7 +1491,7 @@
       const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
 
       const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
-      const restantHeures = acquis - joursEnHeuresRtt(pris);
+      const restantHeures = acquis - prisHeures;
 
       const validees = demandesRtt
         .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
@@ -1482,10 +1503,11 @@
           const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
           const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
           const jours = parseFloat(r['Nombre de jour']) || 0;
+          const heures = heuresRttDemande(r);
           const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
           return `<div class="rtt-date-row">
             <div class="rtt-date-row-dates">${datesLabel}</div>
-            <div class="rtt-date-row-jours">${formatJoursRtt(jours)} j</div>
+            <div class="rtt-date-row-jours">${formatJoursRtt(jours)} j (${formatJoursRtt(heures)} h)</div>
           </div>`;
         }).join('')}
       ` : '';
@@ -1501,7 +1523,7 @@
             </div>
             <div>
               <div class="rtt-solde-val">${formatJoursRtt(pris)} j</div>
-              <div class="rtt-solde-sub">${formatJoursRtt(joursEnHeuresRtt(pris))} h</div>
+              <div class="rtt-solde-sub">${formatJoursRtt(prisHeures)} h</div>
               <div class="rtt-solde-label">Pris</div>
             </div>
             <div>
@@ -1511,8 +1533,8 @@
             </div>
           </div>
         </div>
-        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
-        ${enAttente > 0 ? `<div class="rtt-attente-info">⏳ ${formatJoursRtt(enAttente)} j (${formatJoursRtt(joursEnHeuresRtt(enAttente))} h) en attente de validation</div>` : ''}
+        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+        ${enAttente > 0 ? `<div class="rtt-attente-info">⏳ ${formatJoursRtt(enAttente)} j (${formatJoursRtt(enAttenteHeures)} h) en attente de validation</div>` : ''}
         ${listeDatesHtml}
       `;
     } catch(e) {
@@ -1540,11 +1562,12 @@
           const congesCollab = conges.filter(r => (r['Collaborateurs'] || []).some(co => co.id === c.id));
           const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
 
-          let pris = 0, enAttente = 0;
+          let pris = 0, enAttente = 0, prisHeures = 0;
           demandesRtt.forEach(r => {
             const jours = parseFloat(r['Nombre de jour']) || 0;
+            const heures = heuresRttDemande(r);
             const statut = r['Statut']?.value || 'En attente';
-            if (statut === 'Validé' || statut === 'Approuvé') pris += jours;
+            if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
             else if (statut === 'En attente') enAttente += jours;
           });
 
@@ -1555,20 +1578,20 @@
           });
           const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
           const acquis = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
-          const restantHeures = acquis - joursEnHeuresRtt(pris);
+          const restantHeures = acquis - prisHeures;
 
           return `<div class="rtt-admin-row">
             <div class="rtt-admin-nom">${c['Nom Complet']}</div>
             <div class="rtt-admin-stats">
               <span class="rtt-admin-stat">Acquis : <b>${formatJoursRtt(acquis)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(acquis))} j)</i></span>
-              <span class="rtt-admin-stat">Pris : <b>${formatJoursRtt(pris)} j</b> <i>(${formatJoursRtt(joursEnHeuresRtt(pris))} h)</i></span>
+              <span class="rtt-admin-stat">Pris : <b>${formatJoursRtt(pris)} j</b> <i>(${formatJoursRtt(prisHeures)} h)</i></span>
               <span class="rtt-admin-stat" style="${restantHeures < 0 ? 'color:#c0392b' : ''}">Restant : <b>${formatJoursRtt(restantHeures)} h</b> <i>(${formatJoursRtt(heuresEnJoursRtt(restantHeures))} j)</i></span>
               ${enAttente > 0 ? `<span class="rtt-admin-stat" style="color:#856404">⏳ ${formatJoursRtt(enAttente)} j</span>` : ''}
             </div>
           </div>`;
         }).join('');
 
-      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>` +
+      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>` +
         (lignes || '<div class="feuille-empty">Aucun collaborateur</div>');
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
