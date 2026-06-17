@@ -181,13 +181,17 @@
     .planning-table { border-collapse: collapse; width: 100%; min-width: 500px; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 2px 8px rgba(44,44,44,0.08); }
     .planning-table th { padding: 10px 6px; text-align: center; font-size: 11px; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--vert), #3a6331); border-right: 1px solid rgba(255,255,255,0.2); }
     .planning-table th.today-header { background: linear-gradient(135deg, var(--beige), #b8924a); }
+    .planning-table th.jour-ferie-header { background: linear-gradient(135deg, #c0392b, #922b21); }
     .planning-table th .jour-nom-th { font-size: 12px; font-weight: 800; }
     .planning-table th .jour-date-th { font-size: 10px; opacity: 0.85; margin-top: 2px; }
+    .planning-table th .jour-ferie-label { font-size: 8px; font-weight: 700; margin-top: 2px; }
     .planning-table td { padding: 8px 6px; vertical-align: top; border-right: 1px solid #f1ece3; border-bottom: 1px solid #f1ece3; min-height: 60px; width: 20%; }
+    .planning-table td.td-ferie { background: rgba(192,57,43,0.06); }
     .planning-table tr:last-child td { border-bottom: none; }
     .planning-cell-chantier { background: var(--vert-clair); border-radius: 6px; padding: 5px 7px; margin-bottom: 4px; font-size: 11px; font-weight: 600; color: var(--vert); border-left: 3px solid var(--vert); }
     .planning-cell-notes { font-size: 10px; color: #aaa; font-style: italic; margin-top: 2px; }
     .planning-cell-conge { background: #fef3cd; border-radius: 6px; padding: 5px 7px; font-size: 11px; font-weight: 600; color: #856404; border-left: 3px solid var(--beige); }
+    .planning-cell-ferie { background: #f5d6d2; border-radius: 6px; padding: 5px 7px; font-size: 11px; font-weight: 700; color: #c0392b; border-left: 3px solid #c0392b; text-align: center; }
     .planning-cell-vide { font-size: 11px; color: #ccc; font-style: italic; text-align: center; padding-top: 8px; }
     .planning-semaine-nav { display: flex; justify-content: space-between; align-items: center; background: #fff; margin: 0 16px 8px; border-radius: 10px; padding: 10px 14px; box-shadow: 0 1px 4px rgba(44,44,44,0.06); }
     .planning-semaine-label { font-size: 13px; font-weight: 700; color: var(--gris); }
@@ -420,6 +424,7 @@
     <div class="field">
       <label>Nombre de jours</label>
       <div style="background:var(--vert-clair);border:1.5px solid #c5d9c3;border-radius:10px;padding:13px 14px;font-size:18px;font-weight:800;color:var(--vert);text-align:center" id="conges-nb-jours">—</div>
+      <div id="conges-feries-info" style="font-size:11px;color:#c0392b;font-weight:600;margin-top:6px;text-align:center;display:none"></div>
     </div>
 
     <div class="field">
@@ -522,6 +527,62 @@
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
+
+  // ── Jours fériés français ────────────────────────────────────────────────
+  const _joursFeriesCache = {};
+
+  function getJoursFeries(year) {
+    if (_joursFeriesCache[year]) return _joursFeriesCache[year];
+
+    // Calcul du dimanche de Pâques (algorithme de Butcher / Gauss)
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31); // 3=mars, 4=avril
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    const paques = new Date(year, month - 1, day);
+
+    const addDays = (date, n) => { const d2 = new Date(date); d2.setDate(d2.getDate() + n); return d2; };
+    const fmt = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+    const map = {};
+    map[fmt(new Date(year, 0, 1))]   = "Jour de l'An";
+    map[fmt(new Date(year, 4, 1))]   = 'Fête du Travail';
+    map[fmt(new Date(year, 4, 8))]   = 'Victoire 1945';
+    map[fmt(new Date(year, 6, 14))]  = 'Fête Nationale';
+    map[fmt(new Date(year, 7, 15))]  = 'Assomption';
+    map[fmt(new Date(year, 10, 1))]  = 'Toussaint';
+    map[fmt(new Date(year, 10, 11))] = 'Armistice';
+    map[fmt(new Date(year, 11, 25))] = 'Noël';
+    map[fmt(addDays(paques, 1))]     = 'Lundi de Pâques';
+    map[fmt(addDays(paques, 39))]    = 'Ascension';
+    map[fmt(addDays(paques, 50))]    = 'Lundi de Pentecôte';
+
+    _joursFeriesCache[year] = map;
+    return map;
+  }
+
+  // Retourne le nom du jour férié pour une date 'YYYY-MM-DD', ou null
+  function nomJourFerie(dateStr) {
+    if (!dateStr) return null;
+    const year = parseInt(dateStr.slice(0, 4), 10);
+    const jf = getJoursFeries(year);
+    return jf[dateStr] || null;
+  }
+
+  function estJourFerie(dateStr) {
+    return !!nomJourFerie(dateStr);
+  }
+
   function toggleMdp() {
     const input = document.getElementById('login-mdp');
     input.type = input.type === 'password' ? 'text' : 'password';
@@ -1013,10 +1074,11 @@
           });
 
           totalSemaine += totalJour;
+          const ferieJour = nomJourFerie(date);
           const dateStr = new Date(date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' });
           joursHTML += `<div class="jour-block" style="margin:8px;border-radius:10px">
-            <div class="jour-header">
-              <span class="jour-date">${dateStr.charAt(0).toUpperCase() + dateStr.slice(1)}</span>
+            <div class="jour-header"${ferieJour ? ' style="background:linear-gradient(135deg,#c0392b,#922b21)"' : ''}>
+              <span class="jour-date">${dateStr.charAt(0).toUpperCase() + dateStr.slice(1)}${ferieJour ? ' 🔴 ' + ferieJour : ''}</span>
               <span class="jour-total">${totalJour}h</span>
             </div>
             ${lignesHTML}
@@ -1106,13 +1168,30 @@
     const debut = document.getElementById('conges-date-debut').value;
     const fin = document.getElementById('conges-date-fin').value;
     const el = document.getElementById('conges-nb-jours');
+    const elFeries = document.getElementById('conges-feries-info');
     if (debut && fin) {
       const d1 = new Date(debut + 'T12:00:00');
       const d2 = new Date(fin + 'T12:00:00');
       const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
       el.textContent = diff > 0 ? diff + (diff > 1 ? ' jours' : ' jour') : '⚠️ Date invalide';
+
+      if (elFeries && diff > 0) {
+        const feriesInclus = [];
+        for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
+          const dateStr = d.toISOString().split('T')[0];
+          const nom = nomJourFerie(dateStr);
+          if (nom) feriesInclus.push(nom);
+        }
+        if (feriesInclus.length > 0) {
+          elFeries.textContent = '🔴 Inclut ' + feriesInclus.length + ' jour férié(s) : ' + feriesInclus.join(', ');
+          elFeries.style.display = 'block';
+        } else {
+          elFeries.style.display = 'none';
+        }
+      }
     } else {
       el.textContent = '—';
+      if (elFeries) elFeries.style.display = 'none';
     }
   }
 
@@ -1342,16 +1421,19 @@
       const thHTML = jours.map((j, i) => {
         const dateStr = j.toISOString().split('T')[0];
         const isToday = dateStr === today;
+        const ferie = nomJourFerie(dateStr);
         const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-        return `<th class="${isToday ? 'today-header' : ''}">
+        return `<th class="${isToday ? 'today-header' : ''}${ferie ? ' jour-ferie-header' : ''}">
           <div class="jour-nom-th">${joursNoms[i]}</div>
           <div class="jour-date-th">${dateLabel}</div>
+          ${ferie ? `<div class="jour-ferie-label">🔴 ${ferie}</div>` : ''}
         </th>`;
       }).join('');
 
       const mkRow = (byDate, isSaisie) => jours.map(j => {
         const dateStr = j.toISOString().split('T')[0];
         const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
+        const ferie = nomJourFerie(dateStr);
         let cellHTML = '';
         if (congeJour) {
           cellHTML = `<div class="planning-cell-conge">${labelAbsence(congeJour['Type de demande']?.value)}</div>`;
@@ -1363,10 +1445,12 @@
               ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
             </div>`
           ).join('');
+        } else if (ferie) {
+          cellHTML = `<div class="planning-cell-ferie">🔴 Férié</div>`;
         } else {
           cellHTML = `<div class="planning-cell-vide">—</div>`;
         }
-        return `<td>${cellHTML}</td>`;
+        return `<td${ferie ? ' class="td-ferie"' : ''}>${cellHTML}</td>`;
       }).join('');
 
       container.innerHTML = `
@@ -1531,7 +1615,8 @@
     jours.forEach((j, i) => {
       const dateStr = j.toISOString().split('T')[0];
       const th = document.createElement('th');
-      th.style.cssText = 'background:' + (dateStr === today ? 'var(--beige)' : 'var(--vert)') + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
+      const ferie = nomJourFerie(dateStr);
+      th.style.cssText = 'background:' + (ferie ? '#c0392b' : (dateStr === today ? 'var(--beige)' : 'var(--vert)')) + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
       const absentsDetail = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
         (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) &&
         dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
@@ -1542,6 +1627,7 @@
       const absents = absentsDetail;
       const absentId = 'abs-' + dateStr;
       th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR',{day:'numeric',month:'short'}) + '</div>' +
+        (ferie ? '<div style="font-size:8px;font-weight:700;margin-top:2px">🔴 ' + ferie + '</div>' : '') +
         (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absentsDetail.map(a => iconeAbsence(a.raison) + ' ' + a.nom + ' (' + a.raison + ')').join('<br>') + '</div>' : '');
       trH.appendChild(th);
     });
@@ -1584,7 +1670,8 @@
       jours.forEach(j => {
         const dateStr = j.toISOString().split('T')[0];
         const td = document.createElement('td');
-        td.style.cssText = 'padding:4px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;min-height:44px;' + (isGestAdmin && !isPasseCollectif ? 'cursor:pointer' : '');
+        const ferieCell = estJourFerie(dateStr);
+        td.style.cssText = 'padding:4px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;min-height:44px;' + (ferieCell ? 'background:rgba(192,57,43,0.08);' : '') + (isGestAdmin && !isPasseCollectif ? 'cursor:pointer' : '');
         td._chantier = chantier;
         td._dateStr = dateStr;
 
@@ -2348,8 +2435,9 @@
     jours.forEach((j, i) => {
       const dateStr = j.toISOString().split('T')[0];
       const isToday = dateStr === today;
+      const ferie = nomJourFerie(dateStr);
       const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-      html += '<th class="col-jour ' + (isToday ? 'today' : '') + '"><div class="th-jour-nom">' + joursNoms[i] + '</div><div class="th-jour-date">' + dateLabel + '</div></th>';
+      html += '<th class="col-jour ' + (isToday ? 'today' : '') + (ferie ? ' col-jour-ferie' : '') + '" style="' + (ferie ? 'background:#c0392b;color:#fff;' : '') + '"><div class="th-jour-nom">' + joursNoms[i] + '</div><div class="th-jour-date">' + dateLabel + '</div>' + (ferie ? '<div style="font-size:8px;font-weight:700;margin-top:2px">🔴 ' + ferie + '</div>' : '') + '</th>';
     });
     html += '</tr></thead><tbody>';
 
@@ -2357,6 +2445,7 @@
       html += '<tr><td class="col-collab-cell"><div class="collab-initiales">' + collab.initiales + '</div><div class="collab-name">' + collab.nom.split(' ')[0] + '<br><strong>' + collab.nom.split(' ').slice(1).join(' ') + '</strong></div></td>';
       jours.forEach(j => {
         const dateStr = j.toISOString().split('T')[0];
+        const ferie = nomJourFerie(dateStr);
         const conge = congesAdminData.find(c =>
           (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
           dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
@@ -2364,9 +2453,11 @@
         const affs = planningAdminData.filter(p =>
           p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
         );
-        html += '<td><div>';
+        html += '<td' + (ferie ? ' style="background:rgba(192,57,43,0.08)"' : '') + '><div>';
         if (conge) {
           html += '<div class="conge-tag-admin">' + labelAbsence(conge['Type de demande']?.value) + '</div>';
+        } else if (ferie && affs.length === 0) {
+          html += '<div class="conge-tag-admin" style="background:#f5d6d2;color:#c0392b">🔴 Férié</div>';
         } else {
           affs.forEach(aff => {
             const chantier = (aff['Chantier'] || [])[0]?.value || '—';
@@ -3034,10 +3125,27 @@
     const debut = document.getElementById('conge-admin-debut').value;
     const fin = document.getElementById('conge-admin-fin').value;
     const el = document.getElementById('conge-admin-nb-jours');
+    const elFeries = document.getElementById('conge-admin-feries-info');
     if (debut && fin) {
       const diff = Math.round((new Date(fin) - new Date(debut)) / 86400000) + 1;
       el.textContent = diff > 0 ? diff + (diff > 1 ? ' jours' : ' jour') : '⚠️ Invalide';
-    } else { el.textContent = '—'; }
+
+      if (elFeries && diff > 0) {
+        const d1 = new Date(debut + 'T12:00:00');
+        const d2 = new Date(fin + 'T12:00:00');
+        const feriesInclus = [];
+        for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
+          const nom = nomJourFerie(d.toISOString().split('T')[0]);
+          if (nom) feriesInclus.push(nom);
+        }
+        if (feriesInclus.length > 0) {
+          elFeries.textContent = '🔴 Inclut ' + feriesInclus.length + ' jour férié(s) : ' + feriesInclus.join(', ');
+          elFeries.style.display = 'block';
+        } else {
+          elFeries.style.display = 'none';
+        }
+      }
+    } else { el.textContent = '—'; if (elFeries) elFeries.style.display = 'none'; }
   }
 
   async function ouvrirFormCongeAdmin(rowId) {
@@ -3977,6 +4085,7 @@
     <div class="field">
       <label>Nombre de jours</label>
       <div style="background:var(--vert-clair);border:1.5px solid #c5d9c3;border-radius:10px;padding:11px 14px;font-size:16px;font-weight:800;color:var(--vert);text-align:center" id="conge-admin-nb-jours">—</div>
+      <div id="conge-admin-feries-info" style="font-size:11px;color:#c0392b;font-weight:600;margin-top:6px;text-align:center;display:none"></div>
     </div>
     <div class="field">
       <label>Statut</label>
