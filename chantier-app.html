@@ -1863,6 +1863,8 @@
     }
   }
 
+  let rttAdminCache = { donnees: [] };
+
   async function loadRTTAdmin() {
     const container = document.getElementById('rtt-admin-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -1876,9 +1878,8 @@
       const anneeEnCours = new Date().getFullYear();
       const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), null);
 
-      const lignes = collabs
+      rttAdminCache.donnees = collabs
         .filter(c => c['Nom Complet'])
-        .sort((a, b) => (a['Nom Complet'] || '').localeCompare(b['Nom Complet'] || ''))
         .map(c => {
           const congesCollab = conges.filter(r => (r['Collaborateurs'] || []).some(co => co.id === c.id));
           const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
@@ -1913,24 +1914,61 @@
           const previsionnelTotalDisponible = HEURES_PREVISIONNEL_ANNUEL_RTT + reliquatAnneePrecedente;
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
 
-          return `<tr>
-            <td>${c['Nom Complet']}</td>
-            <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}</td>
-            <td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${(acquis - prisHeures) < 0 ? `<span class="rtt-sub" style="color:#c0392b">⚠️ ${formatJoursRtt(acquis - prisHeures)}h vs acquis</span>` : ''}</td>
-            <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 || reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${soldeDeBasePrevisionnel > 0 ? `dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base` : ''}${soldeDeBasePrevisionnel > 0 && reliquatAnneePrecedente !== 0 ? ', ' : ''}${reliquatAnneePrecedente !== 0 ? `${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1` : ''}</span>` : ''}</td>
-            <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
-          </tr>`;
-        }).join('');
+          return { collab: c, congesCollab, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente };
+        });
 
-      container.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
-        <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
-        (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
-          <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
-          <tbody>${lignes}</tbody>
-        </table></div>` : '<div class="feuille-empty">Aucun collaborateur</div>');
+      container.innerHTML = `
+        <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap">
+          <input type="text" id="rtt-admin-filtre-nom" placeholder="🔍 Rechercher un collaborateur…" oninput="renderRTTAdminTable()" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+          <select id="rtt-admin-filtre-type" onchange="renderRTTAdminTable()" style="padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+            <option value="">Tous les types d'absence</option>
+            <option value="Congés payés">Congés payés</option>
+            <option value="RTT">RTT</option>
+            <option value="Maladie">Maladie</option>
+            <option value="Formation">Formation</option>
+            <option value="Sans solde">Sans solde</option>
+            <option value="Maternité / Paternité">Maternité / Paternité</option>
+            <option value="Accident">Accident</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+        <div id="rtt-admin-table-area"></div>`;
+      renderRTTAdminTable();
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
     }
+  }
+
+  function renderRTTAdminTable() {
+    const area = document.getElementById('rtt-admin-table-area');
+    if (!area) return;
+    const filtreNom = (document.getElementById('rtt-admin-filtre-nom')?.value || '').toLowerCase().trim();
+    const filtreType = document.getElementById('rtt-admin-filtre-type')?.value || '';
+
+    const lignes = rttAdminCache.donnees
+      .filter(d => !filtreNom || (d.collab['Nom Complet'] || '').toLowerCase().includes(filtreNom))
+      .filter(d => !filtreType || d.congesCollab.some(r => {
+        const statut = r['Statut']?.value || 'En attente';
+        return r['Type de demande']?.value === filtreType && (statut === 'Validé' || statut === 'Approuvé');
+      }))
+      .sort((a, b) => (a.collab['Nom Complet'] || '').localeCompare(b.collab['Nom Complet'] || ''))
+      .map(d => {
+        const { collab: c, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente } = d;
+        return `<tr>
+          <td>${c['Nom Complet']}</td>
+          <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}</td>
+          <td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${(acquis - prisHeures) < 0 ? `<span class="rtt-sub" style="color:#c0392b">⚠️ ${formatJoursRtt(acquis - prisHeures)}h vs acquis</span>` : ''}</td>
+          <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 || reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${soldeDeBasePrevisionnel > 0 ? `dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base` : ''}${soldeDeBasePrevisionnel > 0 && reliquatAnneePrecedente !== 0 ? ', ' : ''}${reliquatAnneePrecedente !== 0 ? `${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1` : ''}</span>` : ''}</td>
+          <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
+        </tr>`;
+      }).join('');
+
+    area.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+      <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
+      (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
+        <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
+        <tbody>${lignes}</tbody>
+      </table></div>` : '<div class="feuille-empty">Aucun collaborateur ne correspond aux filtres.</div>');
   }
 
   // ── PLANNING ──
@@ -3712,46 +3750,61 @@
     await loadUtilisateurs();
   }
 
+  let congesAdminListCache = [];
+
   async function loadCongesAdmin() {
     const container = document.getElementById('liste-conges-admin');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const data = await res.json();
-      const rows = (data.results || []).sort((a,b) => {
+      congesAdminListCache = (data.results || []).sort((a,b) => {
         const order = {'En attente':0,'Validé':1,'Approuvé':1,'Refusé':2};
         return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
       });
-      if (!rows.length) { container.innerHTML = '<div class="feuille-empty">Aucune demande</div>'; return; }
-      container.innerHTML = rows.map(r => {
-        const statut = r['Statut']?.value || 'En attente';
-        const collab = (r['Collaborateurs'] || [])[0]?.value || '—';
-        const typeRaw2 = r['Type de demande']?.value || '—';
-        const type = typeRaw2 === '—' ? '—' : labelAbsence(typeRaw2);
-        const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
-        const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
-        const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
-        const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
-        const isAttente = statut === 'En attente';
-        const color = isAttente ? 'var(--beige)' : statut.includes('Valid') || statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
-        return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
-            <div style="font-size:11px;font-weight:700;color:${color}">${statut}</div>
-          </div>
-          <div style="font-size:12px;color:#aaa">${type} · ${periodeLabel}</div>
-          ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
-          <div style="display:flex;gap:8px;margin-top:10px">
-            ${isAttente ? `
-            <button onclick="validerConge(${r.id},'Approuvé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
-            <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
-            ` : ''}
-            <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
-            <button onclick="supprimerCongeAdmin(${r.id})" style="background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">🗑</button>
-          </div>
-        </div>`;
-      }).join('');
+      renderCongesAdminList();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  function renderCongesAdminList() {
+    const container = document.getElementById('liste-conges-admin');
+    if (!container) return;
+    const filtreNom = (document.getElementById('conges-admin-filtre-nom')?.value || '').toLowerCase().trim();
+    const filtreType = document.getElementById('conges-admin-filtre-type')?.value || '';
+
+    const rows = congesAdminListCache
+      .filter(r => !filtreNom || ((r['Collaborateurs'] || [])[0]?.value || '').toLowerCase().includes(filtreNom))
+      .filter(r => !filtreType || r['Type de demande']?.value === filtreType);
+
+    if (!rows.length) { container.innerHTML = '<div class="feuille-empty">Aucune demande ne correspond aux filtres</div>'; return; }
+    container.innerHTML = rows.map(r => {
+      const statut = r['Statut']?.value || 'En attente';
+      const collab = (r['Collaborateurs'] || [])[0]?.value || '—';
+      const typeRaw2 = r['Type de demande']?.value || '—';
+      const type = typeRaw2 === '—' ? '—' : labelAbsence(typeRaw2);
+      const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+      const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+      const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+      const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
+      const isAttente = statut === 'En attente';
+      const color = isAttente ? 'var(--beige)' : statut.includes('Valid') || statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
+      return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
+          <div style="font-size:11px;font-weight:700;color:${color}">${statut}</div>
+        </div>
+        <div style="font-size:12px;color:#aaa">${type} · ${periodeLabel}</div>
+        ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
+        <div style="display:flex;gap:8px;margin-top:10px">
+          ${isAttente ? `
+          <button onclick="validerConge(${r.id},'Approuvé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
+          <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
+          ` : ''}
+          <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
+          <button onclick="supprimerCongeAdmin(${r.id})" style="background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
   }
 
   let uniteCongeAdminSelected = 'jour';
@@ -4582,6 +4635,20 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Demandes de congés</div>
       <button onclick="ouvrirFormCongeAdmin(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouvelle</button>
+    </div>
+    <div style="display:flex;gap:8px;margin:0 16px 12px;flex-wrap:wrap">
+      <input type="text" id="conges-admin-filtre-nom" placeholder="🔍 Rechercher un collaborateur…" oninput="renderCongesAdminList()" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+      <select id="conges-admin-filtre-type" onchange="renderCongesAdminList()" style="padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+        <option value="">Tous les types</option>
+        <option value="Congés payés">Congés payés</option>
+        <option value="RTT">RTT</option>
+        <option value="Maladie">Maladie</option>
+        <option value="Formation">Formation</option>
+        <option value="Sans solde">Sans solde</option>
+        <option value="Maternité / Paternité">Maternité / Paternité</option>
+        <option value="Accident">Accident</option>
+        <option value="Autre">Autre</option>
+      </select>
     </div>
     <div id="liste-conges-admin"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
