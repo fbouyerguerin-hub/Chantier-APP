@@ -4607,295 +4607,7 @@
     finally { btn.innerHTML = origText; btn.disabled = false; }
   }
 
-  // ── Fiches d'heures individuelles — équivalent direct de guerin_fiches_heures.py ──
-  const FH_BLEU_FONCE = 'FF1F3864';
-  const FH_BLEU_MOYEN = 'FF2E75B6';
-  const FH_GRIS_CLAIR = 'FFF2F2F2';
-  const FH_GRIS_TITRE = 'FF4A4A4A';
-  const FH_BLANC      = 'FFFFFFFF';
-  const FH_ROUGE_FOND = 'FFFFCCCC';
-  const FH_ROUGE_TXT  = 'FFC00000';
-  const FH_ORANGE_FOND= 'FFFFE0B2';
-  const FH_ORANGE_TXT = 'FFE65100';
-  const FH_VERT_TXT   = 'FF2D6A2D';
-  const FH_SEUIL      = 42.5;
-  const FH_SEUIL_WARN = 40.0;
-  const FH_COLS       = ['A','B','C','D','E','F','G','H','I','J','K'];
-  const FH_COL_WIDTHS = [4, 18, 22, 50, 22, 23, 6, 10, 14, 13, 18];
-  const FH_HEADERS    = ['N°','Date','Véhicule','Chantier','Type de tâche','Sous-tâche','Zone','Total j.','Cumul journalier','Sem.','Notes'];
-  const FH_BORDER = { top:{style:'thin',color:{argb:'FFBBBBBB'}}, left:{style:'thin',color:{argb:'FFBBBBBB'}}, bottom:{style:'thin',color:{argb:'FFBBBBBB'}}, right:{style:'thin',color:{argb:'FFBBBBBB'}} };
-  const FH_THICK_BORDER = { top:{style:'medium',color:{argb:FH_BLEU_FONCE}}, left:{style:'medium',color:{argb:FH_BLEU_FONCE}}, bottom:{style:'medium',color:{argb:FH_BLEU_FONCE}}, right:{style:'medium',color:{argb:FH_BLEU_FONCE}} };
-
-  function fhISOWeek(dateStr) {
-    if (!dateStr) return { year: 0, week: 0 };
-    const d = new Date(dateStr + 'T12:00:00');
-    const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    const dayOfWeek = tmp.getUTCDay() || 7;
-    tmp.setUTCDate(tmp.getUTCDate() + 4 - dayOfWeek);
-    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
-    const weekNo = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
-    return { year: tmp.getUTCFullYear(), week: weekNo };
-  }
-
-  function fhSemKey(dateStr) {
-    const {year, week} = fhISOWeek(dateStr);
-    return year + '-' + String(week).padStart(2,'0');
-  }
-
-  function fhFormatDate(dateStr) {
-    if (!dateStr) return '';
-    const d = new Date(dateStr + 'T12:00:00');
-    return d.toLocaleDateString('fr-FR');
-  }
-
-  function creerFicheExcelJS(wb, logoImageId, collaborateur, lignes, periode, poste) {
-    const ws = wb.addWorksheet(collaborateur.slice(0, 31));
-
-    // Largeurs colonnes
-    FH_COLS.forEach((col, i) => { ws.getColumn(i + 1).width = FH_COL_WIDTHS[i]; });
-
-    // Hauteurs de lignes
-    [[1,6],[2,72],[3,18],[4,32],[5,32],[6,32],[7,8],[8,16],[9,22]].forEach(([r,h]) => {
-      ws.getRow(r).height = h;
-    });
-
-    // Logo + Titre
-    ws.mergeCells('A2:F2');
-    ws.getCell('A2').fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_BLANC} };
-    if (logoImageId !== null) {
-      ws.addImage(logoImageId, { tl:{ col:0, row:1 }, ext:{ width:300, height:70 } });
-    }
-    ws.mergeCells('G2:K2');
-    const cTitre = ws.getCell('G2');
-    cTitre.value = 'FICHE DE CONTRÔLE DES HEURES';
-    cTitre.font = { name:'Arial', size:13, bold:true, color:{argb:FH_GRIS_TITRE} };
-    cTitre.alignment = { horizontal:'right', vertical:'middle' };
-
-    // Bandeau décoratif tricolore (ligne 3)
-    ['A','B','C'].forEach(col => {
-      const c = ws.getCell(col + '3');
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFC4A882'} };
-    });
-    ['D','E','F','G'].forEach(col => {
-      const c = ws.getCell(col + '3');
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF5A6A7A'} };
-    });
-    ['H','I','J','K'].forEach(col => {
-      const c = ws.getCell(col + '3');
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF2D6A2D'} };
-    });
-
-    // Fonction label
-    function label(cellAddr, text) {
-      const c = ws.getCell(cellAddr);
-      c.value = text;
-      c.font = { name:'Arial', size:10, bold:true, color:{argb:FH_BLEU_MOYEN} };
-      c.alignment = { horizontal:'left', vertical:'middle', wrapText:true };
-    }
-    function val(merge, value, bold) {
-      ws.mergeCells(merge);
-      const start = merge.split(':')[0];
-      const c = ws.getCell(start);
-      c.value = value;
-      c.font = { name:'Arial', size:11, bold:!!bold, color:{argb:'FF1A1A1A'} };
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_GRIS_CLAIR} };
-      c.alignment = { horizontal:'left', vertical:'middle', wrapText:true };
-      c.border = FH_BORDER;
-    }
-
-    label('B4', 'Collaborateur :'); val('C4:H4', collaborateur, true);
-    label('I4', 'Période :');        val('J4:K4', periode);
-    label('B5', 'Poste / Métier :'); val('C5:H5', poste);
-    label('I5', 'Responsable :');    val('J5:K5', '');
-    label('B6', 'Mois / Année :');   val('C6:H6', periode);
-
-    ws.mergeCells('A7:K7');
-    ws.getCell('A7').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE8E8E8'} };
-
-    ws.mergeCells('A8:K8');
-    const cNote8 = ws.getCell('A8');
-    cNote8.value = `  🔴 Rouge = semaine > ${FH_SEUIL}h   |   🟠 Orange = semaine entre ${FH_SEUIL_WARN}h et ${FH_SEUIL}h`;
-    cNote8.font = { name:'Arial', size:8, italic:true, color:{argb:'FF555555'} };
-    cNote8.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFF9E6'} };
-    cNote8.alignment = { horizontal:'left', vertical:'middle' };
-
-    FH_COLS.forEach((col, i) => {
-      const c = ws.getCell(col + '9');
-      c.value = FH_HEADERS[i];
-      c.font = { name:'Arial', size:9, bold:true, color:{argb:FH_BLANC} };
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF3A3A3A'} };
-      c.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
-      c.border = FH_BORDER;
-    });
-
-    // Calcul heures par semaine et par jour
-    const heuresSemaine = {};
-    const heuresJour = {};
-    lignes.forEach(l => {
-      const sk = fhSemKey(l.date);
-      heuresSemaine[sk] = (heuresSemaine[sk] || 0) + (parseFloat(l.heures) || 0);
-      heuresJour[l.date] = (heuresJour[l.date] || 0) + (parseFloat(l.heures) || 0);
-    });
-
-    const semFirstRow = {};
-    const jourFirstRow = {};
-    lignes.forEach((l, i) => {
-      const sk = fhSemKey(l.date);
-      if (semFirstRow[sk] === undefined) semFirstRow[sk] = 10 + i;
-      if (jourFirstRow[l.date] === undefined) jourFirstRow[l.date] = 10 + i;
-    });
-
-    const START = 10;
-    lignes.forEach((ligne, i) => {
-      const r = START + i;
-      ws.getRow(r).height = 28;
-
-      const sk = fhSemKey(ligne.date);
-      const totalSem = heuresSemaine[sk] || 0;
-      const isFirstSem = semFirstRow[sk] === r;
-      const hn = parseFloat(ligne.heures) || 0;
-
-      let fillA, fillB, txtColor;
-      if (totalSem > FH_SEUIL) {
-        fillA = { type:'pattern', pattern:'solid', fgColor:{argb:FH_ROUGE_FOND} };
-        fillB = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFB3B3'} };
-        txtColor = FH_ROUGE_TXT;
-      } else if (totalSem >= FH_SEUIL_WARN) {
-        fillA = { type:'pattern', pattern:'solid', fgColor:{argb:FH_ORANGE_FOND} };
-        fillB = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFCC80'} };
-        txtColor = FH_ORANGE_TXT;
-      } else {
-        fillA = { type:'pattern', pattern:'solid', fgColor:{argb: i%2===0 ? FH_BLANC : FH_GRIS_CLAIR} };
-        fillB = { type:'pattern', pattern:'solid', fgColor:{argb: i%2===0 ? 'FFE8F5E9' : 'FFC8E6C9'} };
-        txtColor = FH_VERT_TXT;
-      }
-
-      const cA = ws.getCell('A' + r);
-      cA.value = i + 1;
-      cA.font = { name:'Arial', size:9, color:{argb:'FF888888'} };
-      cA.alignment = { horizontal:'center', vertical:'middle' };
-      cA.fill = fillA; cA.border = FH_BORDER;
-
-      [['B','date'],['C','vehicule'],['D','chantier'],['E','tache'],['F','sousTache'],['G','zone'],['K','notes']].forEach(([col, key]) => {
-        const valRaw = key === 'date' ? fhFormatDate(ligne[key]) : (ligne[key] || '');
-        const cell = ws.getCell(col + r);
-        cell.value = valRaw;
-        cell.font = { name:'Arial', size:9 };
-        cell.fill = fillA; cell.border = FH_BORDER;
-        cell.alignment = { vertical:'middle', horizontal: col==='G' ? 'center' : 'left', wrapText:true };
-      });
-
-      const cH = ws.getCell('H' + r);
-      cH.value = hn > 0 ? hn : '';
-      cH.numFmt = '0.00';
-      cH.font = { name:'Arial', size:9, bold:true, color:{argb:txtColor} };
-      cH.fill = fillB; cH.border = FH_BORDER;
-      cH.alignment = { horizontal:'center', vertical:'middle' };
-
-      const cumulJour = heuresJour[ligne.date] || 0;
-      const isFirstJour = jourFirstRow[ligne.date] === r;
-      const cI = ws.getCell('I' + r);
-      if (isFirstJour && cumulJour > 0) {
-        cI.value = fhFormatDate(ligne.date) + '\n' + cumulJour.toFixed(2) + 'h';
-        cI.font = { name:'Arial', size:9, bold:true, color:{argb:txtColor} };
-      } else {
-        cI.value = '';
-        cI.font = { name:'Arial', size:9 };
-      }
-      cI.fill = fillA; cI.border = FH_BORDER;
-      cI.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
-
-      const {week: ns} = fhISOWeek(ligne.date);
-      const cJ = ws.getCell('J' + r);
-      if (isFirstSem) {
-        cJ.value = `S${ns} : ${totalSem.toFixed(1)}h`;
-        cJ.font = { name:'Arial', size:10, bold:true, color:{argb: totalSem > FH_SEUIL ? FH_ROUGE_TXT : totalSem >= FH_SEUIL_WARN ? FH_ORANGE_TXT : FH_VERT_TXT} };
-      } else {
-        cJ.value = '';
-        cJ.font = { name:'Arial', size:10, bold:true };
-      }
-      cJ.fill = fillA; cJ.border = FH_BORDER;
-      cJ.alignment = { horizontal:'center', vertical:'middle' };
-    });
-
-    // Ligne TOTAUX
-    const TOT = START + lignes.length;
-    ws.getRow(TOT).height = 26;
-    ws.mergeCells(`A${TOT}:G${TOT}`);
-    const cTot = ws.getCell(`A${TOT}`);
-    cTot.value = 'TOTAUX';
-    cTot.font = { name:'Arial', size:10, bold:true, color:{argb:FH_BLANC} };
-    cTot.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF3A3A3A'} };
-    cTot.alignment = { horizontal:'center', vertical:'middle' };
-    cTot.border = FH_THICK_BORDER;
-
-    const totalH = lignes.reduce((s, l) => s + (parseFloat(l.heures) || 0), 0);
-    const cHtot = ws.getCell(`H${TOT}`);
-    cHtot.value = Math.round(totalH * 100) / 100;
-    cHtot.numFmt = '0.00';
-    cHtot.font = { name:'Arial', size:12, bold:true, color:{argb:FH_BLANC} };
-    cHtot.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF2D6A2D'} };
-    cHtot.alignment = { horizontal:'center', vertical:'middle' };
-    cHtot.border = FH_THICK_BORDER;
-
-    ['I','J','K'].forEach(col => {
-      const c = ws.getCell(col + TOT);
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF3A3A3A'} };
-      c.border = FH_THICK_BORDER;
-    });
-
-    // Zone signature
-    const SIG = TOT + 2;
-    [[SIG,14],[SIG+1,45],[SIG+2,14]].forEach(([rr,hh]) => { ws.getRow(rr).height = hh; });
-
-    [['B'+SIG+':D'+SIG,'Signature du collaborateur'],['I'+SIG+':K'+SIG,'Visa du responsable']].forEach(([merge,txt]) => {
-      ws.mergeCells(merge);
-      const c = ws.getCell(merge.split(':')[0]);
-      c.value = txt;
-      c.font = { name:'Arial', size:9, bold:true, color:{argb:'FF3A3A3A'} };
-      c.alignment = { horizontal:'center', vertical:'middle' };
-    });
-
-    [['B'+(SIG+1)+':D'+(SIG+1)],['I'+(SIG+1)+':K'+(SIG+1)]].forEach(([merge]) => {
-      ws.mergeCells(merge);
-      const c = ws.getCell(merge.split(':')[0]);
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_GRIS_CLAIR} };
-      c.border = FH_BORDER;
-    });
-
-    ['B'+(SIG+2), 'G'+(SIG+2)].forEach(addr => {
-      const c = ws.getCell(addr);
-      c.value = 'Date : _______________';
-      c.font = { name:'Arial', size:8, color:{argb:'FF888888'} };
-    });
-
-    const NOTE = SIG + 4;
-    ws.mergeCells(`A${NOTE}:K${NOTE}`);
-    const cFooter = ws.getCell(`A${NOTE}`);
-    cFooter.value = "GUÉRIN BÂTIMENTS  ·  2 ZA Le Pont Girouard  ·  85 250 Saint-André-Goule-d'Oie  ·  Conserver ce document dans le dossier du salarié.";
-    cFooter.font = { name:'Arial', size:7, italic:true, color:{argb:'FF888888'} };
-    cFooter.alignment = { horizontal:'center' };
-
-    ws.pageSetup.orientation = 'portrait';
-    ws.pageSetup.paperSize = 9;
-    ws.pageSetup.fitToPage = true;
-    ws.pageSetup.fitToWidth = 1;
-    ws.pageSetup.fitToHeight = 1;
-    ws.pageSetup.printTitlesRow = '1:9';
-  }
-
-  async function genererClasseurFichesHeures(dataParCollab, periode) {
-    const wb = new ExcelJS.Workbook();
-    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
-    const collabsSorted = Object.keys(dataParCollab).sort();
-    collabsSorted.forEach(collab => {
-      const { lignes, poste } = dataParCollab[collab];
-      creerFicheExcelJS(wb, logoImageId, collab, lignes, periode, poste);
-    });
-    return wb;
-  }
-
-    async function exportFeuilleCollaborateur(periode) {
+  async function exportFeuilleCollaborateur(periode) {
     const sel = document.getElementById('export-collab-select');
     const collabVal = sel?.value; // Lire la valeur AVANT tout rechargement
     // S'assurer que COLLABORATEURS_ADMIN est chargé (sans toucher au select)
@@ -4966,8 +4678,9 @@
         return;
       }
 
-      // Préparer les données par collaborateur pour genererClasseurFichesHeures
-      const dataParCollab = {};
+      // Construire CSV
+      const cols = ['Date','Chantier','Collaborateur','Poste','Type de tache','Sous-tache','Total Heures','Notes'];
+      const csvRows = [cols.join(';')];
       allRows.sort((a, b) => {
         const ca = (a['Collaborateur']||[])[0]?.value || '';
         const cb = (b['Collaborateur']||[])[0]?.value || '';
@@ -4976,29 +4689,28 @@
         const date = (r['Date'] || '').split('T')[0];
         const chantier = (r['Chantiers'] || [])[0]?.value || '';
         const rCollab = (r['Collaborateur'] || [])[0]?.value || '';
-        if (!rCollab) return;
         const tache = (r['Type de taches'] || [])[0]?.value || '';
-        const sousTache = (r['Sous Taches'] || [])[0]?.value || '';
-        const heures = parseFloat(r['Heures Normales']) || 0;
-        const notes = (r['Notes'] || '').split('\n').join(' ');
-        const vehicule = (r['Véhicules'] || [])[0]?.value || '';
-        const zone = (r['Zones'] || [])[0]?.value || '';
+        const sous = (r['Sous Taches'] || [])[0]?.value || '';
+        const heures = r['Heures Normales'] || 0;
+        const notes = (r['Notes'] || '').replace(/;/g, ',').split('\n').join(' ');
         const rCollabNorm = rCollab.trim().toLowerCase();
         const collabInfo2 = COLLABORATEURS_ADMIN.find(c => c.nom.trim().toLowerCase() === rCollabNorm);
         const poste2 = collabInfo2?.poste || '';
-        if (!dataParCollab[rCollab]) dataParCollab[rCollab] = { lignes: [], poste: poste2 };
-        dataParCollab[rCollab].lignes.push({ date, chantier, tache, sousTache, heures, notes, vehicule, zone });
+        csvRows.push([date, chantier, rCollab, poste2, tache, sous, heures, notes].join(';'));
       });
 
-      const wb = await genererClasseurFichesHeures(dataParCollab, nomFichier.replace(/_/g,' '));
-      const buffer = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: 'application/octet-stream' });
+      // Totaux
+      const totalH = allRows.reduce((s, r) => s + (parseFloat(r['Heures Normales']) || 0), 0);
+      csvRows.push('');
+      csvRows.push(['TOTAL','','','','','',totalH.toFixed(2),''].join(';'));
+
+      const csv = '\uFEFF' + csvRows.join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = nomFichier + '.xlsx';
+      a.download = nomFichier + '.csv';
       a.click();
       URL.revokeObjectURL(a.href);
-
 
     } catch(e) { alert('Erreur export : ' + e.message); }
     finally { btn.innerHTML = origText; btn.disabled = false; }
@@ -5410,7 +5122,7 @@
       <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;overflow:hidden">
         <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3;background:#f8fafc;display:flex;align-items:center;gap:8px">
           <span>👷</span><span>Feuille d'heures par collaborateur</span>
-          <span style="font-size:10px;color:#aaa;margin-left:auto">Excel — une feuille par collaborateur</span>
+        </div>
         <div style="padding:10px 16px;border-bottom:1px solid #f1f5f9">
           <select id="export-collab-select" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:13px;color:var(--gris);outline:none">
             <option value="">-- Choisir un collaborateur --</option>
