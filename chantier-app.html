@@ -4082,13 +4082,11 @@
       const moisSelectionnes = [...document.querySelectorAll('#export-conges-mois-grid input[type=checkbox]:checked')].map(cb => parseInt(cb.value)).sort((a,b) => a-b);
       if (!moisSelectionnes.length) { alert('⚠️ Veuillez sélectionner au moins un mois.'); return; }
 
-      // Période globale : du premier jour du premier mois au dernier jour du dernier mois
       const premierMois = moisSelectionnes[0];
       const dernierMois = moisSelectionnes[moisSelectionnes.length - 1];
       const dateDebut = new Date(annee, premierMois, 1).toISOString().split('T')[0];
-      const dateFin = new Date(annee, dernierMois + 1, 0).toISOString().split('T')[0];
+      const dateFin   = new Date(annee, dernierMois + 1, 0).toISOString().split('T')[0];
 
-      // Charger les demandes de congés validées ou en attente
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN +
         '/?user_field_names=true&size=200' +
         '&filter__Date_de_debut__date_before_or_equal=' + dateFin +
@@ -4097,7 +4095,6 @@
       const data = await res.json();
       const conges = (data.results || []).filter(r => r['Statut']?.value !== 'Refusé');
 
-      // Charger tous les collaborateurs
       let collabs = COLLABORATEURS_ADMIN;
       if (!collabs.length) {
         const rc = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
@@ -4105,64 +4102,227 @@
         collabs = (dc.results || []).map(r => ({ nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '' }));
       }
 
-      // Construire les colonnes : un groupe par mois sélectionné
-      const allJours = []; // { dateStr, label, mois }
+      // Construire la liste des jours
+      const allJours = [];
       moisSelectionnes.forEach(m => {
         const nb = new Date(annee, m + 1, 0).getDate();
         for (let d = 1; d <= nb; d++) {
-          const dateStr = annee + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
-          allJours.push({ dateStr, label: moisNoms[m].slice(0,3) + String(d).padStart(2,'0'), mois: m });
+          const dateStr = annee + '-' + String(m + 1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+          const dw = new Date(dateStr + 'T12:00:00').getDay();
+          allJours.push({ dateStr, jour: d, mois: m, dw });
         }
       });
 
-      const headers = ['Collaborateur', 'Poste', ...allJours.map(j => j.label), 'Total jours'];
-      const rows = [headers.join(';')];
+      // Couleurs Excel par type de demande
+      const TYPE_STYLES = {
+        'Congés payés':          { code:'CP',  bg:'FF4472C4', txt:'FFFFFFFF' },
+        'RTT':                   { code:'RTT', bg:'FF70AD47', txt:'FFFFFFFF' },
+        'Maladie':               { code:'MAL', bg:'FFED7D31', txt:'FFFFFFFF' },
+        'Formation':             { code:'FOR', bg:'FF7030A0', txt:'FFFFFFFF' },
+        'Sans solde':            { code:'SS',  bg:'FFBFBFBF', txt:'FF404040' },
+        'Maternité / Paternité': { code:'MAT', bg:'FFFFC000', txt:'FF404040' },
+        'Accident':              { code:'ACC', bg:'FFFF0000', txt:'FFFFFFFF' },
+      };
+      const WEEKEND_BG = 'FFD9D9D9';
+      const MOIS_COLORS = ['FF1F4E79','FF2E75B6','FF375623','FF375623','FF7030A0','FF833C00','FF0563C1','FF843C0C','FF1F497D','FF4BACC6','FF17375E','FF955D08'];
+      const ALTERNAT_BG = ['FFEBF3FB','FFF2F2F2'];
 
-      // Pour chaque collaborateur, remplir les cases
-      collabs.sort((a, b) => a.nom.localeCompare(b.nom)).forEach(collab => {
-        const congesCollab = conges.filter(c =>
-          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
-        );
-        if (!congesCollab.length) return;
+      const wb = new ExcelJS.Workbook();
+      const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+      const ws = wb.addWorksheet('Planning congés');
 
-        let total = 0;
-        const cellules = allJours.map(j => {
-          const congeJour = congesCollab.find(c =>
-            j.dateStr >= c['Date de début'] && j.dateStr <= c['Date de fin journée (inclus)']
+      // Colonnes : col1=Collaborateur, col2=Poste, puis un par jour, puis Total
+      const COL_NOM   = 1;
+      const COL_POSTE = 2;
+      const COL_JOURS_START = 3;
+      const COL_TOTAL = COL_JOURS_START + allJours.length;
+
+      ws.getColumn(COL_NOM).width   = 22;
+      ws.getColumn(COL_POSTE).width = 16;
+      allJours.forEach((j, i) => { ws.getColumn(COL_JOURS_START + i).width = 4.5; });
+      ws.getColumn(COL_TOTAL).width = 8;
+
+      // Ligne 1-2 : logo
+      ws.getRow(1).height = 6;
+      ws.getRow(2).height = 60;
+      ws.getRow(3).height = 8;
+      ws.addImage(logoImageId, { tl:{ col:0, row:0 }, ext:{ width:280, height:60 } });
+      for (let c = 1; c <= COL_TOTAL; c++) {
+        ws.getCell(1, c).fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFFFFF'} };
+        ws.getCell(2, c).fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFFFFF'} };
+        ws.getCell(3, c).fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE8E8E8'} };
+      }
+
+      // Titre
+      const titleCell = ws.getCell(2, Math.floor(COL_TOTAL / 2));
+      titleCell.value = 'PLANNING CONGÉS & ABSENCES — ' + annee;
+      titleCell.font = { name:'Arial', size:13, bold:true, color:{argb:'FF1F4E79'} };
+      titleCell.alignment = { horizontal:'center', vertical:'middle' };
+
+      // Ligne 4 : en-têtes mois (fusion sur leurs jours)
+      const ROW_MOIS = 4;
+      ws.getRow(ROW_MOIS).height = 20;
+      let colCur = COL_JOURS_START;
+      moisSelectionnes.forEach(m => {
+        const nb = new Date(annee, m + 1, 0).getDate();
+        if (nb === 1) {
+          const c = ws.getCell(ROW_MOIS, colCur);
+          c.value = moisNoms[m].toUpperCase();
+          c.font = { name:'Arial', size:8, bold:true, color:{argb:'FFFFFFFF'} };
+          c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:MOIS_COLORS[m % MOIS_COLORS.length]} };
+          c.alignment = { horizontal:'center', vertical:'middle' };
+        } else {
+          ws.mergeCells(ROW_MOIS, colCur, ROW_MOIS, colCur + nb - 1);
+          const c = ws.getCell(ROW_MOIS, colCur);
+          c.value = moisNoms[m].toUpperCase();
+          c.font = { name:'Arial', size:9, bold:true, color:{argb:'FFFFFFFF'} };
+          c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:MOIS_COLORS[m % MOIS_COLORS.length]} };
+          c.alignment = { horizontal:'center', vertical:'middle' };
+        }
+        colCur += nb;
+      });
+
+      // Ligne 5 : numéros de jours
+      const ROW_JOURS = 5;
+      ws.getRow(ROW_JOURS).height = 16;
+
+      const hdrNom = ws.getCell(ROW_JOURS, COL_NOM);
+      hdrNom.value = 'Collaborateur';
+      hdrNom.font = { name:'Arial', size:9, bold:true, color:{argb:'FFFFFFFF'} };
+      hdrNom.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F4E79'} };
+      hdrNom.alignment = { horizontal:'center', vertical:'middle' };
+
+      const hdrPoste = ws.getCell(ROW_JOURS, COL_POSTE);
+      hdrPoste.value = 'Poste';
+      hdrPoste.font = { name:'Arial', size:9, bold:true, color:{argb:'FFFFFFFF'} };
+      hdrPoste.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F4E79'} };
+      hdrPoste.alignment = { horizontal:'center', vertical:'middle' };
+
+      allJours.forEach((j, i) => {
+        const c = ws.getCell(ROW_JOURS, COL_JOURS_START + i);
+        c.value = j.jour;
+        const isWE = j.dw === 0 || j.dw === 6;
+        c.font = { name:'Arial', size:8, bold:true, color:{argb: isWE ? 'FF666666' : 'FFFFFFFF'} };
+        c.fill = { type:'pattern', pattern:'solid', fgColor:{argb: isWE ? WEEKEND_BG : MOIS_COLORS[j.mois % MOIS_COLORS.length]} };
+        c.alignment = { horizontal:'center', vertical:'middle' };
+      });
+
+      const hdrTot = ws.getCell(ROW_JOURS, COL_TOTAL);
+      hdrTot.value = 'Total j.';
+      hdrTot.font = { name:'Arial', size:8, bold:true, color:{argb:'FFFFFFFF'} };
+      hdrTot.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F4E79'} };
+      hdrTot.alignment = { horizontal:'center', vertical:'middle' };
+
+      // Lignes collaborateurs
+      const collabsFiltres = collabs.filter(collab =>
+        conges.some(c => (c['Collaborateurs']||[]).some(cc => cc.id === collab.collabId))
+      ).sort((a, b) => a.nom.localeCompare(b.nom));
+
+      const ROW_DATA_START = 6;
+      collabsFiltres.forEach((collab, ri) => {
+        const r = ROW_DATA_START + ri;
+        ws.getRow(r).height = 16;
+        const altBg = ALTERNAT_BG[ri % 2];
+        const congesCollab = conges.filter(c => (c['Collaborateurs']||[]).some(cc => cc.id === collab.collabId));
+
+        const cNom = ws.getCell(r, COL_NOM);
+        cNom.value = collab.nom;
+        cNom.font = { name:'Arial', size:9, bold:true };
+        cNom.fill = { type:'pattern', pattern:'solid', fgColor:{argb:altBg} };
+        cNom.alignment = { horizontal:'left', vertical:'middle' };
+        cNom.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} } };
+
+        const cPoste = ws.getCell(r, COL_POSTE);
+        cPoste.value = collab.poste;
+        cPoste.font = { name:'Arial', size:8, color:{argb:'FF888888'} };
+        cPoste.fill = { type:'pattern', pattern:'solid', fgColor:{argb:altBg} };
+        cPoste.alignment = { horizontal:'left', vertical:'middle' };
+        cPoste.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} }, right:{ style:'thin', color:{argb:'FFCCCCCC'} } };
+
+        let totalJours = 0;
+        allJours.forEach((j, i) => {
+          const c = ws.getCell(r, COL_JOURS_START + i);
+          const isWE = j.dw === 0 || j.dw === 6;
+          if (isWE) {
+            c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:WEEKEND_BG} };
+            c.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} } };
+            return;
+          }
+          const congeJour = congesCollab.find(cg =>
+            j.dateStr >= cg['Date de début'] && j.dateStr <= cg['Date de fin journée (inclus)']
           );
           if (congeJour) {
-            const type = congeJour['Type de demande']?.value || 'Absence';
+            const type = congeJour['Type de demande']?.value || '';
             const statut = congeJour['Statut']?.value || '';
-            const code = type === 'Congés payés' ? 'CP' :
-                         type === 'RTT' ? 'RTT' :
-                         type === 'Maladie' ? 'MAL' :
-                         type === 'Formation' ? 'FOR' :
-                         type === 'Sans solde' ? 'SS' :
-                         type === 'Maternité / Paternité' ? 'MAT' :
-                         type === 'Accident' ? 'ACC' : 'ABS';
-            const suffix = statut === 'En attente' ? '?' : '';
-            total++;
-            return code + suffix;
+            const style = TYPE_STYLES[type] || { code:'ABS', bg:'FF808080', txt:'FFFFFFFF' };
+            const code = style.code + (statut === 'En attente' ? '?' : '');
+            c.value = code;
+            c.font = { name:'Arial', size:7, bold:true, color:{argb:style.txt} };
+            c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:style.bg} };
+            c.alignment = { horizontal:'center', vertical:'middle' };
+            c.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} } };
+            totalJours++;
+          } else {
+            c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:altBg} };
+            c.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} } };
           }
-          const dayOfWeek = new Date(j.dateStr).getDay();
-          return (dayOfWeek === 0 || dayOfWeek === 6) ? '—' : '';
         });
 
-        rows.push([collab.nom, collab.poste, ...cellules, total].join(';'));
+        const cTot = ws.getCell(r, COL_TOTAL);
+        cTot.value = totalJours || '';
+        cTot.font = { name:'Arial', size:9, bold:true, color:{argb: totalJours > 0 ? 'FF1F4E79' : 'FFaaaaaa'} };
+        cTot.fill = { type:'pattern', pattern:'solid', fgColor:{argb:altBg} };
+        cTot.alignment = { horizontal:'center', vertical:'middle' };
+        cTot.border = { bottom:{ style:'thin', color:{argb:'FFDDDDDD'} }, left:{ style:'thin', color:{argb:'FFCCCCCC'} } };
       });
 
       // Légende
-      rows.push('');
-      rows.push('LÉGENDE;;CP=Congés payés;RTT=RTT;MAL=Maladie;FOR=Formation;SS=Sans solde;MAT=Maternité/Paternité;ACC=Accident;ABS=Autre;?=En attente');
+      const ROW_LEG = ROW_DATA_START + collabsFiltres.length + 2;
+      ws.getRow(ROW_LEG).height = 14;
+      ws.mergeCells(ROW_LEG, 1, ROW_LEG, COL_TOTAL);
+      const cLegTitle = ws.getCell(ROW_LEG, 1);
+      cLegTitle.value = 'LÉGENDE :';
+      cLegTitle.font = { name:'Arial', size:8, bold:true, color:{argb:'FF555555'} };
+      cLegTitle.alignment = { horizontal:'left', vertical:'middle' };
 
-      const csv = '\uFEFF' + rows.join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      let legCol = 1;
+      Object.entries(TYPE_STYLES).forEach(([type, style]) => {
+        const row = ROW_LEG + 1;
+        ws.getRow(row).height = 14;
+        const cCode = ws.getCell(row, legCol);
+        cCode.value = style.code;
+        cCode.font = { name:'Arial', size:8, bold:true, color:{argb:style.txt} };
+        cCode.fill = { type:'pattern', pattern:'solid', fgColor:{argb:style.bg} };
+        cCode.alignment = { horizontal:'center', vertical:'middle' };
+        const cLabel = ws.getCell(row, legCol + 1);
+        cLabel.value = '= ' + type;
+        cLabel.font = { name:'Arial', size:8, color:{argb:'FF555555'} };
+        cLabel.alignment = { horizontal:'left', vertical:'middle' };
+        legCol += 2;
+      });
+      // "?" = en attente
+      const cAtt = ws.getCell(ROW_LEG + 1, legCol);
+      cAtt.value = '?';
+      cAtt.font = { name:'Arial', size:8, bold:true, color:{argb:'FF555555'} };
+      const cAttLabel = ws.getCell(ROW_LEG + 1, legCol + 1);
+      cAttLabel.value = '= En attente';
+      cAttLabel.font = { name:'Arial', size:8, italic:true, color:{argb:'FF888888'} };
+
+      ws.views = [{ state:'frozen', xSplit:2, ySplit:5 }];
+      ws.pageSetup.orientation = 'landscape';
+      ws.pageSetup.paperSize = 9;
+      ws.pageSetup.fitToPage = true;
+      ws.pageSetup.fitToWidth = 1;
+      ws.pageSetup.fitToHeight = 1;
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/octet-stream' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       const nomMois = moisSelectionnes.length === 1
         ? moisNoms[moisSelectionnes[0]]
         : moisNoms[moisSelectionnes[0]] + '_a_' + moisNoms[moisSelectionnes[moisSelectionnes.length-1]];
-      a.download = 'planning_conges_' + nomMois + '_' + annee + '.csv';
+      a.download = 'planning_conges_' + nomMois + '_' + annee + '.xlsx';
       a.click();
       URL.revokeObjectURL(a.href);
     } catch(e) { alert('Erreur export : ' + e.message); }
@@ -5454,12 +5614,12 @@
         </div>
         <div id="export-conges-mois-grid" style="padding:10px 16px;border-bottom:1px solid #f1f5f9;display:grid;grid-template-columns:repeat(4,1fr);gap:6px"></div>
         <button onclick="exportPlanningConges()" style="width:100%;background:none;border:none;padding:12px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
-          <span>📥</span><span>Exporter en CSV</span>
+          <span>📥</span><span>Exporter en Excel</span>
         </button>
       </div>
 
       <div style="background:#f8fafc;border-radius:10px;padding:10px 14px;font-size:11px;color:#aaa;line-height:1.6">
-        ℹ️ Les exports "Saisies des temps" et "Récapitulatif congés/RTT" génèrent directement un fichier Excel mis en forme (classeur par chantier avec logo pour le premier, feuilles Récapitulatif/Détail pour le second). Les autres fichiers restent au format CSV, compatibles avec l'outil d'analyse Excel Guérin Bâtiments.
+        ℹ️ Les exports "Saisies des temps", "Récapitulatif congés/RTT" et "Planning congés" génèrent directement des fichiers Excel mis en forme avec logo et couleurs. Les autres fichiers restent au format CSV.
       </div>
     </div>
   </div>
