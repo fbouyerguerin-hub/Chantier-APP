@@ -3384,6 +3384,28 @@
       dates.appendChild(dfDiv);
 
       div.appendChild(dates);
+
+      // PJ attachées
+      const fichiers = Array.isArray(c['Fichiers']) ? c['Fichiers'] : [];
+      if (fichiers.length) {
+        const pjRow = document.createElement('div');
+        pjRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #f1ece3';
+        fichiers.forEach(f => {
+          const a = document.createElement('a');
+          a.href = f.url;
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          const name = f.visible_name || f.name || 'Fichier';
+          const ext = name.split('.').pop().toLowerCase();
+          const icon = ext === 'pdf' ? '📄' : ['xls','xlsx'].includes(ext) ? '📊' : ['doc','docx'].includes(ext) ? '📝' : ['jpg','jpeg','png','gif','webp'].includes(ext) ? '🖼️' : '📎';
+          a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--beige-clair);border:1px solid #ddd5c5;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--vert);text-decoration:none;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+          a.title = name;
+          a.innerHTML = icon + ' <span style="overflow:hidden;text-overflow:ellipsis">' + name + '</span>';
+          pjRow.appendChild(a);
+        });
+        div.appendChild(pjRow);
+      }
+
       container.appendChild(div);
     });
   }
