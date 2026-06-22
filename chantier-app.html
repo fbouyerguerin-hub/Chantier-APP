@@ -5226,16 +5226,16 @@
 
     try {
       const now = new Date();
+      const toLocalStr = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
       let dateDebut, dateFin, nomFichier;
       if (periode === 'semaine-precedente') {
-        // Semaine précédente (lundi → vendredi)
         const lundi = new Date(now);
         const day = lundi.getDay();
         lundi.setDate(now.getDate() - (day === 0 ? 6 : day - 1) - 7);
         lundi.setHours(0,0,0,0);
         const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
-        dateDebut = lundi.toISOString().split('T')[0];
-        dateFin = vendredi.toISOString().split('T')[0];
+        dateDebut = toLocalStr(lundi);
+        dateFin = toLocalStr(vendredi);
         nomFichier = tousLesCollabs ? 'feuille_heures_tous_semaine_' + dateDebut : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_semaine_' + dateDebut;
       } else if (periode === 'semaine-en-cours') {
         const lundi = new Date(now);
@@ -5243,20 +5243,19 @@
         lundi.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
         lundi.setHours(0,0,0,0);
         const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
-        dateDebut = lundi.toISOString().split('T')[0];
-        dateFin = vendredi.toISOString().split('T')[0];
+        dateDebut = toLocalStr(lundi);
+        dateFin = toLocalStr(vendredi);
         nomFichier = tousLesCollabs ? 'feuille_heures_tous_semaine_encours_' + dateDebut : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_semaine_encours_' + dateDebut;
       } else if (periode === 'mois-en-cours') {
         const y = now.getFullYear(), m = now.getMonth();
-        dateDebut = new Date(y, m, 1).toISOString().split('T')[0];
-        dateFin = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        dateDebut = toLocalStr(new Date(y, m, 1));
+        dateFin = toLocalStr(new Date(y, m + 1, 0));
         nomFichier = tousLesCollabs ? 'feuille_heures_tous_mois_en_cours_' + y + '_' + String(m+1).padStart(2,'0') : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_mois_en_cours_' + y + '_' + String(m+1).padStart(2,'0');
       } else {
-        // Mois précédent
         const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
         const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
-        dateDebut = new Date(y, m, 1).toISOString().split('T')[0];
-        dateFin = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        dateDebut = toLocalStr(new Date(y, m, 1));
+        dateFin = toLocalStr(new Date(y, m + 1, 0));
         nomFichier = tousLesCollabs ? 'feuille_heures_tous_' + y + '_' + String(m+1).padStart(2,'0') : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_' + y + '_' + String(m+1).padStart(2,'0');
       }
 
