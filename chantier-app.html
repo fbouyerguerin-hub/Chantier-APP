@@ -739,7 +739,8 @@
   }
 
   async function init() {
-    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
+    const todayLocal = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+    document.getElementById('field-date').value = todayLocal;
     await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
     ajouterLigne();
     showPage('page-login');
@@ -1037,8 +1038,10 @@
 
     const year = feuilleDate.getFullYear();
     const month = feuilleDate.getMonth();
-    const dateDebut = new Date(year, month, 1).toISOString().split('T')[0];
-    const dateFin = new Date(year, month + 1, 0).toISOString().split('T')[0];
+    const pad = n => String(n).padStart(2,'0');
+    const dateDebut = `${year}-${pad(month + 1)}-01`;
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const dateFin = `${year}-${pad(month + 1)}-${pad(lastDay)}`;
 
     try {
       // Si l'ID du collaborateur n'est pas encore chargé, recharger la table
@@ -1048,9 +1051,8 @@
         if (found) feuilleCollab = found;
       }
 
-      // Utiliser la vue du collaborateur connecté pour filtrer automatiquement
-      const viewParam = connectedViewId ? `&view_id=${connectedViewId}` : '';
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${viewParam}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
+      // Filtrer directement par collaborateur + période (sans view_id pour éviter conflits de filtres)
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Collaborateur__link_row_has=${feuilleCollab.id}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
       const res = await fetch(url, { headers: HEADERS });
       const data = await res.json();
       const rows = data.results || [];
@@ -1172,7 +1174,8 @@
   }
 
   function nouvelleSession() {
-    document.getElementById('field-date').value = new Date().toISOString().split('T')[0];
+    const todayLocal = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+    document.getElementById('field-date').value = todayLocal;
     Object.keys(globalSelected).forEach(k => { globalSelected[k] = null; });
     ['Vehicules','Chantiers'].forEach(k => {
       const el = document.getElementById(`val-${k}`);
