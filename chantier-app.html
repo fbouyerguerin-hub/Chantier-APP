@@ -1940,6 +1940,141 @@
     }
   }
 
+  async function ouvrirModalRTTCollab(collabId, collabNom, triggerBtn) {
+    const modal = document.getElementById('modal-rtt-collab');
+    document.getElementById('modal-rtt-collab-titre').textContent = '🔄 Solde RTT — ' + collabNom;
+    document.getElementById('modal-rtt-collab-content').innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    modal.style.display = 'flex';
+    await loadRTTCollabModal(collabId, collabNom);
+  }
+
+  function fermerModalRTTCollab() {
+    document.getElementById('modal-rtt-collab').style.display = 'none';
+  }
+
+  async function loadRTTCollabModal(collabId, collabNom) {
+    const container = document.getElementById('modal-rtt-collab-content');
+    try {
+      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=' + collabId, { headers: HEADERS });
+      const dataConges = await resConges.json();
+      const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs']||[]).some(c => c.id === collabId));
+
+      const anneeEnCours = new Date().getFullYear();
+      const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), collabId);
+      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
+
+      const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
+      let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
+      demandesRtt.forEach(r => {
+        const jours = joursRttDemande(r);
+        const heures = heuresRttDemande(r, saisiesCollab, collabId);
+        const statut = r['Statut']?.value || 'En attente';
+        if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
+        else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
+      });
+
+      const absencesBloquantes = congesCollab.filter(r => {
+        const type = r['Type de demande']?.value;
+        const statut = r['Statut']?.value || 'En attente';
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+      });
+
+      const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true', { headers: HEADERS });
+      const collabRow = await resCollabRow.json();
+      const rttSoldeInitial = parseFloat(collabRow['RTT solde initial (h)']) || 0;
+      const heuresSupSoldeInitial = parseFloat(collabRow['Heures sup solde initial (h)']) || 0;
+      const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
+      const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
+
+      const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+      const heuresSupResult = calculerHeuresSupplementaires(saisiesCollab);
+      const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
+      const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+
+      const validees = demandesRtt
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
+        .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
+
+      const enAttenteListe = demandesRtt
+        .filter(r => (r['Statut']?.value || 'En attente') === 'En attente')
+        .sort((a, b) => new Date(a['Date de début']) - new Date(b['Date de début']));
+
+      const listeEnAttenteHtml = enAttenteListe.length ? `
+        <div class="rtt-table-title">⏳ Demandes en attente</div>
+        <div class="rtt-table-wrap"><table class="rtt-table">
+          <thead><tr><th>Date</th><th>Jours</th><th>Heures</th><th>Statut</th></tr></thead>
+          <tbody>${enAttenteListe.map(r => {
+            const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+            const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+            const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
+            return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(joursRttDemande(r))} j</td><td class="valeur">${formatJoursRtt(heuresRttDemande(r, saisiesCollab, collabId))} h</td><td class="valeur" style="color:#856404">⏳ En attente</td></tr>`;
+          }).join('')}</tbody>
+        </table></div>` : `<div class="rtt-note-annuelle" style="color:var(--vert)">✅ Aucune demande RTT en attente de validation.</div>`;
+
+      const listeDatesHtml = validees.length ? `
+        <div class="rtt-table-title">📅 RTT validées</div>
+        <div class="rtt-table-wrap"><table class="rtt-table">
+          <thead><tr><th>Date</th><th>Jours</th><th>Heures</th></tr></thead>
+          <tbody>${validees.map(r => {
+            const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
+            const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+            const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
+            return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(joursRttDemande(r))} j</td><td class="valeur">${formatJoursRtt(heuresRttDemande(r, saisiesCollab, collabId))} h</td></tr>`;
+          }).join('')}</tbody>
+        </table></div>` : '';
+
+      const listeHeuresSupHtml = heuresSupResult.detail.length ? `
+        <div class="rtt-table-title">⚡ Heures supplémentaires</div>
+        <div class="rtt-table-wrap"><table class="rtt-table">
+          <thead><tr><th>Semaine</th><th>Travaillées</th><th>Payées</th><th>Sup</th></tr></thead>
+          <tbody>${heuresSupResult.detail.map(d => {
+            const lundi = new Date(d.lundi + 'T12:00:00');
+            const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+            const label = lundi.toLocaleDateString('fr-FR') + ' – ' + vendredi.toLocaleDateString('fr-FR');
+            return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${formatJoursRtt(d.heuresPayees)} h</td><td class="valeur" style="color:#1a4f8b">+${formatJoursRtt(d.surplus)} h</td></tr>`;
+          }).join('')}</tbody>
+        </table></div>` : '';
+
+      const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
+      const previsionnelTotalDisponible = HEURES_PREVISIONNEL_ANNUEL_RTT + reliquatAnneePrecedente;
+      const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
+      const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
+      const pctPris = Math.min(100, (prisHeures / previsionnelTotalDisponible) * 100);
+      const pctSoldeBase = Math.min(100 - pctPris, (soldeDeBasePrevisionnel / previsionnelTotalDisponible) * 100);
+      const depassement = totalConsommePrevisionnel - previsionnelTotalDisponible;
+      const couleurBarre = totalConsommePrevisionnel > previsionnelTotalDisponible ? '#c0392b' : totalConsommePrevisionnel > previsionnelTotalDisponible * 0.85 ? '#d99a3d' : 'var(--vert)';
+      const { semainesRestantes } = decompteAnneeRtt();
+
+      container.innerHTML = `
+        <div style="margin:0 0 14px;background:${enAttenteListe.length > 0 ? '#fef3cd' : '#e8f0e7'};border-radius:10px;padding:12px 14px;font-size:14px;font-weight:700;color:${enAttenteListe.length > 0 ? '#856404' : 'var(--vert)'};text-align:center">
+          ${enAttenteListe.length > 0 ? `⏳ ${enAttenteListe.length} demande${enAttenteListe.length > 1 ? 's' : ''} RTT en attente` : '✅ Aucune demande en attente'}
+        </div>
+        <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
+          <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
+          <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span></td></tr>
+          <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - soldeDeBasePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h solde de base</span>` : ''}</td></tr>
+          ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
+        </tbody></table></div>
+        <div class="rtt-table-title">📊 Prévisionnel ${anneeEnCours}</div>
+        <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
+          <tr><th>Objectif annuel</th><td class="valeur">${HEURES_PREVISIONNEL_ANNUEL_RTT} h${reliquatAnneePrecedente !== 0 ? ` <span class="rtt-sub">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1</span>` : ''}</td></tr>
+          <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)}h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)}h solde de base</span>` : ''}</td></tr>
+          <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
+        </tbody></table></div>
+        <div class="rtt-progress-wrap">
+          <div class="rtt-progress-seg rtt-progress-seg-pris" style="width:${pctPris}%"></div>
+          <div class="rtt-progress-seg rtt-progress-seg-base" style="width:${pctSoldeBase}%"></div>
+        </div>
+        <div class="rtt-progress-label" style="color:${couleurBarre};font-weight:700">${pctAtteint}% du prévisionnel consommé${depassement > 0 ? ` — ⚠️ dépassement ${formatJoursRtt(depassement)} h` : ''}</div>
+        ${listeEnAttenteHtml}
+        ${listeDatesHtml}
+        ${listeHeuresSupHtml}
+      `;
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur : ' + e.message + '</div>';
+    }
+  }
+
   function renderRTTAdminTable() {
     const area = document.getElementById('rtt-admin-table-area');
     if (!area) return;
@@ -1956,7 +2091,7 @@
       .map(d => {
         const { collab: c, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente } = d;
         return `<tr>
-          <td>${c['Nom Complet']}</td>
+          <td><button onclick="ouvrirModalRTTCollab(${c.id}, '${(c['Nom Complet']||'').replace(/'/g,"\\'")}', this)" style="background:none;border:none;padding:0;font-size:inherit;font-weight:600;color:var(--vert);cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-align:left">${c['Nom Complet']}</button></td>
           <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}</td>
           <td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${(acquis - prisHeures) < 0 ? `<span class="rtt-sub" style="color:#c0392b">⚠️ ${formatJoursRtt(acquis - prisHeures)}h vs acquis</span>` : ''}</td>
           <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 || reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${soldeDeBasePrevisionnel > 0 ? `dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base` : ''}${soldeDeBasePrevisionnel > 0 && reliquatAnneePrecedente !== 0 ? ', ' : ''}${reliquatAnneePrecedente !== 0 ? `${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1` : ''}</span>` : ''}</td>
@@ -5940,5 +6075,16 @@
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 </script>
+<!-- Modal vue RTT d'un collaborateur (accès admin) -->
+<div id="modal-rtt-collab" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;align-items:flex-end;justify-content:center">
+  <div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:600px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
+      <div id="modal-rtt-collab-titre" style="font-size:15px;font-weight:700;color:var(--gris)"></div>
+      <button onclick="fermerModalRTTCollab()" style="background:var(--beige-clair);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
+    </div>
+    <div id="modal-rtt-collab-content" style="overflow-y:auto;padding:16px;flex:1"></div>
+  </div>
+</div>
+
 </body>
 </html>
