@@ -5227,6 +5227,12 @@
     try {
       const now = new Date();
       const toLocalStr = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      const MOIS_FR = ['jan','fev','mar','avr','mai','jun','jul','aou','sep','oct','nov','dec'];
+      const labelSemaine = (lundi, vendredi) => {
+        const lj = lundi.getDate(), lm = MOIS_FR[lundi.getMonth()], la = lundi.getFullYear();
+        const vj = vendredi.getDate(), vm = MOIS_FR[vendredi.getMonth()], va = vendredi.getFullYear();
+        return lm === vm ? `S${lj}-${vj}_${lm}_${la}` : `S${lj}_${lm}-${vj}_${vm}_${va}`;
+      };
       let dateDebut, dateFin, nomFichier;
       if (periode === 'semaine-precedente') {
         const lundi = new Date(now);
@@ -5236,7 +5242,8 @@
         const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
         dateDebut = toLocalStr(lundi);
         dateFin = toLocalStr(vendredi);
-        nomFichier = tousLesCollabs ? 'feuille_heures_tous_semaine_' + dateDebut : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_semaine_' + dateDebut;
+        const label = labelSemaine(lundi, vendredi);
+        nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
       } else if (periode === 'semaine-en-cours') {
         const lundi = new Date(now);
         const day = lundi.getDay();
@@ -5245,18 +5252,21 @@
         const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
         dateDebut = toLocalStr(lundi);
         dateFin = toLocalStr(vendredi);
-        nomFichier = tousLesCollabs ? 'feuille_heures_tous_semaine_encours_' + dateDebut : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_semaine_encours_' + dateDebut;
+        const label = labelSemaine(lundi, vendredi);
+        nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
       } else if (periode === 'mois-en-cours') {
         const y = now.getFullYear(), m = now.getMonth();
         dateDebut = toLocalStr(new Date(y, m, 1));
         dateFin = toLocalStr(new Date(y, m + 1, 0));
-        nomFichier = tousLesCollabs ? 'feuille_heures_tous_mois_en_cours_' + y + '_' + String(m+1).padStart(2,'0') : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_mois_en_cours_' + y + '_' + String(m+1).padStart(2,'0');
+        const label = `${MOIS_FR[m]}_${y}`;
+        nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
       } else {
         const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
         const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
         dateDebut = toLocalStr(new Date(y, m, 1));
         dateFin = toLocalStr(new Date(y, m + 1, 0));
-        nomFichier = tousLesCollabs ? 'feuille_heures_tous_' + y + '_' + String(m+1).padStart(2,'0') : 'feuille_heures_' + collabNom.replace(/ /g,'_') + '_' + y + '_' + String(m+1).padStart(2,'0');
+        const label = `${MOIS_FR[m]}_${y}`;
+        nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
       }
 
       // Charger les saisies
