@@ -3875,67 +3875,69 @@
             <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}${u['Poste / Métier'] ? ' · ' + u['Poste / Métier'] : ''}</div>
             <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
           </div>
-          <div style="display:flex;gap:8px">
+          ${connectedDroit === 'Administrateur' ? `<div style="display:flex;gap:8px">
             <button onclick="ouvrirFormUser(${u.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
             <button onclick="supprimerUser(${u.id},'${(u['Nom complet']||'').replace(/'/g,"")}')" style="background:#fde8e8;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">🗑️</button>
-          </div>
+          </div>` : ''}
         </div>`;
       }).join('');
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+    const btnNouvel = document.getElementById('btn-nouvel-user');
+    if (btnNouvel) btnNouvel.style.display = connectedDroit === 'Administrateur' ? '' : 'none';
   }
 
   let usersCache = [];
 
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
-    document.getElementById('modal-user-titre').textContent = rowId ? 'Modifier utilisateur' : 'Nouvel utilisateur';
-    document.getElementById('user-nom').value = '';
     document.getElementById('user-id').value = '';
     document.getElementById('user-mdp').value = '';
     document.getElementById('user-droit').value = 'Utilisateur';
     document.getElementById('user-actif').value = 'true';
-    // Charger les postes depuis la table Collaborateurs
-    const selPoste = document.getElementById('user-poste');
-    selPoste.innerHTML = '<option value="">-- Sélectionner un poste --</option>';
-    let collabsData = COLLABORATEURS_ADMIN;
-    if (!collabsData.length) {
-      try {
-        const resPostes = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-        const dataPostes = await resPostes.json();
-        collabsData = (dataPostes.results || []).map(r => ({ nom: r['Nom Complet'] || '', poste: r['Poste / Métier'] || '', collabId: r.id }));
-      } catch(e) {}
-    }
-    const postesUniques = [...new Set(collabsData.map(c => c.poste).filter(Boolean))].sort();
-    if (postesUniques.length) {
-      postesUniques.forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p; opt.textContent = p;
-        selPoste.appendChild(opt);
-      });
+    document.getElementById('user-save-info').style.display = 'none';
+
+    const isCreation = !rowId;
+    document.getElementById('modal-user-titre').textContent = isCreation ? '➕ Nouveau collaborateur' : '✏️ Modifier utilisateur';
+
+    // Afficher la bonne section
+    document.getElementById('user-section-collab').style.display = isCreation ? 'block' : 'none';
+    document.getElementById('user-section-modif').style.display = isCreation ? 'none' : 'block';
+
+    if (isCreation) {
+      document.getElementById('user-nom').value = '';
+      document.getElementById('user-email').value = '';
+      document.getElementById('user-tel').value = '';
+      document.getElementById('user-poste').value = '';
     } else {
-      ['Pose','Apprenti','Chef de chantier','Conducteur de travaux','Bureau','Direction','Autre'].forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p; opt.textContent = p;
-        selPoste.appendChild(opt);
-      });
-    }
-    selPoste.value = '';
-    if (rowId) {
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
         const u = await res.json();
-        document.getElementById('user-nom').value = u['Nom complet'] || '';
+        const nomUser = u['Nom complet'] || '';
+        document.getElementById('user-nom-modif-label').textContent = nomUser;
+        document.getElementById('user-nom-hidden').value = nomUser;
         document.getElementById('user-id').value = u['Identifiant'] || '';
         document.getElementById('user-mdp').value = u['Mot de passe'] || '';
         document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
-        // Chercher le poste dans la table Collaborateurs via le nom
-        const nomUser = u['Nom complet'] || '';
+        // Poste depuis Collaborateurs
         const collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
+        document.getElementById('user-poste-modif').value = collabFound?.poste || u['Poste / Métier'] || '';
         if (collabFound) {
-          document.getElementById('user-poste').value = collabFound.poste || '';
-        } else if (u['Poste / Métier']) {
-          document.getElementById('user-poste').value = u['Poste / Métier'];
+          try {
+            const resCol = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabFound.collabId + '/?user_field_names=true', { headers: HEADERS });
+            const col = await resCol.json();
+            document.getElementById('user-email-modif').value = col['Courriel'] || '';
+            document.getElementById('user-tel-modif').value = col['Telephone'] || '';
+          } catch(e) {}
+        }
+        // Charger email et tel depuis la table Collaborateurs
+        if (collabFound) {
+          try {
+            const resCol = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabFound.collabId + '/?user_field_names=true', { headers: HEADERS });
+            const col = await resCol.json();
+            document.getElementById('user-email-modif').value = col['Courriel'] || '';
+            document.getElementById('user-tel-modif').value = col['Telephone'] || '';
+          } catch(e) {}
         }
       } catch(e) {}
     }
@@ -3947,42 +3949,101 @@
   }
 
   async function sauvegarderUser() {
+    if (connectedDroit !== 'Administrateur') { alert('Accès réservé aux administrateurs.'); return; }
     const rowId = document.getElementById('user-row-id').value;
-    const nomComplet = document.getElementById('user-nom').value;
-    const posteVal = document.getElementById('user-poste').value || '';
-    const payload = {
-      'Nom complet': nomComplet,
-      'Identifiant': document.getElementById('user-id').value,
-      'Mot de passe': document.getElementById('user-mdp').value,
-      'Droit': document.getElementById('user-droit').value,
-      'Actif': document.getElementById('user-actif').value === 'true',
-    };
+    const isCreation = !rowId;
     const btn = document.getElementById('btn-save-user');
-    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    const infoEl = document.getElementById('user-save-info');
+    btn.disabled = true;
+
     try {
-      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
-      const method = rowId ? 'PATCH' : 'POST';
-      const res = await fetch(url, { method, headers: HEADERS, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error(await res.text());
-      // Mettre à jour le poste dans la table Collaborateurs si le collab existe
-      if (posteVal) {
+      if (isCreation) {
+        const nomComplet = (document.getElementById('user-nom').value || '').trim();
+        const posteVal = document.getElementById('user-poste').value || '';
+        const identifiant = (document.getElementById('user-id').value || '').trim();
+        const mdp = document.getElementById('user-mdp').value || '';
+        const droit = document.getElementById('user-droit').value;
+        if (!nomComplet) { alert('Le nom complet est obligatoire.'); return; }
+        if (!posteVal)   { alert('Le poste est obligatoire.'); return; }
+        if (!identifiant){ alert("L'identifiant est obligatoire."); return; }
+        if (!mdp)        { alert('Le mot de passe est obligatoire.'); return; }
+
+        // Étape 1 : créer le collaborateur
+        btn.textContent = '👷 Création collaborateur…';
+        infoEl.style.display = 'block'; infoEl.textContent = '👷 Création du collaborateur…';
+        const resCollab = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true', {
+          method: 'POST', headers: HEADERS,
+          body: JSON.stringify({ 'Nom Complet': nomComplet, 'Courriel': document.getElementById('user-email').value.trim(), 'Telephone': document.getElementById('user-tel').value.trim(), 'Poste / Métier': posteVal })
+        });
+        if (!resCollab.ok) throw new Error('Erreur création collaborateur : ' + await resCollab.text());
+
+        // Étape 2 : créer le compte utilisateur
+        btn.textContent = '🔑 Création du compte…';
+        infoEl.textContent = '🔑 Création du compte utilisateur…';
+        const payloadUser = {
+          'Nom complet': nomComplet,
+          'Identifiant': identifiant,
+          'Mot de passe': mdp,
+          'Droit': droit,
+          'Actif': document.getElementById('user-actif').value === 'true',
+        };
+        const resUser = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true', {
+          method: 'POST', headers: HEADERS, body: JSON.stringify(payloadUser)
+        });
+        if (!resUser.ok) throw new Error('Erreur création utilisateur : ' + await resUser.text());
+
+        // Recharger COLLABORATEURS_ADMIN
         try {
           const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
           const dataC = await resC.json();
-          const collab = (dataC.results || []).find(c => c['Nom Complet'] === nomComplet);
+          COLLABORATEURS_ADMIN.length = 0;
+          (dataC.results || []).forEach(r => COLLABORATEURS_ADMIN.push({
+            nom: r['Nom Complet'] || '',
+            initiales: (r['Nom Complet']||'').split(' ').map(w=>w[0]||'').join('').toUpperCase(),
+            collabId: r.id, poste: r['Poste / Métier'] || ''
+          }));
+        } catch(e) {}
+
+      } else {
+        // Mode modification
+        btn.textContent = 'Enregistrement…';
+        const nomComplet = document.getElementById('user-nom-hidden').value;
+        const posteVal = document.getElementById('user-poste-modif').value || '';
+        const payload = {
+          'Nom complet': nomComplet,
+          'Identifiant': document.getElementById('user-id').value,
+          'Mot de passe': document.getElementById('user-mdp').value,
+          'Droit': document.getElementById('user-droit').value,
+          'Actif': document.getElementById('user-actif').value === 'true',
+        };
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/?user_field_names=true', {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error(await res.text());
+        try {
+          const collab = COLLABORATEURS_ADMIN.find(c => c.nom === nomComplet);
           if (collab) {
-            await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collab.id + '/?user_field_names=true',
-              { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Poste / Métier': posteVal }) });
+            const patchCollab = {};
+            if (posteVal) patchCollab['Poste / Métier'] = posteVal;
+            const emailModif = document.getElementById('user-email-modif').value.trim();
+            const telModif = document.getElementById('user-tel-modif').value.trim();
+            if (emailModif !== undefined) patchCollab['Courriel'] = emailModif;
+            if (telModif !== undefined) patchCollab['Telephone'] = telModif;
+            if (Object.keys(patchCollab).length) {
+              await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collab.collabId + '/?user_field_names=true',
+                { method: 'PATCH', headers: HEADERS, body: JSON.stringify(patchCollab) });
+            }
           }
-        } catch(e) { console.log('Poste non mis à jour dans Collaborateurs', e); }
+        } catch(e) { console.warn('Collaborateur non mis à jour', e); }
       }
+
       fermerFormUser();
       await loadUtilisateurs();
     } catch(e) { alert('Erreur : ' + e.message); }
-    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer'; infoEl.style.display = 'none'; }
   }
-
   async function supprimerUser(rowId, nom) {
+    if (connectedDroit !== 'Administrateur') { alert('Accès réservé aux administrateurs.'); return; }
     if (!confirm('Supprimer l\'utilisateur "' + nom + '" ?')) return;
     await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
     await loadUtilisateurs();
@@ -5779,7 +5840,7 @@
   <div id="gestion-utilisateurs">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Comptes collaborateurs</div>
-      <button onclick="ouvrirFormUser(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+      <button onclick="ouvrirFormUser(null)" id="btn-nouvel-user" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
@@ -5965,20 +6026,78 @@
 
   <!-- MODAL USER -->
   <div id="modal-user" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:flex-end">
-    <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;padding:24px 20px;max-height:85vh;overflow-y:auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <div style="background:#fff;border-radius:24px 24px 0 0;width:100%;padding:24px 20px;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:16px;font-weight:800;color:var(--gris)" id="modal-user-titre">Nouvel utilisateur</div>
         <button onclick="fermerFormUser()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa">✕</button>
       </div>
-      <div class="field"><label>Nom complet</label><input type="text" id="user-nom" placeholder="Prénom Nom" /></div>
+
+      <!-- ÉTAPE 1 : Collaborateur (création uniquement) -->
+      <div id="user-section-collab" style="display:none">
+        <div style="background:var(--vert-clair);border-left:3px solid var(--vert);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;font-weight:700;color:var(--vert)">
+          👷 1 — Informations collaborateur
+        </div>
+        <div class="field">
+          <label>Nom complet <span style="color:#c0392b">*</span></label>
+          <input type="text" id="user-nom" placeholder="Prénom Nom" />
+        </div>
+        <div class="field">
+          <label>Courriel</label>
+          <input type="email" id="user-email" placeholder="prenom.nom@entreprise.fr" autocapitalize="none" />
+        </div>
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="user-tel" placeholder="06 XX XX XX XX" />
+        </div>
+        <div class="field">
+          <label>Poste / Métier <span style="color:#c0392b">*</span></label>
+          <select id="user-poste" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+            <option value="">-- Sélectionner --</option>
+            <option value="Pose">Pose</option>
+            <option value="Apprenti">Apprenti</option>
+            <option value="Chef de chantier">Chef de chantier</option>
+            <option value="Conducteur de travaux">Conducteur de travaux</option>
+            <option value="Bureau">Bureau</option>
+            <option value="Direction">Direction</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+        <div style="background:#f5f0eb;border-left:3px solid var(--beige);border-radius:8px;padding:10px 14px;margin:0 0 14px;font-size:12px;font-weight:700;color:var(--gris)">
+          🔑 2 — Accès à l'application
+        </div>
+      </div>
+
+      <!-- Mode modification : nom affiché en lecture seule, poste modifiable -->
+      <div id="user-section-modif" style="display:none">
+        <div class="field">
+          <label>Nom complet</label>
+          <div id="user-nom-modif-label" style="background:#f0f0f0;border:1.5px solid #ddd;border-radius:10px;padding:11px 13px;font-size:15px;color:#888;font-weight:700"></div>
+        </div>
+        <div class="field">
+          <label>Courriel</label>
+          <input type="email" id="user-email-modif" placeholder="prenom.nom@entreprise.fr" autocapitalize="none" />
+        </div>
+        <div class="field">
+          <label>Téléphone</label>
+          <input type="tel" id="user-tel-modif" placeholder="06 XX XX XX XX" />
+        </div>
+        <div class="field">
+          <label>Poste / Métier</label>
+          <select id="user-poste-modif" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+            <option value="">-- Sélectionner --</option>
+            <option value="Pose">Pose</option>
+            <option value="Apprenti">Apprenti</option>
+            <option value="Chef de chantier">Chef de chantier</option>
+            <option value="Conducteur de travaux">Conducteur de travaux</option>
+            <option value="Bureau">Bureau</option>
+            <option value="Direction">Direction</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+      </div>div>
+
       <div class="field"><label>Identifiant</label><input type="text" id="user-id" placeholder="prenom.nom" autocapitalize="none" /></div>
       <div class="field"><label>Mot de passe</label><input type="text" id="user-mdp" placeholder="Mot de passe" /></div>
-      <div class="field">
-        <label>Poste / Métier</label>
-        <select id="user-poste" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
-          <option value="">-- Sélectionner un poste --</option>
-        </select>
-      </div>
       <div class="field">
         <label>Droit</label>
         <select id="user-droit" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
@@ -5990,11 +6109,13 @@
       <div class="field">
         <label>Actif</label>
         <select id="user-actif" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
-          <option value="true">Oui</option>
-          <option value="false">Non</option>
+          <option value="true">✅ Oui</option>
+          <option value="false">❌ Non</option>
         </select>
       </div>
       <input type="hidden" id="user-row-id" value="" />
+      <input type="hidden" id="user-nom-hidden" value="" />
+      <div id="user-save-info" style="display:none;font-size:11px;color:var(--vert);text-align:center;margin-bottom:8px;font-weight:600"></div>
       <button onclick="sauvegarderUser()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;margin-top:8px" id="btn-save-user">💾 Enregistrer</button>
     </div>
   </div>
