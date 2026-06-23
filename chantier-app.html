@@ -2345,12 +2345,17 @@
   let currentAffCollectif = null;
   let selectedChantierCollectif = null;
   let collectifLoaded = false;
+  let filtreChantierCollectif = '';
+  let filtreStatutCollectif = 'En cours'; // 'En cours' | 'En pause' | 'Terminé' | 'tous'
   let collaborateursFiltre = []; // liste filtrée selon poste
   let postesSelectionnes = new Set(['Pose', 'Apprenti']);
   let postesDisponibles = [];
   let collabsSelectionnesParJour = {};
   let collabDeplace = null; // { affId, collabNom, chantier, dateStr, el }
   let isPasseCollectif = false;
+  let joursCollectif = [];
+  let todayCollectif = '';
+  let dataChantiersCached = null;
 
   async function loadPlanningCollectif() {
     // Charger collaborateurs
@@ -2366,19 +2371,19 @@
     const btnFiltre = document.getElementById('btn-filtre-poste');
     if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
 
-    // Charger chantiers
+    // Charger chantiers (tous statuts)
     const resChantiers = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-    const dataChantiers = await resChantiers.json();
-    chantiersCollectif = (dataChantiers.results || [])
-      .filter(r => (r['Statue']?.value || '').toLowerCase().trim() === 'en cours')
-      .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id }));
+    dataChantiersCached = await resChantiers.json();
+    chantiersCollectif = (dataChantiersCached.results || [])
+      .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || 'En cours' }))
+      .sort((a, b) => { const o = { 'En cours': 0, 'En pause': 1, 'Termin\u00e9': 2 }; return (o[a.statue] ?? 3) - (o[b.statue] ?? 3) || a.nom.localeCompare(b.nom); });
 
     const lundi = getLundiAdmin(semaineCollectif);
-    const jours = [];
-    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(j); }
-    const dateDebut = jours[0].toISOString().split('T')[0];
-    const dateFin = jours[4].toISOString().split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
+    joursCollectif = [];
+    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); joursCollectif.push(j); }
+    const dateDebut = joursCollectif[0].toISOString().split('T')[0];
+    const dateFin = joursCollectif[4].toISOString().split('T')[0];
+    todayCollectif = new Date().toISOString().split('T')[0];
 
     document.getElementById('planning-collectif-loading').style.display = 'block';
     document.getElementById('planning-collectif-grid').innerHTML = '';
@@ -2410,9 +2415,34 @@
         .map(r => ({ id: r.id, Date: r['Date'], Collaborateurs: r['Collaborateur']||[], Chantier: r['Chantiers']||[], Notes: r['Notes']||'', Fichiers:[], isSaisie:true, heures: r['Heures Normales']||0 }));
     }
 
+    renderPlanningCollectifGrid();
+
+    const lundi2 = getLundiAdmin(semaineCollectif);
+    const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate()+4);
+    document.getElementById('semaine-label-collectif').textContent =
+      'Du ' + lundi2.toLocaleDateString('fr-FR',{day:'numeric',month:'long'}) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}) +
+      (isPasseCollectif ? ' · 📋 Saisies réelles' : '');
+    updateInputSemaineCollectif();
+  }
+
+  function renderPlanningCollectifGrid() {
+    const jours = joursCollectif;
+    const today = todayCollectif;
+    const dataChantiers = dataChantiersCached || { results: [] };
     const table = document.getElementById('planning-collectif-grid');
     const joursNoms = ['Lun','Mar','Mer','Jeu','Ven'];
     const isGestAdmin = connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur';
+
+    // Filtre chantier par nom et statut
+    const filtre = filtreChantierCollectif.toLowerCase().trim();
+    const chantiersAffiches = chantiersCollectif.filter(c => {
+      const nomOk = !filtre || c.nom.toLowerCase().includes(filtre);
+      const statutOk = filtreStatutCollectif === 'tous' || c.statue === filtreStatutCollectif;
+      return nomOk && statutOk;
+    });
+
+    table.innerHTML = '';
 
     // THEAD sticky
     const thead = document.createElement('thead');
@@ -2420,7 +2450,7 @@
     const trH = document.createElement('tr');
     const thC = document.createElement('th');
     thC.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:4';
-    thC.textContent = 'Chantier';
+    thC.textContent = 'Chantier (' + chantiersAffiches.length + ')';
     trH.appendChild(thC);
     jours.forEach((j, i) => {
       const dateStr = j.toISOString().split('T')[0];
@@ -2446,122 +2476,148 @@
 
     // TBODY - une case par chantier/jour
     const tbody = document.createElement('tbody');
-    chantiersCollectif.forEach(chantier => {
+
+    if (chantiersAffiches.length === 0) {
       const tr = document.createElement('tr');
-      // Cellule nom
-      const tdNom = document.createElement('td');
-      tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle;min-width:80px';
-      const chData = dataChantiers.results.find(r => r.id === chantier.id);
-      const fichiers = chData?.['Fichiers'] || [];
-      const nomDiv = document.createElement('div');
-      nomDiv.style.cssText = 'font-weight:700;margin-bottom:3px;cursor:pointer;color:var(--vert);text-decoration:underline dotted;';
-      nomDiv.textContent = chantier.nom;
-      nomDiv.title = 'Cliquer pour changer de chantier';
-      if (isGestAdmin) {
-        nomDiv.onclick = e => { e.stopPropagation(); ouvrirModalChangerChantier(chantier); };
-      }
-      tdNom.appendChild(nomDiv);
-      fichiers.forEach(f => {
-        const a = document.createElement('a');
-        a.href = f.url; a.target = '_blank';
-        a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
-        a.textContent = '📎 ' + (f.visible_name||f.name||'Fichier');
-        tdNom.appendChild(a);
-      });
-      if (isGestAdmin) {
-        const btnPJ = document.createElement('button');
-        btnPJ.textContent = '+ 📎';
-        btnPJ.style.cssText = 'margin-top:4px;width:100%;font-size:8px;background:#f0f7ef;border:1px dashed var(--vert);border-radius:3px;color:var(--vert);padding:2px;cursor:pointer;font-weight:700';
-        btnPJ.onclick = e => { e.stopPropagation(); ouvrirModalPJ(chantier); };
-        tdNom.appendChild(btnPJ);
-      }
-      tr.appendChild(tdNom);
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      td.style.cssText = 'text-align:center;padding:24px;color:#aaa;font-size:13px';
+      td.textContent = '🔍 Aucun chantier trouvé pour "' + filtre + '"';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    } else {
+      chantiersAffiches.forEach(chantier => {
+        const tr = document.createElement('tr');
+        // Cellule nom
+        const tdNom = document.createElement('td');
+        tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle;min-width:80px';
+        const chData = dataChantiers.results.find(r => r.id === chantier.id);
+        const fichiers = chData?.['Fichiers'] || [];
+        const nomDiv = document.createElement('div');
+        nomDiv.style.cssText = 'font-weight:700;margin-bottom:2px;cursor:pointer;color:var(--vert);text-decoration:underline dotted;font-size:9px;line-height:1.3';
+        nomDiv.textContent = chantier.nom;
+        nomDiv.title = 'Cliquer pour changer de chantier';
+        if (isGestAdmin) {
+          nomDiv.onclick = e => { e.stopPropagation(); ouvrirModalChangerChantier(chantier); };
+        }
+        tdNom.appendChild(nomDiv);
+        // Badge statut + select inline
+        const statutWrap = document.createElement('div');
+        statutWrap.style.cssText = 'margin-top:2px';
+        const statutColors = { 'En cours': { bg: '#e8f5e4', color: '#2d6a1f', label: '🟢' }, 'En pause': { bg: '#fff8e1', color: '#b45309', label: '🟡' }, 'Terminé': { bg: '#f0f0f0', color: '#666', label: '⚫' } };
+        const sc = statutColors[chantier.statue] || { bg: '#eee', color: '#888', label: '⬜' };
+        if (isGestAdmin) {
+          const sel = document.createElement('select');
+          sel.style.cssText = 'font-size:8px;padding:2px 3px;border-radius:4px;border:1px solid ' + sc.color + ';background:' + sc.bg + ';color:' + sc.color + ';font-weight:700;cursor:pointer;max-width:72px;outline:none';
+          [['En cours','🟢 En cours'],['En pause','🟡 Pause'],['Terminé','⚫ Terminé']].forEach(([v,l]) => {
+            const opt = document.createElement('option');
+            opt.value = v; opt.textContent = l;
+            if (v === chantier.statue) opt.selected = true;
+            sel.appendChild(opt);
+          });
+          sel.onchange = async e => {
+            e.stopPropagation();
+            const newStatut = sel.value;
+            try {
+              await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantier.id + '/?user_field_names=true', { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statue': newStatut }) });
+              chantier.statue = newStatut;
+              const cached = (dataChantiersCached?.results || []).find(r => r.id === chantier.id);
+              if (cached) cached['Statue'] = { value: newStatut };
+              const sc2 = statutColors[newStatut] || { bg: '#eee', color: '#888' };
+              sel.style.borderColor = sc2.color; sel.style.background = sc2.bg; sel.style.color = sc2.color;
+            } catch(err) { alert('Erreur mise à jour statut : ' + err.message); sel.value = chantier.statue; }
+          };
+          statutWrap.appendChild(sel);
+        } else {
+          const badge = document.createElement('span');
+          badge.style.cssText = 'font-size:8px;padding:1px 4px;border-radius:4px;background:' + sc.bg + ';color:' + sc.color + ';font-weight:700';
+          badge.textContent = sc.label + ' ' + chantier.statue;
+          statutWrap.appendChild(badge);
+        }
+        tdNom.appendChild(statutWrap);
+        fichiers.forEach(f => {
+          const a = document.createElement('a');
+          a.href = f.url; a.target = '_blank';
+          a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
+          a.textContent = '📎 ' + (f.visible_name||f.name||'Fichier');
+          tdNom.appendChild(a);
+        });
+        if (isGestAdmin) {
+          const btnPJ = document.createElement('button');
+          btnPJ.textContent = '+ 📎';
+          btnPJ.style.cssText = 'margin-top:4px;width:100%;font-size:8px;background:#f0f7ef;border:1px dashed var(--vert);border-radius:3px;color:var(--vert);padding:2px;cursor:pointer;font-weight:700';
+          btnPJ.onclick = e => { e.stopPropagation(); ouvrirModalPJ(chantier); };
+          tdNom.appendChild(btnPJ);
+        }
+        tr.appendChild(tdNom);
 
-      jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
-        const td = document.createElement('td');
-        const ferieCell = estJourFerie(dateStr);
-        td.style.cssText = 'padding:4px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;min-height:44px;' + (ferieCell ? 'background:rgba(192,57,43,0.08);' : '') + (isGestAdmin && !isPasseCollectif ? 'cursor:pointer' : '');
-        td._chantier = chantier;
-        td._dateStr = dateStr;
+        jours.forEach(j => {
+          const dateStr = j.toISOString().split('T')[0];
+          const td = document.createElement('td');
+          const ferieCell = estJourFerie(dateStr);
+          td.style.cssText = 'padding:4px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;min-height:44px;' + (ferieCell ? 'background:rgba(192,57,43,0.08);' : '') + (isGestAdmin && !isPasseCollectif ? 'cursor:pointer' : '');
+          td._chantier = chantier;
+          td._dateStr = dateStr;
 
-        // Affectations
-        const affs = planningCollectifData.filter(p =>
-          p['Date'] === dateStr && (p['Chantier']||p['Chantiers']||[]).some(c => c.id === chantier.id)
-        );
-        affs.forEach(aff => {
-          const collabNom = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.value || '—';
-          const isSaisie = aff.isSaisie === true;
-          const heures = aff['heures'] || '';
-          const notes = aff['Notes'] || '';
-          const div = document.createElement('div');
-          div.className = 'aff-tag';
-          div.style.cssText = 'font-size:9px;padding:3px 5px;margin-bottom:3px;user-select:none;' +
-            (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;cursor:default' : 'cursor:grab');
-          div.innerHTML = '👷 ' + collabNom.split(' ')[0] +
-            (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
-            (notes ? '<div class="aff-notes">📝 '+notes+'</div>' : '') +
-            (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
+          // Affectations
+          const affs = planningCollectifData.filter(p =>
+            p['Date'] === dateStr && (p['Chantier']||p['Chantiers']||[]).some(c => c.id === chantier.id)
+          );
+          affs.forEach(aff => {
+            const collabNom = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.value || '—';
+            const isSaisie = aff.isSaisie === true;
+            const heures = aff['heures'] || '';
+            const notes = aff['Notes'] || '';
+            const div = document.createElement('div');
+            div.className = 'aff-tag';
+            div.style.cssText = 'font-size:9px;padding:3px 5px;margin-bottom:3px;user-select:none;' +
+              (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;cursor:default' : 'cursor:grab');
+            div.innerHTML = '👷 ' + collabNom.split(' ')[0] +
+              (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
+              (notes ? '<div class="aff-notes">📝 '+notes+'</div>' : '') +
+              (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
 
-          if (isGestAdmin && !isSaisie) {
-            div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
-            // Sélection au clic/tap — 2 taps pour déplacer
-            div.onclick = e => {
-              if (e.target.classList.contains('btn-del-aff')) return;
-              if (collabDeplace) return;
-              document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor = 'grab'; });
-              div.classList.add('selected-move');
-              collabDeplace = { affId: aff.id, collabNom, chantier, dateStr };
-              div.style.cursor = 'grabbing';
-              navigator.vibrate && navigator.vibrate(40);
-              const cursor = document.getElementById('drag-cursor');
-              cursor.textContent = '👷 ' + collabNom.split(' ')[0];
-              cursor.style.display = 'block';
-              cursor.style.left = (e.clientX + 14) + 'px';
-              cursor.style.top = (e.clientY - 14) + 'px';
+            if (isGestAdmin && !isSaisie) {
+              div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
+              div.onclick = e => {
+                if (e.target.classList.contains('btn-del-aff')) return;
+                if (collabDeplace) return;
+                document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor = 'grab'; });
+                div.classList.add('selected-move');
+                collabDeplace = { affId: aff.id, collabNom, chantier, dateStr };
+                div.style.cursor = 'grabbing';
+                navigator.vibrate && navigator.vibrate(40);
+                const cursor = document.getElementById('drag-cursor');
+                cursor.textContent = '👷 ' + collabNom.split(' ')[0];
+                cursor.style.display = 'block';
+                cursor.style.left = (e.clientX + 14) + 'px';
+                cursor.style.top = (e.clientY - 14) + 'px';
+              };
+            }
+            td.appendChild(div);
+          });
+
+          if (isGestAdmin && !isPasseCollectif) {
+            let touchMoved = false;
+            td.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
+            td.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
+            td.addEventListener('touchend', e => {
+              if (touchMoved) return;
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+              e.preventDefault();
+              if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
+            }, { passive: false });
+            td.onclick = e => {
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+              if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
             };
           }
-          td.appendChild(div);
+          tr.appendChild(td);
         });
-
-        // Clic/tap sur case
-        if (isGestAdmin && !isPasseCollectif) {
-          let touchMoved = false;
-          td.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
-          td.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
-          td.addEventListener('touchend', e => {
-            if (touchMoved) return; // ignore scroll
-            if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
-            e.preventDefault(); // bloque le click synthétique qui suit
-            if (collabDeplace) {
-              deplacerCollab(collabDeplace, chantier, dateStr);
-            } else {
-              ouvrirModalCollabCase(chantier, dateStr);
-            }
-          }, { passive: false });
-          // PC uniquement (touch a déjà appelé preventDefault donc click ne se déclenche pas)
-          td.onclick = e => {
-            if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
-            if (collabDeplace) {
-              deplacerCollab(collabDeplace, chantier, dateStr);
-            } else {
-              ouvrirModalCollabCase(chantier, dateStr);
-            }
-          };
-        }
-        tr.appendChild(td);
+        tbody.appendChild(tr);
       });
-      tbody.appendChild(tr);
-    });
+    }
     table.appendChild(tbody);
-
-    const lundi2 = getLundiAdmin(semaineCollectif);
-    const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate()+4);
-    document.getElementById('semaine-label-collectif').textContent =
-      'Du ' + lundi2.toLocaleDateString('fr-FR',{day:'numeric',month:'long'}) +
-      ' au ' + vendredi.toLocaleDateString('fr-FR',{day:'numeric',month:'long',year:'numeric'}) +
-      (isPasseCollectif ? ' · 📋 Saisies réelles' : '');
-    updateInputSemaineCollectif();
   }
 
 
@@ -2945,6 +3001,25 @@
   }
 
   function filtrerCollaborateurs() { loadPlanningCollectif(); }
+
+  function filtrerChantiersCollectif() {
+    filtreChantierCollectif = (document.getElementById('search-chantier-collectif')?.value || '').toLowerCase().trim();
+    renderPlanningCollectifGrid();
+  }
+
+  function setFiltreStatutCollectif(statut) {
+    filtreStatutCollectif = statut;
+    // Mettre à jour l'apparence des boutons
+    const map = { 'En cours': 'btn-statut-encours', 'En pause': 'btn-statut-pause', 'Terminé': 'btn-statut-termine', 'tous': 'btn-statut-tous' };
+    const bg = { 'btn-statut-encours': 'rgba(74,124,63,0.8)', 'btn-statut-pause': 'rgba(180,120,0,0.7)', 'btn-statut-termine': 'rgba(80,80,80,0.7)', 'btn-statut-tous': 'rgba(100,100,150,0.7)' };
+    Object.entries(map).forEach(([s, id]) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.style.background = (statut === s) ? (bg[id] || 'rgba(255,255,255,0.3)') : 'rgba(255,255,255,0.1)';
+      btn.style.fontWeight = (statut === s) ? '700' : '400';
+    });
+    renderPlanningCollectifGrid();
+  }
 
   function changerSemaineCollectif(delta) {
     semaineCollectif.setDate(semaineCollectif.getDate() + delta * 7);
@@ -5538,6 +5613,15 @@
   </div>
   <div style="padding:3px 8px 4px;background:#1e2420;text-align:center">
     <div style="font-size:10px;color:rgba(255,255,255,0.6)" id="semaine-label-collectif">—</div>
+  </div>
+  <div style="padding:4px 8px 4px;background:#1e2420;border-top:1px solid rgba(255,255,255,0.08);display:flex;gap:6px;align-items:center">
+    <input type="text" id="search-chantier-collectif" placeholder="🔍 Rechercher un chantier…" oninput="filtrerChantiersCollectif()" style="flex:1;min-width:0;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:5px 10px;font-size:12px;color:#fff;outline:none" />
+    <div style="display:flex;gap:3px;flex-shrink:0">
+      <button id="btn-statut-encours" onclick="setFiltreStatutCollectif('En cours')" style="font-size:10px;padding:4px 7px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:rgba(74,124,63,0.8);color:#fff;cursor:pointer;font-weight:700">🟢</button>
+      <button id="btn-statut-pause" onclick="setFiltreStatutCollectif('En pause')" style="font-size:10px;padding:4px 7px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:#fff;cursor:pointer">🟡</button>
+      <button id="btn-statut-termine" onclick="setFiltreStatutCollectif('Terminé')" style="font-size:10px;padding:4px 7px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:#fff;cursor:pointer">⚫</button>
+      <button id="btn-statut-tous" onclick="setFiltreStatutCollectif('tous')" style="font-size:10px;padding:4px 7px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:#fff;cursor:pointer">Tous</button>
+    </div>
   </div>
   <div id="planning-collectif-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
   <div id="collectif-scroll-zone" style="overflow:auto;-webkit-overflow-scrolling:touch;flex:1">
