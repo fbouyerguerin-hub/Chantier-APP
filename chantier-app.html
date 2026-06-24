@@ -2211,6 +2211,13 @@
       ]);
 
       const planRows = (await resPlan.json()).results || [];
+      // Véhicules par date (lignes sans collaborateur)
+      const byDateVehicules = {};
+      planRows.filter(r => !(r['Collaborateurs'] || []).length && (r['Véhicule'] || []).length).forEach(r => {
+        const d = r['Date'];
+        if (!byDateVehicules[d]) byDateVehicules[d] = [];
+        (r['Véhicule'] || []).forEach(v => { if (!byDateVehicules[d].includes(v.value)) byDateVehicules[d].push(v.value); });
+      });
       planRows.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
         const d = r['Date'];
         if (!byDatePlanning[d]) byDatePlanning[d] = [];
@@ -2246,7 +2253,9 @@
         if (congeJour) {
           cellHTML = `<div class="planning-cell-conge">${labelAbsence(congeJour['Type de demande']?.value)}</div>`;
         } else if (byDate[dateStr]?.length > 0) {
-          cellHTML = byDate[dateStr].map(r =>
+          const vehs = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
+          const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.join(' · ')}</div>` : '';
+          cellHTML = vehHTML + byDate[dateStr].map(r =>
             `<div class="planning-cell-chantier">🏗 ${r.chantier}
               ${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}
               ${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}
@@ -2254,9 +2263,13 @@
             </div>`
           ).join('');
         } else if (ferie) {
-          cellHTML = `<div class="planning-cell-ferie">🔴 Férié</div>`;
+          const vehsFerie = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
+          cellHTML = (vehsFerie.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehsFerie.join(' · ')}</div>` : '') + `<div class="planning-cell-ferie">🔴 Férié</div>`;
         } else {
-          cellHTML = `<div class="planning-cell-vide">—</div>`;
+          const vehsVide = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
+          cellHTML = vehsVide.length
+            ? `<div style="font-size:9px;font-weight:700;color:var(--vert)">🚐 ${vehsVide.join(' · ')}</div>`
+            : `<div class="planning-cell-vide">—</div>`;
         }
         return `<td${ferie ? ' class="td-ferie"' : ''}>${cellHTML}</td>`;
       }).join('');
