@@ -2388,12 +2388,14 @@
     document.getElementById('planning-collectif-loading').style.display = 'block';
     document.getElementById('planning-collectif-grid').innerHTML = '';
 
-    const [resP, resConges] = await Promise.all([
+    const [resP, resConges, resVeh] = await Promise.all([
       fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS })
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      vehiculesCollectif.length ? Promise.resolve(null) : fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200', { headers: HEADERS })
     ]);
     planningCollectifData = (await resP.json()).results || [];
     congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
+    if (resVeh) { vehiculesCollectif = ((await resVeh.json()).results || []).map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id })); }
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
     // Semaine passée → saisies réelles (on compare le vendredi, pas le lundi)
@@ -2563,7 +2565,24 @@
           const affs = planningCollectifData.filter(p =>
             p['Date'] === dateStr && (p['Chantier']||p['Chantiers']||[]).some(c => c.id === chantier.id)
           );
-          affs.forEach(aff => {
+          // Ligne véhicule (sans collaborateur)
+          const ligneVeh = affs.find(p => !(p['Collaborateurs']||p['Collaborateur']||[]).length);
+          const vehActuels = ligneVeh ? (ligneVeh['Véhicule'] || []) : [];
+          if (isGestAdmin && !isPasseCollectif) {
+            const vehBloc = document.createElement('div');
+            vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700';
+            vehBloc.innerHTML = vehActuels.length ? '🚐 ' + vehActuels.map(v => v.value).join(' · ') : '🚐 <span style="font-weight:400">+ véhicule</span>';
+            vehBloc.onclick = e => { e.stopPropagation(); ouvrirModalVehiculeCase(chantier, dateStr, ligneVeh); };
+            td.appendChild(vehBloc);
+          } else if (vehActuels.length) {
+            const vehBloc = document.createElement('div');
+            vehBloc.style.cssText = 'margin-bottom:4px;padding:2px 5px;border-radius:4px;background:rgba(11,60,30,0.08);font-size:9px;color:var(--vert);font-weight:700';
+            vehBloc.textContent = '🚐 ' + vehActuels.map(v => v.value).join(' · ');
+            td.appendChild(vehBloc);
+          }
+          // Collaborateurs
+          const affCollab = affs.filter(p => (p['Collaborateurs']||p['Collaborateur']||[]).length > 0);
+          affCollab.forEach(aff => {
             const collabNom = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.value || '—';
             const isSaisie = aff.isSaisie === true;
             const heures = aff['heures'] || '';
@@ -2765,10 +2784,11 @@
     const sel = collabsSelectionnesParJour[dateStr] || new Set();
     if (!sel.size) { modal.classList.remove('open'); return; }
     modal.classList.remove('open');
-    await Promise.all([...sel].map(collabId =>
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs:[collabId], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'' }) })
-    ));
+    await Promise.all([...sel].map(collabId => {
+      const payload = { Collaborateurs:[collabId], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'' };
+      return fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+    }));
     collabsSelectionnesParJour[dateStr] = new Set();
     await loadPlanningCollectif();
   }
@@ -3174,6 +3194,62 @@
     finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
   }
 
+  // ── Modal véhicule indépendant ────────────────────────────────────────────
+  let currentVehCase = null;
+
+  function ouvrirModalVehiculeCase(chantier, dateStr, ligneExistante) {
+    currentVehCase = { chantier, dateStr, ligneId: ligneExistante?.id || null };
+    const vehActuels = ligneExistante ? (ligneExistante['Véhicule'] || []).map(v => v.id) : [];
+    // Véhicules déjà affectés ailleurs ce jour (autres chantiers)
+    const vehPrisAilleurs = new Set(
+      planningCollectifData
+        .filter(p => p['Date'] === dateStr && !(p['Chantier']||p['Chantiers']||[]).some(ch => ch.id === chantier.id))
+        .flatMap(p => (p['Véhicule'] || []).map(v => v.id))
+    );
+    document.getElementById('liste-veh-case').innerHTML = vehiculesCollectif.map(v => {
+      const pris = vehPrisAilleurs.has(v.id) && !vehActuels.includes(v.id);
+      return '<div class="modal-option ' + (vehActuels.includes(v.id) ? 'selected' : '') + '" '
+        + (pris ? 'style="opacity:0.35;pointer-events:none;gap:10px"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
+        + '<span style="flex:1">🚐 ' + v.immat + (pris ? ' <span style="font-size:8px;color:#c0392b">(déjà affecté)</span>' : '') + '</span>'
+        + (vehActuels.includes(v.id) ? '<span class="check">✓</span>' : '')
+        + '</div>';
+    }).join('');
+    const d = new Date(dateStr + 'T12:00:00');
+    document.getElementById('modal-veh-case-title').textContent = '🚐 ' + chantier.nom + ' · ' + d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});
+    document.getElementById('modal-veh-case').classList.add('open');
+  }
+
+  function toggleVehCase(vehId, el) {
+    el.classList.toggle('selected');
+    if (el.classList.contains('selected')) {
+      if (!el.querySelector('.check')) { const ck = document.createElement('span'); ck.className='check'; ck.textContent='✓'; el.appendChild(ck); }
+    } else { el.querySelector('.check')?.remove(); }
+  }
+
+  async function sauvegarderVehiculeCase() {
+    document.getElementById('modal-veh-case').classList.remove('open');
+    const selIds = [...document.querySelectorAll('#liste-veh-case .modal-option.selected')].map(el => {
+      const immat = el.querySelector('span')?.textContent?.replace('🚐 ','').trim();
+      return vehiculesCollectif.find(v => v.immat === immat)?.id;
+    }).filter(Boolean);
+    const { chantier, dateStr, ligneId } = currentVehCase;
+    try {
+      if (ligneId) {
+        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + ligneId + '/?user_field_names=true',
+          { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Véhicule': selIds }) });
+      } else if (selIds.length) {
+        await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+          { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs:[], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'', 'Véhicule': selIds }) });
+      }
+      await loadPlanningCollectif();
+    } catch(e) { alert('Erreur véhicule : ' + e.message); }
+  }
+
+  function fermerModalVehiculeCase(e) {
+    if (!e || e.target === document.getElementById('modal-veh-case'))
+      document.getElementById('modal-veh-case').classList.remove('open');
+  }
+
   async function supprimerAffCollectif(id) {
     if (!confirm('Supprimer cette affectation ?')) return;
     await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
@@ -3255,6 +3331,8 @@
   const TABLE_CHANTIERS_ADMIN = '1014441';
   const TABLE_CONGES_PLANNING = '1022869';
   const TABLE_COLLABS_ADMIN = '1014431';
+  const TABLE_VEHICULES_COLLECTIF = '1017158';
+  let vehiculesCollectif = [];
 
   let COLLABORATEURS_ADMIN = [];
   let semaineAdmin = new Date();
@@ -5772,6 +5850,21 @@
         </label>
         <div id="pj-preview" style="display:flex;flex-wrap:wrap;gap:6px"></div>
         <button onclick="uploaderPJChantier()" style="background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-upload-pj">✅ Enregistrer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL VÉHICULE CASE -->
+  <div class="modal-backdrop" id="modal-veh-case" onclick="fermerModalVehiculeCase(event)">
+    <div class="modal-sheet" style="max-height:70vh">
+      <div class="modal-header">
+        <h3 id="modal-veh-case-title">🚐 Véhicule(s)</h3>
+        <button class="modal-close" onclick="fermerModalVehiculeCase()">✕</button>
+      </div>
+      <div class="modal-options" id="liste-veh-case" style="overflow-y:auto;flex:1"></div>
+      <div style="padding:12px 16px;display:flex;gap:8px">
+        <button onclick="fermerModalVehiculeCase()" style="flex:1;background:#f1f5f9;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris)">Annuler</button>
+        <button onclick="sauvegarderVehiculeCase()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✅ Enregistrer</button>
       </div>
     </div>
   </div>
