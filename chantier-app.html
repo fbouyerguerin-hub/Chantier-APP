@@ -678,9 +678,10 @@
     connectedCollab = nom;
     connectedViewId = viewId;
     connectedDroit = droit || '';
-    // Chercher dans les données déjà chargées
+    // Chercher dans les données déjà chargées (case-insensitive)
     const collabData = tableData['Collaborateur'] || [];
-    const found = collabData.find(c => c.value === nom);
+    const nomLower = nom.trim().toLowerCase();
+    const found = collabData.find(c => c.value && c.value.trim().toLowerCase() === nomLower);
     if (found) {
       feuilleCollab = found;
     } else {
@@ -1019,6 +1020,25 @@
   let feuilleDate = new Date();
   let feuilleCollab = null;
 
+  // Résoudre l'ID du collaborateur connecté (case-insensitive + fallback API)
+  async function resolveFeuilleCollab() {
+    if (feuilleCollab && feuilleCollab.id) return; // déjà résolu
+    const nom = connectedCollab;
+    if (!nom) return;
+    const nomLower = nom.trim().toLowerCase();
+    // 1. Chercher dans le cache (recharger d'abord)
+    await loadTable('Collaborateur');
+    const found = (tableData['Collaborateur'] || []).find(c => c.value && c.value.trim().toLowerCase() === nomLower);
+    if (found) { feuilleCollab = found; return; }
+    // 2. Fallback : recherche directe API par nom
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/1014431/?user_field_names=true&size=50&search=${encodeURIComponent(nom)}`, { headers: HEADERS });
+      const data = await res.json();
+      const row = (data.results || []).find(r => r['Nom Complet'] && r['Nom Complet'].trim().toLowerCase() === nomLower);
+      if (row) { feuilleCollab = { id: row.id, value: row['Nom Complet'] }; }
+    } catch(e) { console.warn('resolveFeuilleCollab fallback error:', e); }
+  }
+
   function updateMoisLabel() {
     const mois = feuilleDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
     document.getElementById('mois-label').textContent = mois.charAt(0).toUpperCase() + mois.slice(1);
@@ -1044,12 +1064,8 @@
     const dateFin = `${year}-${pad(month + 1)}-${pad(lastDay)}`;
 
     try {
-      // Si l'ID du collaborateur n'est pas encore chargé, recharger la table
-      if (!feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
-      }
+      // Si l'ID du collaborateur n'est pas encore chargé, résoudre
+      if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
       // Filtrer directement par collaborateur + période (sans view_id pour éviter conflits de filtres)
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Collaborateur__link_row_has=${feuilleCollab.id}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
@@ -1374,11 +1390,7 @@
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
 
     try {
-      if (!feuilleCollab || !feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
-      }
+      if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
       const res = await fetch(url, { headers: HEADERS });
@@ -1688,11 +1700,7 @@
     const container = document.getElementById('rtt-perso-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      if (!feuilleCollab || !feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
-      }
+      if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
       if (!feuilleCollab || !feuilleCollab.id) {
         container.innerHTML = '<div class="feuille-empty">❌ Collaborateur introuvable.</div>';
         return;
@@ -2187,11 +2195,7 @@
     const dateFin = jours[4].toISOString().split('T')[0];
 
     try {
-      if (!feuilleCollab || !feuilleCollab.id) {
-        await loadTable('Collaborateur');
-        const found = (tableData['Collaborateur'] || []).find(c => c.value === connectedCollab);
-        if (found) feuilleCollab = found;
-      }
+      if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
       // Charger congés
       const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100`;
