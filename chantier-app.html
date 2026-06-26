@@ -678,15 +678,20 @@
     connectedCollab = nom;
     connectedViewId = viewId;
     connectedDroit = droit || '';
-    // Chercher dans les données déjà chargées (case-insensitive)
-    const collabData = tableData['Collaborateur'] || [];
-    const nomLower = nom.trim().toLowerCase();
-    const found = collabData.find(c => c.value && c.value.trim().toLowerCase() === nomLower);
-    if (found) {
-      feuilleCollab = found;
+    // Si Vue ID contient l'ID du collaborateur (entier), l'utiliser directement
+    const collabIdFromVueId = viewId && /^\d+$/.test(String(viewId).trim()) ? parseInt(viewId) : null;
+    if (collabIdFromVueId) {
+      feuilleCollab = { id: collabIdFromVueId, value: nom };
     } else {
-      // Si pas encore chargé, créer un objet temporaire et recharger après
-      feuilleCollab = { id: null, value: nom, pendingLoad: true };
+      // Sinon chercher dans les données déjà chargées (case-insensitive)
+      const collabData = tableData['Collaborateur'] || [];
+      const nomLower = nom.trim().toLowerCase();
+      const found = collabData.find(c => c.value && c.value.trim().toLowerCase() === nomLower);
+      if (found) {
+        feuilleCollab = found;
+      } else {
+        feuilleCollab = { id: null, value: nom, pendingLoad: true };
+      }
     }
     // Afficher le header et le nom
     document.querySelector('.header').style.display = 'block';
@@ -2211,7 +2216,7 @@
 
       const [resPlan, resSaisies] = await Promise.all([
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS })
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${feuilleCollab?.id ? '&filter__Collaborateur__link_row_has=' + feuilleCollab.id : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS })
       ]);
 
       const planRows = (await resPlan.json()).results || [];
@@ -4072,6 +4077,10 @@
         });
         if (!resCollab.ok) throw new Error('Erreur création collaborateur : ' + await resCollab.text());
 
+        // Récupérer l'ID du collaborateur créé pour l'utiliser comme Vue ID
+        const collabCreated = await resCollab.json();
+        const collabCreatedId = collabCreated.id ? String(collabCreated.id) : '';
+
         // Étape 2 : créer le compte utilisateur
         btn.textContent = '🔑 Création du compte…';
         infoEl.textContent = '🔑 Création du compte utilisateur…';
@@ -4081,6 +4090,7 @@
           'Mot de passe': mdp,
           'Droit': droit,
           'Actif': document.getElementById('user-actif').value === 'true',
+          'Vue ID': collabCreatedId,
         };
         const resUser = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true', {
           method: 'POST', headers: HEADERS, body: JSON.stringify(payloadUser)
