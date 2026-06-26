@@ -279,6 +279,7 @@
     .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: var(--vert); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -1477,6 +1478,157 @@
     return { joursRestants, semainesRestantes };
   }
 
+
+  let rttChartInstance = null;
+
+  function drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel) {
+    const container = document.getElementById('rtt-graph-container');
+    if (!container) return;
+    if (rttChartInstance) { rttChartInstance.destroy(); rttChartInstance = null; }
+
+    const moisLabels = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
+    const aujourdHuiStr = dateYMD(new Date());
+
+    // Solde actuel brut = point de départ (valeur d'aujourd'hui)
+    // Point de départ = solde actuel brut (acquis - solde de base)
+    const soldeDepart = Math.max(0, acquis - soldeDeBasePrevisionnel);
+
+    // RTT futurs validés par semaine (heures + jours pour tooltip)
+    const rttFutursParSemaine = {};
+    const rttFutursPrisDetails = {}; // { lundi: { heures, jours } }
+    validees.forEach(r => {
+      const dateStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+      if (!dateStr || dateStr <= aujourdHuiStr) return;
+      const d = new Date(dateStr + 'T12:00:00');
+      const day = d.getDay(); const diff = (day === 0 ? -6 : 1 - day);
+      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+      const lundiStr = dateYMD(lundi);
+      const h = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
+      const j = joursRttDemande(r);
+      rttFutursParSemaine[lundiStr] = (rttFutursParSemaine[lundiStr] || 0) + h;
+      if (!rttFutursPrisDetails[lundiStr]) rttFutursPrisDetails[lundiStr] = { heures: 0, jours: 0 };
+      rttFutursPrisDetails[lundiStr].heures += h;
+      rttFutursPrisDetails[lundiStr].jours += j;
+    });
+
+    // Plages d'absences bloquantes futures (congés, maladie, sans solde, accident)
+    const plagesAbsences = (absencesBloquantes || []).map(r => ({
+      debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
+      fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
+    })).filter(p => p.debut && p.fin > aujourdHuiStr);
+
+    // Ne garder que les semaines à partir d'aujourd'hui
+    const semainesFutures = donneesGraph.filter(s => s.lundi >= aujourdHuiStr);
+    const labels = [], dataSolde = [], dataRttPris = [];
+
+    let soldeCourant = soldeDepart;
+    const tooltipDetails = []; // détails par point pour le tooltip
+    semainesFutures.forEach((s, i) => {
+      const m = new Date(s.lundi + 'T12:00:00').getMonth();
+      const label = i === 0 || new Date(semainesFutures[i-1].lundi + 'T12:00:00').getMonth() !== m ? moisLabels[m] : '';
+      labels.push(label);
+
+      let semaineBloquee = false, pris = 0, joursDetail = 0;
+      if (i > 0) {
+        const vendredi = new Date(s.lundi + 'T12:00:00'); vendredi.setDate(vendredi.getDate() + 4);
+        const vendrediStr = dateYMD(vendredi);
+        semaineBloquee = plagesAbsences.some(p => p.debut <= vendrediStr && p.fin >= s.lundi);
+        pris = rttFutursParSemaine[s.lundi] || 0;
+        joursDetail = (rttFutursPrisDetails[s.lundi] || {}).jours || 0;
+        if (!semaineBloquee) soldeCourant += HEURES_RTT_PAR_SEMAINE;
+        soldeCourant -= pris;
+        soldeCourant = Math.max(0, soldeCourant);
+      }
+
+      dataSolde.push(Math.round(soldeCourant * 10) / 10);
+      dataRttPris.push(pris > 0 ? Math.round(soldeCourant * 10) / 10 : null);
+      tooltipDetails.push({ pris, joursDetail, semaineBloquee, lundi: s.lundi });
+    });
+
+    container.innerHTML = '<canvas id="rtt-chart" style="max-height:220px"></canvas>';
+    const ctx = document.getElementById('rtt-chart').getContext('2d');
+
+    rttChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Solde disponible',
+            data: dataSolde,
+            borderColor: '#0B3C1E',
+            backgroundColor: 'rgba(11,60,30,0.1)',
+            borderWidth: 2.5,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            fill: true,
+            tension: 0.3,
+          },
+          {
+            label: 'RTT pris',
+            data: dataRttPris,
+            borderColor: 'transparent',
+            backgroundColor: 'rgba(192,57,43,0.85)',
+            pointRadius: dataRttPris.map(v => v !== null ? 9 : 0),
+            pointStyle: 'rectRot',
+            pointHoverRadius: 11,
+            showLine: false,
+          },
+
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              title: ctx => {
+                const i = ctx[0].dataIndex;
+                const d = tooltipDetails[i];
+                if (!d) return '';
+                const dt = new Date(d.lundi + 'T12:00:00');
+                const vendredi = new Date(dt); vendredi.setDate(dt.getDate() + 4);
+                return 'Sem. du ' + dt.toLocaleDateString('fr-FR', {day:'2-digit',month:'short'}) + ' au ' + vendredi.toLocaleDateString('fr-FR', {day:'2-digit',month:'short'});
+              },
+              label: ctx => {
+                const i = ctx.dataIndex;
+                const d = tooltipDetails[i];
+                const lines = [ctx.dataset.label + ' : ' + (ctx.parsed.y !== null ? ctx.parsed.y + ' h' : '--')];
+                if (d && d.pris > 0) lines.push('🔴 RTT pris : ' + d.joursDetail + ' j (' + Math.round(d.pris) + ' h)');
+                if (d && d.semaineBloquee) lines.push('⛔ Absence - pas acquisition');
+                return lines;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { font: { size: 10 }, maxRotation: 0 }, grid: { display: false } },
+          y: { min: 0, ticks: { font: { size: 10 }, callback: v => v + 'h' }, grid: { color: 'rgba(0,0,0,0.05)' } }
+        }
+      }
+    });
+  }
+
+  function switchRttSubTab(tab) {
+    const solde = document.getElementById('rtt-subtab-solde');
+    const prev = document.getElementById('rtt-subtab-prev');
+    const btnSolde = document.getElementById('rtt-subtab-btn-solde');
+    const btnPrev = document.getElementById('rtt-subtab-btn-prev');
+    if (!solde || !prev) return;
+    if (tab === 'solde') {
+      solde.style.display = ''; prev.style.display = 'none';
+      btnSolde.style.background = 'var(--vert)'; btnSolde.style.color = '#fff';
+      btnPrev.style.background = '#f0f0f0'; btnPrev.style.color = 'var(--gris)';
+    } else {
+      solde.style.display = 'none'; prev.style.display = '';
+      btnPrev.style.background = 'var(--vert)'; btnPrev.style.color = '#fff';
+      btnSolde.style.background = '#f0f0f0'; btnSolde.style.color = 'var(--gris)';
+    }
+  }
+
   function switchRttTab(tab) {
     document.getElementById('tab-rtt-perso').classList.toggle('active', tab === 'perso');
     document.getElementById('tab-rtt-admin').classList.toggle('active', tab === 'admin');
@@ -1578,6 +1730,39 @@
   // Calcule le nombre d'heures de RTT acquises sur l'année civile en cours :
   // 4h par semaine complète (lundi-vendredi) entièrement passée, sans absence bloquante
   // ET avec au moins une saisie de temps dans la semaine.
+  function calculerDonneesGraphRtt(absencesBloquantes, semainesAvecSaisie, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial) {
+    const annee = new Date().getFullYear();
+    const aujourdHuiStr = dateYMD(new Date());
+    let lundi = new Date(annee, 0, 1);
+    while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
+    const plages = absencesBloquantes.map(r => ({
+      debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
+      fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
+    })).filter(p => p.debut);
+    const heuresSupParSemaine = {};
+    (heuresSupResult.detail || []).forEach(d => { heuresSupParSemaine[d.lundi] = d.surplus || 0; });
+    const semaines = [];
+    let cumulAcquis = rttSoldeInitial + heuresSupSoldeInitial;
+    let semaineIndex = 0;
+    while (lundi.getFullYear() === annee) {
+      const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+      const lundiStr = dateYMD(lundi);
+      const vendrediStr = dateYMD(vendredi);
+      const estPassee = vendrediStr <= aujourdHuiStr;
+      const estCourante = lundiStr <= aujourdHuiStr && vendrediStr >= aujourdHuiStr;
+      if (estPassee || estCourante) {
+        const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
+        const sansSaisie = semainesAvecSaisie ? !semainesAvecSaisie.has(lundiStr) : false;
+        if (!semaineBloquee && !sansSaisie) cumulAcquis += HEURES_RTT_PAR_SEMAINE;
+        cumulAcquis += (heuresSupParSemaine[lundiStr] || 0);
+      }
+      semaines.push({ lundi: lundiStr, index: semaineIndex, cumul: estPassee || estCourante ? cumulAcquis : null, estAujourdhui: estCourante });
+      semaineIndex++;
+      lundi.setDate(lundi.getDate() + 7);
+    }
+    return semaines;
+  }
+
   function calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie) {
     const annee = new Date().getFullYear();
     const aujourdHuiStr = dateYMD(new Date());
@@ -1814,7 +1999,8 @@
       const { joursRestants, semainesRestantes } = decompteAnneeRtt();
       const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
       syncDejaPrisPrevisionnel(feuilleCollab.id, totalConsommePrevisionnel);
-      const previsionnelTotalDisponible = HEURES_PREVISIONNEL_ANNUEL_RTT + reliquatAnneePrecedente;
+      const heuresSupCumul = parseFloat(collabRow['Heures supplémentaires (cumul)']) || 0;
+      const previsionnelTotalDisponible = HEURES_PREVISIONNEL_ANNUEL_RTT + reliquatAnneePrecedente + heuresSupCumul;
       const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
       const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
       const rythmeIndicatif = semainesRestantes > 0 && restePrevisionnel > 0 ? restePrevisionnel / semainesRestantes : 0;
@@ -1832,6 +2018,7 @@
             <tbody>
               <tr><th>Prévisionnel annuel</th><td class="valeur">${HEURES_PREVISIONNEL_ANNUEL_RTT} h</td></tr>
               ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente</th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
+              ${heuresSupCumul !== 0 ? `<tr><th>Heures supplémentaires</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(heuresSupCumul)} h</td></tr>` : ''}
               <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)} h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>` : ''}</td></tr>
               <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
             </tbody>
@@ -1848,28 +2035,67 @@
         <div class="rtt-progress-label" style="color:${couleurBarre};font-weight:700">${pctAtteint}% du prévisionnel annuel (${formatJoursRtt(previsionnelTotalDisponible)} h) déjà consommé${depassement > 0 ? ` — ⚠️ dépassement de ${formatJoursRtt(depassement)} h` : ''}</div>
       `;
 
+      // ── Données graphique ──
+      const donneesGraph = calculerDonneesGraphRtt(absencesBloquantes, semainesAvecSaisie, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial);
+      const nbSemaines = donneesGraph.length;
+      const idxAujourdhui = donneesGraph.findIndex(s => s.estAujourdhui);
+      const idxRef = idxAujourdhui >= 0 ? idxAujourdhui : donneesGraph.filter(s => s.cumul !== null).length - 1;
+
+      // Calcul solde net (acquis - RTT pris)
+      const rttValideesParSemaine = {};
+      validees.forEach(r => {
+        const dateStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        if (!dateStr) return;
+        const d = new Date(dateStr + 'T12:00:00');
+        const day = d.getDay(); const diff = (day === 0 ? -6 : 1 - day);
+        const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+        const lundiStr = dateYMD(lundi);
+        const h = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
+        rttValideesParSemaine[lundiStr] = (rttValideesParSemaine[lundiStr] || 0) + h;
+      });
+      let cumulRttPris = 0;
+      donneesGraph.forEach(s => {
+        cumulRttPris += (rttValideesParSemaine[s.lundi] || 0);
+        s.soldeNet = s.cumul !== null ? Math.max(0, s.cumul - cumulRttPris) : null;
+      });
+
       container.innerHTML = `
         <div class="rtt-table-title">🔄 Solde RTT — ${feuilleCollab.value}</div>
         <div style="margin:0 16px 14px;background:${enAttenteListe.length > 0 ? '#fef3cd' : '#e8f0e7'};border-radius:10px;padding:12px 14px;font-size:14px;font-weight:700;color:${enAttenteListe.length > 0 ? '#856404' : 'var(--vert)'};text-align:center">
           ${enAttenteListe.length > 0 ? `⏳ ${enAttenteListe.length} demande${enAttenteListe.length > 1 ? 's' : ''} RTT en attente de validation` : '✅ Aucune demande RTT en attente'}
         </div>
-        <div class="rtt-table-wrap">
-          <table class="rtt-table">
-            <tbody>
+
+        <!-- Sous-onglets -->
+        <div style="display:flex;gap:8px;margin:0 16px 14px">
+          <button id="rtt-subtab-btn-solde" onclick="switchRttSubTab('solde')"
+            style="flex:1;padding:9px 0;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">📊 Solde actuel</button>
+          <button id="rtt-subtab-btn-prev" onclick="switchRttSubTab('prev')"
+            style="flex:1;padding:9px 0;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;background:#f0f0f0;color:var(--gris)">📅 Prévisionnel année</button>
+        </div>
+
+        <!-- Solde actuel -->
+        <div id="rtt-subtab-solde">
+          <div class="rtt-table-wrap">
+            <table class="rtt-table"><tbody>
               <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
-              <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span><span class="rtt-sub" style="font-style:italic">à titre indicatif : correspond aux heures validées mais non consommées</span></td></tr>
+              <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span></td></tr>
               <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - soldeDeBasePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h de solde de base</span>` : ''}</td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
-            </tbody>
-          </table>
+            </tbody></table>
+          </div>
+          <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée, + heures sup au-delà de 42,5h/semaine — 1 journée = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
+          ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
-        <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
-        <div class="rtt-note-annuelle">📌 Le cumul RTT sur une année civile complète est d'environ <b>${HEURES_PREVISIONNEL_ANNUEL_RTT} h</b>. Il est demandé à chaque collaborateur de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>
-        ${decompteurHtml}
-        ${listeEnAttenteHtml}
-        ${listeDatesHtml}
-        ${listeHeuresSupHtml}
+
+        <!-- Prévisionnel année -->
+        <div id="rtt-subtab-prev" style="display:none">
+          <div class="rtt-note-annuelle">📌 Cumul RTT annuel cible : <b>${HEURES_PREVISIONNEL_ANNUEL_RTT} h</b></div>
+          <div id="rtt-graph-container" style="margin:0 auto 10px;background:#fff;border-radius:12px;padding:10px 8px;box-shadow:0 1px 4px rgba(0,0,0,0.06);max-width:50%"></div>
+          ${decompteurHtml}
+        </div>
       `;
+      // Dessiner le graphique après injection HTML
+      setTimeout(() => drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel), 50);
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
     }
@@ -2316,6 +2542,10 @@
         'Demandes de congés — ' + (connectedCollab || '');
     } else if (page === 'planning') {
       document.getElementById('page-planning').classList.add('print-active');
+    } else if (page === 'rtt') {
+      document.getElementById('page-rtt').classList.add('print-active');
+      document.getElementById('print-title-rtt').textContent =
+        'Suivi RTT — ' + (connectedCollab || '');
     }
 
     setTimeout(() => {
@@ -3953,52 +4183,35 @@
     }
   }
 
-  let usersCache = [];
-
-  function renderUsers(users) {
-    const container = document.getElementById('liste-utilisateurs');
-    if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun résultat</div>'; return; }
-    container.innerHTML = users.map(u => {
-      const actif = u['Actif'] !== false;
-      const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
-      return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
-        <div>
-          <div style="font-size:14px;font-weight:700;color:var(--gris)">${u['Nom complet'] || '—'}</div>
-          <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}${u['Poste / Métier'] ? ' · ' + u['Poste / Métier'] : ''}</div>
-          <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
-        </div>
-        ${connectedDroit === 'Administrateur' ? `<div style="display:flex;gap:8px">
-          <button onclick="ouvrirFormUser(${u.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
-          <button onclick="supprimerUser(${u.id},'${(u['Nom complet']||'').replace(/'/g,"")}')" style="background:#fde8e8;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">🗑️</button>
-        </div>` : ''}
-      </div>`;
-    }).join('');
-  }
-
-  function filtrerUsers(q) {
-    const ql = q.trim().toLowerCase();
-    if (!ql) { renderUsers(usersCache); return; }
-    renderUsers(usersCache.filter(u =>
-      (u['Nom complet'] || '').toLowerCase().includes(ql) ||
-      (u['Identifiant'] || '').toLowerCase().includes(ql) ||
-      (u['Poste / Métier'] || '').toLowerCase().includes(ql)
-    ));
-  }
-
   async function loadUtilisateurs() {
     const container = document.getElementById('liste-utilisateurs');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
-    const searchEl = document.getElementById('search-users');
-    if (searchEl) searchEl.value = '';
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS });
       const data = await res.json();
-      usersCache = data.results || [];
-      renderUsers(usersCache);
+      const users = data.results || [];
+      if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun utilisateur</div>'; return; }
+      container.innerHTML = users.map(u => {
+        const actif = u['Actif'] !== false;
+        const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
+        return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--gris)">${u['Nom complet'] || '—'}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}${u['Poste / Métier'] ? ' · ' + u['Poste / Métier'] : ''}</div>
+            <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
+          </div>
+          ${connectedDroit === 'Administrateur' ? `<div style="display:flex;gap:8px">
+            <button onclick="ouvrirFormUser(${u.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
+            <button onclick="supprimerUser(${u.id},'${(u['Nom complet']||'').replace(/'/g,"")}')" style="background:#fde8e8;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">🗑️</button>
+          </div>` : ''}
+        </div>`;
+      }).join('');
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
     const btnNouvel = document.getElementById('btn-nouvel-user');
     if (btnNouvel) btnNouvel.style.display = connectedDroit === 'Administrateur' ? '' : 'none';
   }
+
+  let usersCache = [];
 
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
@@ -5969,10 +6182,6 @@
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Comptes collaborateurs</div>
       <button onclick="ouvrirFormUser(null)" id="btn-nouvel-user" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
-    <div style="margin:0 16px 12px">
-      <input id="search-users" type="text" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerUsers(this.value)"
-        style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
-    </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
@@ -6185,7 +6394,6 @@
           <select id="user-poste" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
             <option value="">-- Sélectionner --</option>
             <option value="Pose">Pose</option>
-            <option value="Fab">Fab</option>
             <option value="Apprenti">Apprenti</option>
             <option value="Chef de chantier">Chef de chantier</option>
             <option value="Conducteur de travaux">Conducteur de travaux</option>
@@ -6218,7 +6426,6 @@
           <select id="user-poste-modif" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
             <option value="">-- Sélectionner --</option>
             <option value="Pose">Pose</option>
-            <option value="Fab">Fab</option>
             <option value="Apprenti">Apprenti</option>
             <option value="Chef de chantier">Chef de chantier</option>
             <option value="Conducteur de travaux">Conducteur de travaux</option>
@@ -6377,6 +6584,10 @@
   </div>
 
   <div id="rtt-perso">
+    <div style="padding:8px 16px 0;display:flex;justify-content:flex-end">
+      <button class="btn-print-green" onclick="imprimerPage('rtt')">🖨️ Imprimer</button>
+    </div>
+    <div class="print-title" id="print-title-rtt"></div>
     <div id="rtt-perso-content" style="padding:8px 0">
       <div class="feuille-loading">⏳ Chargement…</div>
     </div>
