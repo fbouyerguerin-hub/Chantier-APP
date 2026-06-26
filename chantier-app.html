@@ -278,7 +278,20 @@
     .loading { text-align: center; padding: 60px 20px; color: #64748b; }
     .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: var(--vert); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
     @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
+    .rtt-graph-wrap {
+    margin: 0 auto 10px;
+    background: #fff;
+    border-radius: 12px;
+    padding: 10px 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    max-width: 50%;
+  }
+  @media (max-width: 600px) {
+    .rtt-graph-wrap {
+      max-width: calc(100vw - 32px);
+    }
+  }
+</style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
 <body>
@@ -2090,7 +2103,7 @@
         <!-- Prévisionnel année -->
         <div id="rtt-subtab-prev" style="display:none">
           <div class="rtt-note-annuelle">📌 Cumul RTT annuel cible : <b>${HEURES_PREVISIONNEL_ANNUEL_RTT} h</b></div>
-          <div id="rtt-graph-container" style="margin:0 auto 10px;background:#fff;border-radius:12px;padding:10px 8px;box-shadow:0 1px 4px rgba(0,0,0,0.06);max-width:50%"></div>
+          <div id="rtt-graph-container" class="rtt-graph-wrap"></div>
           ${decompteurHtml}
         </div>
       `;
