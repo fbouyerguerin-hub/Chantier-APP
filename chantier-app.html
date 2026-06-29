@@ -1504,7 +1504,7 @@
 
     // Solde actuel brut = point de départ (valeur d'aujourd'hui)
     // Point de départ = solde actuel brut (acquis - solde de base)
-    const soldeDepart = Math.max(0, acquis - soldeDeBasePrevisionnel);
+    const soldeDepart = acquis - soldeDeBasePrevisionnel;
 
     // RTT futurs validés par semaine (heures + jours pour tooltip)
     const rttFutursParSemaine = {};
@@ -1550,7 +1550,7 @@
         joursDetail = (rttFutursPrisDetails[s.lundi] || {}).jours || 0;
         if (!semaineBloquee) soldeCourant += HEURES_RTT_PAR_SEMAINE;
         soldeCourant -= pris;
-        soldeCourant = Math.max(0, soldeCourant);
+        // soldeCourant peut être négatif
       }
 
       dataSolde.push(Math.round(soldeCourant * 10) / 10);
@@ -1619,7 +1619,7 @@
         },
         scales: {
           x: { ticks: { font: { size: 10 }, maxRotation: 0 }, grid: { display: false } },
-          y: { min: 0, ticks: { font: { size: 10 }, callback: v => v + 'h' }, grid: { color: 'rgba(0,0,0,0.05)' } }
+          y: { ticks: { font: { size: 10 }, callback: v => v + 'h' }, grid: { color: 'rgba(0,0,0,0.05)' } }
         }
       }
     });
