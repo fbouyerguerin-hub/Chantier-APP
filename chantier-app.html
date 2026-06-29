@@ -1576,6 +1576,10 @@
             pointHoverRadius: 4,
             fill: true,
             tension: 0.3,
+            segment: {
+              borderColor: ctx => ctx.p1.parsed.y < 0 ? '#c0392b' : '#0B3C1E',
+              backgroundColor: ctx => ctx.p1.parsed.y < 0 ? 'rgba(192,57,43,0.1)' : 'rgba(11,60,30,0.1)',
+            },
           },
           {
             label: 'RTT pris',
