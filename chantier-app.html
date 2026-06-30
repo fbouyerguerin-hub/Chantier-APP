@@ -4722,16 +4722,28 @@
 
       const premierMois = moisSelectionnes[0];
       const dernierMois = moisSelectionnes[moisSelectionnes.length - 1];
-      const dateDebut = new Date(annee, premierMois, 1).toISOString().split('T')[0];
-      const dateFin   = new Date(annee, dernierMois + 1, 0).toISOString().split('T')[0];
+      const pad2 = n => String(n).padStart(2, '0');
+      const dateDebut = annee + '-' + pad2(premierMois + 1) + '-01';
+      const dernierJourMois = new Date(annee, dernierMois + 1, 0).getDate();
+      const dateFin = annee + '-' + pad2(dernierMois + 1) + '-' + pad2(dernierJourMois);
 
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN +
-        '/?user_field_names=true&size=200' +
-        '&filter__Date_de_debut__date_before_or_equal=' + dateFin +
-        '&filter__Date_de_fin_journee_inclus__date_after_or_equal=' + dateDebut,
-        { headers: HEADERS });
-      const data = await res.json();
-      const conges = (data.results || []).filter(r => r['Statut']?.value !== 'Refusé');
+      // Pagination complète (Baserow plafonne à 200 lignes par requête)
+      let allCongesRows = [];
+      let pageUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (pageUrl) {
+        const resPage = await fetch(pageUrl, { headers: HEADERS });
+        const dataPage = await resPage.json();
+        allCongesRows = allCongesRows.concat(dataPage.results || []);
+        pageUrl = dataPage.next ? dataPage.next.replace('http://', 'https://') : null;
+      }
+      // Filtrage côté client (le nom des champs de filtre serveur Baserow ne correspond pas aux champs réels)
+      const conges = allCongesRows.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+        if (!debutStr) return false;
+        return debutStr <= dateFin && finStr >= dateDebut;
+      });
 
       let collabs = COLLABORATEURS_ADMIN;
       if (!collabs.length) {
