@@ -4863,10 +4863,10 @@
       hdrTot.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF1F4E79'} };
       hdrTot.alignment = { horizontal:'center', vertical:'middle' };
 
-      // Lignes collaborateurs
-      const collabsFiltres = collabs.filter(collab =>
-        conges.some(c => (c['Collaborateurs']||[]).some(cc => cc.id === collab.collabId))
-      ).sort((a, b) => a.nom.localeCompare(b.nom));
+      // Lignes collaborateurs (tous, même sans absence)
+      const collabsFiltres = collabs
+        .filter(collab => collab.collabId)
+        .sort((a, b) => a.nom.localeCompare(b.nom));
 
       const ROW_DATA_START = 6;
       collabsFiltres.forEach((collab, ri) => {
