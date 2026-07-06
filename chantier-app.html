@@ -119,8 +119,8 @@
     .login-card input:focus { border-color: var(--vert); background: #fff; }
 
     /* NAVIGATION BAS */
-    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2c2c2c; display: none; z-index: 20; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); }
-    .nav-btn { flex: 1; padding: 12px 8px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; border: none; background: none; color: #94a3b8; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2c2c2c; display: none; z-index: 20; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .nav-btn { flex: 0 0 auto; min-width: 64px; padding: 12px 8px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; border: none; background: none; color: #94a3b8; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
     .nav-btn.active { color: var(--beige); }
     .nav-btn .nav-icon { font-size: 22px; }
     .nav-bar { height: 3px; background: linear-gradient(90deg, var(--beige), var(--vert)); position: absolute; top: 0; transition: left 0.3s; width: 50%; }
@@ -342,6 +342,7 @@
       </a>
     </div>
   </div>
+</div>
 </div>
 
 <div id="page-loading" class="page">
@@ -2597,21 +2598,11 @@
     const container = document.getElementById('messages-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const [resMsg, resUsers] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
-      ]);
-      const dataMsg = await resMsg.json();
-      const dataUsers = await resUsers.json();
-
-      // Map Vue ID -> Nom complet
-      const usersMap = {};
-      (dataUsers.results || []).forEach(u => {
-        if (u['Vue ID']) usersMap[String(u['Vue ID']).trim()] = u['Nom complet'] || u['Identifiant'] || '?';
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
       });
-      const getNom = id => usersMap[String(id || '').trim()] || ('ID ' + id);
-
-      const msgs = (dataMsg.results || []).filter(r =>
+      const data = await res.json();
+      const msgs = (data.results || []).filter(r =>
         String(r['Destinataire'] || '').trim() === String(connectedViewId).trim()
       ).sort((a, b) => b.id - a.id);
 
@@ -2622,19 +2613,15 @@
 
       container.innerHTML = msgs.map(m => {
         const lu = m['Lu'] === true;
-        const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
         return `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:4px solid ${lu ? '#ddd' : 'var(--vert)'}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:4px">
-            <div>
-              <span style="font-size:11px;font-weight:700;color:${lu ? '#aaa' : 'var(--vert)'}">
-                ${lu ? '✅ Lu' : '🔔 Non lu'}
-              </span>
-              <div style="font-size:10px;color:#888;margin-top:2px">De : <b>${expediteurNom}</b></div>
-            </div>
-            <div style="font-size:10px;color:#aaa;text-align:right">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px">
+            <span style="font-size:11px;font-weight:700;color:${lu ? '#aaa' : 'var(--vert)'}">
+              ${lu ? '✅ Lu' : '🔔 Non lu'}
+            </span>
+            <span style="font-size:10px;color:#aaa">
               ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-              ${lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
-            </div>
+              ${lu && m['Date lecture'] ? ' · 👁️ ' + m['Date lecture'] : ''}
+            </span>
           </div>
           <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
           ${m['Expediteur'] ? `<div id="reply-zone-${m.id}">
@@ -6860,6 +6847,7 @@
 </div>
 
 <div class="bottom-nav">
+  <div style="display:flex;min-width:max-content">
   <div class="nav-bar" id="nav-bar"></div>
   <button class="nav-btn active" id="nav-saisie" onclick="switchPage('saisie')">
     <span class="nav-icon">📝</span>
