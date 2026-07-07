@@ -3864,32 +3864,222 @@
       jours.push(j);
     }
     const joursNoms = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
-    const headers = ['Collaborateur', ...jours.map((j, i) =>
-      joursNoms[i] + ' ' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
-    )];
-    const rows = [headers];
-    COLLABORATEURS_ADMIN.forEach(collab => {
-      const row = [collab.nom];
+
+    // ── Absents par jour ──
+    // { dateStr: [{nom, raison}, ...] }
+    const absentsParJour = {};
+    jours.forEach(j => {
+      const dateStr = j.toISOString().split('T')[0];
+      absentsParJour[dateStr] = COLLABORATEURS_ADMIN
+        .filter(c => c.collabId && congesCollectifData.some(cc =>
+          (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
+          dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+        ))
+        .map(c => {
+          const cg = congesCollectifData.find(cc =>
+            (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
+            dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+          );
+          const raison = cg?.['Type de demande']?.value || 'Absence';
+          return { nom: c.nom, raison };
+        });
+    });
+
+    // ── Chantiers avec affectations (collaborateurs + véhicules) ──
+    // { chantierNom: { dateStr: { collabs: [...], vehs: [...] } } }
+    const chantiersMap = {};
+    jours.forEach(j => {
+      const dateStr = j.toISOString().split('T')[0];
+      planningCollectifData
+        .filter(p => p['Date'] === dateStr)
+        .forEach(p => {
+          const chantierNom = (p['Chantier'] || p['Chantiers'] || [])[0]?.value;
+          if (!chantierNom) return;
+          if (!chantiersMap[chantierNom]) chantiersMap[chantierNom] = {};
+          if (!chantiersMap[chantierNom][dateStr]) chantiersMap[chantierNom][dateStr] = { collabs: [], vehs: [] };
+          const entry = chantiersMap[chantierNom][dateStr];
+          // Collaborateurs
+          (p['Collaborateurs'] || p['Collaborateur'] || []).forEach(cc => {
+            const collab = COLLABORATEURS_ADMIN.find(c => c.collabId === cc.id);
+            const nom = collab ? collab.nom : (cc.value || '?');
+            if (!entry.collabs.includes(nom)) entry.collabs.push(nom);
+          });
+          // Véhicules (ligne sans collaborateur)
+          if (!(p['Collaborateurs'] || p['Collaborateur'] || []).length) {
+            (p['Véhicule'] || []).forEach(v => {
+              const immat = v.value || v.id;
+              if (!entry.vehs.includes(immat)) entry.vehs.push(immat);
+            });
+          }
+        });
+    });
+
+    const chantiersListe = Object.keys(chantiersMap).sort();
+
+    // ── Créer le workbook ExcelJS ──
+    const wb = new ExcelJS.Workbook();
+    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+    const ws = wb.addWorksheet('Planning chantiers');
+
+    const VERT    = 'FF0B3C1E';
+    const BEIGE   = 'FFA28A6E';
+    const GRIS    = 'FF494949';
+    const BLANC   = 'FFFFFFFF';
+    const ALTBG   = 'FFF5F2EE';
+    const ROUGE   = 'FFC0392B';
+    const HEADBG  = 'FF0B3C1E';
+    const ABSBG   = 'FFFFF0F0'; // fond rouge très léger pour absents
+
+    const NB_COLS = 6; // Chantier + 5 jours
+
+    ws.getColumn(1).width = 36;
+    jours.forEach((_, i) => { ws.getColumn(2 + i).width = 30; });
+
+    // ── Lignes 1-3 : logo + titre ──
+    ws.getRow(1).height = 8;
+    ws.getRow(2).height = 58;
+    ws.getRow(3).height = 8;
+    ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 240, height: 55 } });
+    for (let c = 1; c <= NB_COLS; c++) {
+      ws.getCell(1, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+      ws.getCell(2, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+      ws.getCell(3, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+    }
+    const vendredi = jours[4];
+    const titreLabel = 'PLANNING CHANTIERS — Semaine du ' +
+      lundi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }) +
+      ' au ' + vendredi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    ws.mergeCells(2, 3, 2, NB_COLS);
+    const titreCell = ws.getCell(2, 3);
+    titreCell.value = titreLabel;
+    titreCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: VERT } };
+    titreCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    // ── Ligne 4 : ABSENTS ──
+    const ROW_ABS = 4;
+    ws.getRow(ROW_ABS).height = 14;
+    const absHdr = ws.getCell(ROW_ABS, 1);
+    absHdr.value = 'ABSENCES';
+    absHdr.font = { name: 'Arial', size: 8, bold: true, color: { argb: BLANC } };
+    absHdr.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ROUGE } };
+    absHdr.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    jours.forEach((j, i) => {
+      const dateStr = j.toISOString().split('T')[0];
+      const absents = absentsParJour[dateStr] || [];
+      const c = ws.getCell(ROW_ABS, 2 + i);
+      c.value = absents.length
+        ? absents.map(a => a.nom + ' (' + a.raison + ')').join('\n')
+        : '';
+      c.font = { name: 'Arial', size: 8, color: { argb: absents.length ? ROUGE : GRIS }, italic: absents.length > 0 };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: absents.length ? ABSBG : BLANC } };
+      c.alignment = { vertical: 'middle', wrapText: true };
+      c.border = { left: { style: 'thin', color: { argb: 'FFD0C8BE' } }, bottom: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
+      if (absents.length > 1) ws.getRow(ROW_ABS).height = Math.max(ws.getRow(ROW_ABS).height, 10 + absents.length * 10);
+    });
+
+    // ── Ligne 5 : en-têtes colonnes ──
+    const ROW_HDR = 5;
+    ws.getRow(ROW_HDR).height = 22;
+
+    const hChantier = ws.getCell(ROW_HDR, 1);
+    hChantier.value = 'Chantier';
+    hChantier.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+    hChantier.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADBG } };
+    hChantier.alignment = { horizontal: 'center', vertical: 'middle' };
+
+    jours.forEach((j, i) => {
+      const dateStr = j.toISOString().split('T')[0];
+      const ferie = nomJourFerie(dateStr);
+      const nbAbs = (absentsParJour[dateStr] || []).length;
+      const c = ws.getCell(ROW_HDR, 2 + i);
+      c.value = joursNoms[i] + ' ' + j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) +
+        (ferie ? ' 🔴' : '') + (nbAbs ? ' (' + nbAbs + ' abs.)' : '');
+      c.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ferie ? ROUGE : HEADBG } };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+      c.border = { bottom: { style: 'thin', color: { argb: BLANC } } };
+    });
+
+    // ── Lignes chantiers ──
+    const ROW_DATA = 6;
+    chantiersListe.forEach((chantierNom, ri) => {
+      const r = ROW_DATA + ri;
+      const altBg = ri % 2 === 0 ? BLANC : ALTBG;
+      const chantierBg = ri % 2 === 0 ? 'FFEFF7F1' : ALTBG;
+
+      // Hauteur dynamique selon max de collaborateurs par case
+      let maxLines = 1;
       jours.forEach(j => {
         const dateStr = j.toISOString().split('T')[0];
-        const conge = congesCollectifData.find(c =>
-          (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
-        );
-        if (conge) { row.push('Congé - ' + (conge['Type de demande']?.value || 'Absence')); return; }
-        const affs = planningCollectifData.filter(p =>
-          p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
-        );
-        row.push(affs.length > 0 ? affs.map(a => (a['Chantier'] || [])[0]?.value || '-').join(' / ') : '');
+        const entry = chantiersMap[chantierNom]?.[dateStr];
+        if (entry) {
+          const lines = entry.collabs.length + (entry.vehs.length > 0 ? 1 : 0);
+          if (lines > maxLines) maxLines = lines;
+        }
       });
-      rows.push(row);
+      ws.getRow(r).height = Math.max(20, 14 + maxLines * 13);
+
+      const cNom = ws.getCell(r, 1);
+      cNom.value = chantierNom;
+      cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+      cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: chantierBg } };
+      cNom.alignment = { vertical: 'middle', wrapText: false };
+      cNom.border = { left: { style: 'medium', color: { argb: VERT } }, bottom: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
+
+      jours.forEach((j, ci) => {
+        const dateStr = j.toISOString().split('T')[0];
+        const entry = chantiersMap[chantierNom]?.[dateStr];
+        const c = ws.getCell(r, 2 + ci);
+
+        // RichText : véhicule(s) en badge vert Guérin, collaborateurs en gris normal
+        const richParts = [];
+        if (entry?.vehs?.length) {
+          entry.vehs.forEach((immat, vi) => {
+            if (vi > 0 || richParts.length > 0) richParts.push({ text: '\n' });
+            richParts.push({
+              text: ' 🚐 ' + immat + ' ',
+              font: { name: 'Arial', size: 9, bold: true, color: { argb: VERT } }
+            });
+          });
+        }
+        if (entry?.collabs?.length) {
+          entry.collabs.forEach(nom => {
+            if (richParts.length > 0) richParts.push({ text: '\n' });
+            richParts.push({
+              text: '👷 ' + nom,
+              font: { name: 'Arial', size: 9, color: { argb: GRIS } }
+            });
+          });
+        }
+
+        c.value = richParts.length > 0 ? { richText: richParts } : '';
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: altBg } };
+        c.alignment = { vertical: 'middle', wrapText: true };
+        c.border = {
+          left: { style: entry?.vehs?.length ? 'medium' : 'thin', color: { argb: entry?.vehs?.length ? VERT : 'FFD0C8BE' } },
+          bottom: { style: 'thin', color: { argb: 'FFD0C8BE' } }
+        };
+      });
     });
-    const csv = '\uFEFF' + rows.map(r => r.join(';')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+
+    if (chantiersListe.length === 0) {
+      ws.mergeCells(ROW_DATA, 1, ROW_DATA, NB_COLS);
+      const c = ws.getCell(ROW_DATA, 1);
+      c.value = 'Aucune affectation chantier cette semaine.';
+      c.font = { name: 'Arial', size: 10, italic: true, color: { argb: GRIS } };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    // ── Export ──
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'Planning_collectif_' + lundi.toISOString().split('T')[0] + '.csv';
-    a.click(); URL.revokeObjectURL(url);
+    a.href = url;
+    a.download = 'Planning_chantiers_' + lundi.toISOString().split('T')[0] + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   // ── PLANNING ADMIN ──
