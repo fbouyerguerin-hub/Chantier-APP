@@ -4495,15 +4495,10 @@
     }
   }
 
-  async function loadUtilisateurs() {
+  function renderUsersListe(users) {
     const container = document.getElementById('liste-utilisateurs');
-    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
-    try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      const users = data.results || [];
-      if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun utilisateur</div>'; return; }
-      container.innerHTML = users.map(u => {
+    if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun résultat</div>'; return; }
+    container.innerHTML = users.map(u => {
         const actif = u['Actif'] !== false;
         const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
@@ -4520,12 +4515,34 @@
           </div>` : ''}
         </div>`;
       }).join('');
+  }
+
+  async function loadUtilisateurs() {
+    const container = document.getElementById('liste-utilisateurs');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    const searchEl = document.getElementById('search-users');
+    if (searchEl) searchEl.value = '';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      usersCache = data.results || [];
+      renderUsersListe(usersCache);
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
     const btnNouvel = document.getElementById('btn-nouvel-user');
     if (btnNouvel) btnNouvel.style.display = connectedDroit === 'Administrateur' ? '' : 'none';
   }
 
   let usersCache = [];
+
+  function filtrerUsers(q) {
+    const ql = q.trim().toLowerCase();
+    if (!ql) { renderUsersListe(usersCache); return; }
+    renderUsersListe(usersCache.filter(u =>
+      (u['Nom complet'] || '').toLowerCase().includes(ql) ||
+      (u['Identifiant'] || '').toLowerCase().includes(ql) ||
+      (u['Poste / Métier'] || '').toLowerCase().includes(ql)
+    ));
+  }
 
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
@@ -6507,6 +6524,10 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Comptes collaborateurs</div>
       <button onclick="ouvrirFormUser(null)" id="btn-nouvel-user" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+    </div>
+    <div style="margin:0 16px 12px">
+      <input id="search-users" type="text" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerUsers(this.value)"
+        style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
     </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
