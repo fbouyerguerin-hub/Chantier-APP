@@ -119,7 +119,7 @@
     .login-card input:focus { border-color: var(--vert); background: #fff; }
 
     /* NAVIGATION BAS */
-    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2c2c2c; display: none; z-index: 20; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #2c2c2c; display: none; flex-direction: row; flex-wrap: nowrap; z-index: 20; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
     .nav-btn { flex: 0 0 auto; min-width: 64px; padding: 12px 8px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; border: none; background: none; color: #94a3b8; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
     .nav-btn.active { color: var(--beige); }
     .nav-btn .nav-icon { font-size: 22px; }
@@ -2777,6 +2777,57 @@
       }).join('');
     } catch(e) {
       document.getElementById('modal-hist-content').innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
+    }
+  }
+
+  async function ouvrirNouveauMessage() {
+    const modal = document.getElementById('modal-nouveau-message');
+    modal.style.display = 'flex';
+    document.getElementById('nouveau-msg-texte').value = '';
+    // Charger la liste des collaborateurs
+    const sel = document.getElementById('nouveau-msg-destinataire');
+    sel.innerHTML = '<option value="">— Choisir un collaborateur —</option>';
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
+      const data = await res.json();
+      (data.results || [])
+        .filter(u => u['Actif'] !== false && String(u['Vue ID'] || '').trim() !== String(connectedViewId || '').trim())
+        .sort((a, b) => (a['Nom complet'] || '').localeCompare(b['Nom complet'] || ''))
+        .forEach(u => {
+          const opt = document.createElement('option');
+          opt.value = u['Vue ID'] || '';
+          opt.textContent = u['Nom complet'] || u['Identifiant'];
+          sel.appendChild(opt);
+        });
+    } catch(e) {}
+  }
+
+  function fermerNouveauMessage() {
+    document.getElementById('modal-nouveau-message').style.display = 'none';
+  }
+
+  async function envoyerNouveauMessage() {
+    const destId = document.getElementById('nouveau-msg-destinataire').value;
+    const texte = document.getElementById('nouveau-msg-texte').value.trim();
+    if (!destId) { alert('Veuillez choisir un destinataire'); return; }
+    if (!texte) { alert('Veuillez saisir un message'); return; }
+    try {
+      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          'Messages': texte,
+          'Lu': false,
+          'Destinataire': String(destId),
+          'Expediteur': String(connectedViewId),
+          'Date envoi': new Date().toISOString().split('T')[0]
+        })
+      });
+      fermerNouveauMessage();
+      alert('✅ Message envoyé');
+      loadHistoriqueMessages();
+    } catch(e) {
+      alert("Erreur lors de l'envoi du message");
     }
   }
 
@@ -6840,14 +6891,37 @@
 <!-- NAVIGATION BAS -->
 <!-- PAGE MESSAGES -->
 <div id="page-messages" class="page" style="display:none">
-  <div style="padding:16px 16px 0;font-size:16px;font-weight:800;color:var(--gris)">✉️ Mes messages</div>
+  <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">✉️ Mes messages</div>
+    <button onclick="ouvrirNouveauMessage()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+  </div>
   <div id="messages-content" style="padding:8px 16px 80px">
     <div class="feuille-loading">⏳ Chargement…</div>
   </div>
 </div>
 
+<!-- MODAL NOUVEAU MESSAGE -->
+<div id="modal-nouveau-message" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:flex-end;justify-content:center">
+  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px 30px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">✉️ Nouveau message</div>
+      <button onclick="fermerNouveauMessage()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Destinataire</label>
+      <select id="nouveau-msg-destinataire" style="width:100%;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
+        <option value="">— Choisir un collaborateur —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
+      <textarea id="nouveau-msg-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;resize:vertical;min-height:100px;outline:none"></textarea>
+    </div>
+    <button onclick="envoyerNouveauMessage()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Envoyer ✓</button>
+  </div>
+</div>
+
 <div class="bottom-nav">
-  <div style="display:flex;min-width:max-content">
   <div class="nav-bar" id="nav-bar"></div>
   <button class="nav-btn active" id="nav-saisie" onclick="switchPage('saisie')">
     <span class="nav-icon">📝</span>
