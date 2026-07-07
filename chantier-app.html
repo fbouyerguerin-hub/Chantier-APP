@@ -2602,33 +2602,51 @@
     const container = document.getElementById('messages-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      const [resMsg, resUsers] = await Promise.all([
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+      ]);
+      const dataMsg = await resMsg.json();
+      const dataUsers = await resUsers.json();
+
+      const usersMap = {};
+      (dataUsers.results || []).forEach(u => {
+        if (u['Vue ID']) usersMap[String(u['Vue ID']).trim()] = u['Nom complet'] || u['Identifiant'] || '?';
       });
-      const data = await res.json();
-      const msgs = (data.results || []).filter(r =>
-        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim()
+      const getNom = id => usersMap[String(id || '').trim()] || ('ID ' + id);
+
+      const msgs = (dataMsg.results || []).filter(r =>
+        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim() ||
+        String(r['Expediteur'] || '').trim() === String(connectedViewId).trim()
       ).sort((a, b) => b.id - a.id);
 
       if (!msgs.length) {
-        container.innerHTML = '<div class="feuille-empty">Aucun message reçu</div>';
+        container.innerHTML = '<div class="feuille-empty">Aucun message</div>';
         return;
       }
 
       container.innerHTML = msgs.map(m => {
         const lu = m['Lu'] === true;
-        return `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:4px solid ${lu ? '#ddd' : 'var(--vert)'}">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px">
-            <span style="font-size:11px;font-weight:700;color:${lu ? '#aaa' : 'var(--vert)'}">
-              ${lu ? '✅ Lu' : '🔔 Non lu'}
-            </span>
-            <span style="font-size:10px;color:#aaa">
+        const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
+        const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
+        const destinataireNom = m['Destinataire'] ? getNom(m['Destinataire']) : '—';
+        return `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:4px solid ${estEnvoye ? '#A28A6E' : (lu ? '#ddd' : 'var(--vert)')}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:4px">
+            <div>
+              <span style="font-size:11px;font-weight:700;color:${estEnvoye ? '#A28A6E' : (lu ? '#aaa' : 'var(--vert)')}">
+                ${estEnvoye ? '📤 Envoyé' : (lu ? '✅ Lu' : '🔔 Non lu')}
+              </span>
+              <div style="font-size:10px;color:#888;margin-top:2px">
+                ${estEnvoye ? 'À : <b>' + destinataireNom + '</b>' : 'De : <b>' + expediteurNom + '</b>'}
+              </div>
+            </div>
+            <div style="font-size:10px;color:#aaa;text-align:right">
               ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-              ${lu && m['Date lecture'] ? ' · 👁️ ' + m['Date lecture'] : ''}
-            </span>
+              ${lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
+            </div>
           </div>
-          <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
-          ${m['Expediteur'] ? `<div id="reply-zone-${m.id}">
+          <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${!estEnvoye && m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
+          ${!estEnvoye && m['Expediteur'] ? `<div id="reply-zone-${m.id}">
             <button onclick="toggleReply(${m.id},'${m['Expediteur']}')"
               style="background:#f0f7ef;border:1px solid var(--vert);border-radius:8px;padding:5px 12px;font-size:11px;color:var(--vert);font-weight:700;cursor:pointer">
               ↩️ Répondre
