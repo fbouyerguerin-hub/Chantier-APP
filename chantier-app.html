@@ -1537,8 +1537,16 @@
       fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
     })).filter(p => p.debut && p.fin > aujourdHuiStr);
 
-    // Ne garder que les semaines à partir d'aujourd'hui
-    const semainesFutures = donneesGraph.filter(s => s.lundi >= aujourdHuiStr);
+    // Trouver le lundi de la semaine courante pour l'inclure dans le graphique
+    const aujourdHuiDate = new Date(aujourdHuiStr + 'T12:00:00');
+    const dayOfWeek = aujourdHuiDate.getDay();
+    const diffLundiCourant = (dayOfWeek === 0 ? -6 : 1 - dayOfWeek);
+    const lundiSemaineCourante = new Date(aujourdHuiDate);
+    lundiSemaineCourante.setDate(lundiSemaineCourante.getDate() + diffLundiCourant);
+    const lundiSemaineCouranteStr = dateYMD(lundiSemaineCourante);
+
+    // Inclure la semaine courante (lundi <= aujourd'hui) et toutes les semaines futures
+    const semainesFutures = donneesGraph.filter(s => s.lundi >= lundiSemaineCouranteStr);
     const labels = [], dataSolde = [], dataRttPris = [];
 
     let soldeCourant = soldeDepart;
@@ -1548,17 +1556,16 @@
       const label = i === 0 || new Date(semainesFutures[i-1].lundi + 'T12:00:00').getMonth() !== m ? moisLabels[m] : '';
       labels.push(label);
 
-      let semaineBloquee = false, pris = 0, joursDetail = 0;
-      if (i > 0) {
-        const vendredi = new Date(s.lundi + 'T12:00:00'); vendredi.setDate(vendredi.getDate() + 4);
-        const vendrediStr = dateYMD(vendredi);
-        semaineBloquee = plagesAbsences.some(p => p.debut <= vendrediStr && p.fin >= s.lundi);
-        pris = rttFutursParSemaine[s.lundi] || 0;
-        joursDetail = (rttFutursPrisDetails[s.lundi] || {}).jours || 0;
-        if (!semaineBloquee) soldeCourant += HEURES_RTT_PAR_SEMAINE;
-        soldeCourant -= pris;
-        // soldeCourant peut être négatif
-      }
+      // Traiter toutes les semaines (y compris i=0, la semaine courante)
+      const vendredi = new Date(s.lundi + 'T12:00:00'); vendredi.setDate(vendredi.getDate() + 4);
+      const vendrediStr = dateYMD(vendredi);
+      const semaineBloquee = plagesAbsences.some(p => p.debut <= vendrediStr && p.fin >= s.lundi);
+      const pris = rttFutursParSemaine[s.lundi] || 0;
+      const joursDetail = (rttFutursPrisDetails[s.lundi] || {}).jours || 0;
+      // Pour la semaine courante (i=0), ne pas re-acquérir (déjà dans soldeDepart)
+      if (i > 0 && !semaineBloquee) soldeCourant += HEURES_RTT_PAR_SEMAINE;
+      soldeCourant -= pris;
+      // soldeCourant peut être négatif
 
       dataSolde.push(Math.round(soldeCourant * 10) / 10);
       dataRttPris.push(pris > 0 ? Math.round(soldeCourant * 10) / 10 : null);
