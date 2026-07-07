@@ -721,6 +721,7 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     showPage('page-form');
     chargerMessage();
+    updateBadgeMessages();
   }
 
   const TABLES = {
@@ -1031,6 +1032,8 @@
     } else if (nav === 'messages') {
       showPage('page-messages');
       loadHistoriqueMessages();
+      const badge = document.getElementById('badge-messages');
+      if (badge) badge.style.display = 'none';
     }
   }
 
@@ -2591,6 +2594,7 @@
         });
       } catch(e) {}
       messageActifId = null;
+      updateBadgeMessages();
     }
   }
 
@@ -2638,6 +2642,25 @@
   }
 
   let messageActifId = null;
+
+  async function updateBadgeMessages() {
+    if (!connectedViewId) return;
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      });
+      const data = await res.json();
+      const nonLus = (data.results || []).filter(r =>
+        r['Lu'] !== true &&
+        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim()
+      ).length;
+      const badge = document.getElementById('badge-messages');
+      if (badge) {
+        badge.style.display = nonLus > 0 ? 'inline-block' : 'none';
+        badge.textContent = nonLus > 9 ? '9+' : String(nonLus);
+      }
+    } catch(e) {}
+  }
 
   async function chargerMessageIndividuel() {
     if (!connectedViewId) return;
@@ -6944,7 +6967,7 @@
     RTT
   </button>
   <button class="nav-btn" id="nav-messages" onclick="switchPage('messages')">
-    <span class="nav-icon">✉️</span>
+    <span class="nav-icon" style="position:relative">✉️<span id="badge-messages" style="display:none;position:absolute;top:-4px;right:-6px;background:#c0392b;color:#fff;font-size:9px;font-weight:800;border-radius:50%;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px"></span></span>
     Messages
   </button>
   <button class="nav-btn" id="nav-collectif" style="display:none" onclick="switchPage('collectif')">
