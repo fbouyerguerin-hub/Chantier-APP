@@ -5535,7 +5535,8 @@
 
   function round2Ch(n) { return Math.round((n || 0) * 100) / 100; }
 
-  function addLogoToSheetCh(ws, logoImageId) {
+  function addLogoToSheetCh(ws, wb) {
+    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
     ws.getRow(1).height = 20;
     ws.getRow(2).height = 40;
     ws.getRow(3).height = 10;
@@ -5546,7 +5547,7 @@
     ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 280, height: 60 } });
   }
 
-  function buildSummarySheetCh(wb, data, chantiers, logoImageId) {
+  function buildSummarySheetCh(wb, data, chantiers) {
     const ws = wb.addWorksheet('RÉSUMÉ');
     ws.mergeCells('A4:F4');
     const c = ws.getCell('A4');
@@ -5615,10 +5616,10 @@
 
     [45, 12, 15, 12, 18, 35].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     ws.views = [{ state: 'frozen', ySplit: 6 }];
-    addLogoToSheetCh(ws, logoImageId);
+    addLogoToSheetCh(ws, wb);
   }
 
-  function buildChantierSheetCh(wb, data, chantier, logoImageId) {
+  function buildChantierSheetCh(wb, data, chantier) {
     const sub = data.filter(r => r.chantier === chantier);
     const sn = safeSheetNameCh(chantier);
     const ws = wb.addWorksheet(sn);
@@ -5743,15 +5744,14 @@
 
     [14, 22, 22, 12, 20, 12].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     ws.views = [{ state: 'frozen', ySplit: 0 }];
-    addLogoToSheetCh(ws, logoImageId);
+    addLogoToSheetCh(ws, wb);
   }
 
   async function genererClasseurAnalyseChantier(data) {
     const wb = new ExcelJS.Workbook();
-    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
     const chantiers = [...new Set(data.map(r => r.chantier))].filter(Boolean).sort();
-    buildSummarySheetCh(wb, data, chantiers, logoImageId);
-    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier, logoImageId));
+    buildSummarySheetCh(wb, data, chantiers);
+    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier));
     return wb;
   }
 
@@ -5969,7 +5969,7 @@
     return d.toLocaleDateString('fr-FR');
   }
 
-  function creerFicheExcelJS(wb, logoImageId, collaborateur, lignes, periode, poste) {
+  function creerFicheExcelJS(wb, _unused, collaborateur, lignes, periode, poste) {
     const ws = wb.addWorksheet(collaborateur.slice(0, 31));
 
     FH_COLS.forEach((col, i) => { ws.getColumn(i + 1).width = FH_COL_WIDTHS[i]; });
@@ -5980,9 +5980,8 @@
 
     ws.mergeCells('A2:D2');
     ws.getCell('A2').fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_BLANC} };
-    if (logoImageId !== null) {
-      ws.addImage(logoImageId, { tl:{ col:0, row:1 }, ext:{ width:260, height:72 } });
-    }
+    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+    ws.addImage(logoImageId, { tl:{ col:0, row:1 }, ext:{ width:260, height:72 } });
     ws.mergeCells('E2:J2');
     const cTitre = ws.getCell('E2');
     cTitre.value = 'FICHE DE CONTRÔLE DES HEURES';
@@ -6234,11 +6233,10 @@
 
   async function genererClasseurFichesHeures(dataParCollab, periode) {
     const wb = new ExcelJS.Workbook();
-    const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
     const collabsSorted = Object.keys(dataParCollab).sort();
     collabsSorted.forEach(collab => {
       const { lignes, poste } = dataParCollab[collab];
-      creerFicheExcelJS(wb, logoImageId, collab, lignes, periode, poste);
+      creerFicheExcelJS(wb, null, collab, lignes, periode, poste);
     });
     return wb;
   }
