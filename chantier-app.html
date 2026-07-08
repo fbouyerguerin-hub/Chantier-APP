@@ -5941,9 +5941,9 @@
   const FH_VERT_TXT   = 'FF2D6A2D';
   const FH_SEUIL      = 42.5;
   const FH_SEUIL_WARN = 40.0;
-  const FH_COLS       = ['A','B','C','D','E','F','G','H','I'];
-  const FH_COL_WIDTHS = [5, 16, 38, 26, 22, 9, 13, 11, 26];
-  const FH_HEADERS    = ['N°','Date','Chantier','Type de tâche / Sous-tâche','Notes','Total j.','Cumul jour','Sem.',''];
+  const FH_COLS       = ['A','B','C','D','E','F','G','H','I','J'];
+  const FH_COL_WIDTHS = [5, 16, 38, 26, 18, 22, 9, 13, 11, 26];
+  const FH_HEADERS    = ['N°','Date','Chantier','Tâche / Sous-tâche','Zone','Notes','Total j.','Cumul jour','Sem.',''];
   const FH_BORDER = { top:{style:'thin',color:{argb:'FFBBBBBB'}}, left:{style:'thin',color:{argb:'FFBBBBBB'}}, bottom:{style:'thin',color:{argb:'FFBBBBBB'}}, right:{style:'thin',color:{argb:'FFBBBBBB'}} };
   const FH_THICK_BORDER = { top:{style:'medium',color:{argb:FH_BLEU_FONCE}}, left:{style:'medium',color:{argb:FH_BLEU_FONCE}}, bottom:{style:'medium',color:{argb:FH_BLEU_FONCE}}, right:{style:'medium',color:{argb:FH_BLEU_FONCE}} };
 
@@ -5983,7 +5983,7 @@
     if (logoImageId !== null) {
       ws.addImage(logoImageId, { tl:{ col:0, row:1 }, ext:{ width:260, height:72 } });
     }
-    ws.mergeCells('E2:I2');
+    ws.mergeCells('E2:J2');
     const cTitre = ws.getCell('E2');
     cTitre.value = 'FICHE DE CONTRÔLE DES HEURES';
     cTitre.font = { name:'Arial', size:13, bold:true, color:{argb:FH_GRIS_TITRE} };
@@ -5993,9 +5993,12 @@
       ws.getCell(col + '3').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFC4A882'} };
     });
     ['D','E','F'].forEach(col => {
-      ws.getCell(col + '3').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF5A6A7A'} };
+      ws.getCell(col + '3').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFC4A882'} };
     });
     ['G','H','I'].forEach(col => {
+      ws.getCell(col + '3').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF5A6A7A'} };
+    });
+    ['J'].forEach(col => {
       ws.getCell(col + '3').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF2D6A2D'} };
     });
 
@@ -6016,11 +6019,11 @@
       c.border = FH_BORDER;
     }
 
-    label('B4', 'Collaborateur :'); val('C4:F4', collaborateur, true);
-    label('G4', 'Période :');        val('H4:I4', periode);
-    label('B5', 'Poste / Métier :'); val('C5:F5', poste);
-    label('G5', 'Responsable :');    val('H5:I5', '');
-    label('B6', 'Mois / Année :');   val('C6:F6', periode);
+    label('B4', 'Collaborateur :'); val('C4:G4', collaborateur, true);
+    label('H4', 'Période :');        val('I4:J4', periode);
+    label('B5', 'Poste / Métier :'); val('C5:G5', poste);
+    label('H5', 'Responsable :');    val('I5:J5', '');
+    label('B6', 'Mois / Année :');   val('C6:G6', periode);
 
     ws.mergeCells('A7:I7');
     ws.getCell('A7').fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE8E8E8'} };
@@ -6102,7 +6105,7 @@
       cC.fill = fillA; cC.border = FH_BORDER;
       cC.alignment = { vertical:'middle', horizontal:'left', wrapText:true };
 
-      // D = Tâche + Sous-tâche combinées
+      // D = Tâche + Sous-tâche
       const cD = ws.getCell('D' + r);
       const tacheStr = [ligne.tache, ligne.sousTache].filter(Boolean).join(' › ');
       cD.value = tacheStr || '';
@@ -6110,25 +6113,32 @@
       cD.fill = fillA; cD.border = FH_BORDER;
       cD.alignment = { vertical:'middle', horizontal:'left', wrapText:true };
 
-      // E = Notes
-      const cE = ws.getCell('E' + r);
+      // E = Zone
+      const cE0 = ws.getCell('E' + r);
+      cE0.value = ligne.zone || '';
+      cE0.font = { name:'Arial', size:10, bold: !!ligne.zone, color:{argb: ligne.zone ? 'FF0B3C1E' : 'FF999999'} };
+      cE0.fill = fillA; cE0.border = FH_BORDER;
+      cE0.alignment = { vertical:'middle', horizontal:'center', wrapText:true };
+
+      // F = Notes
+      const cE = ws.getCell('F' + r);
       cE.value = ligne.notes || '';
       cE.font = { name:'Arial', size:9, italic:true, color:{argb:'FF666666'} };
       cE.fill = fillA; cE.border = FH_BORDER;
       cE.alignment = { vertical:'middle', horizontal:'left', wrapText:true };
 
-      // F = Total journée (heures de cette ligne)
-      const cF = ws.getCell('F' + r);
+      // G = Total journée
+      const cF = ws.getCell('G' + r);
       cF.value = hn > 0 ? hn : '';
       cF.numFmt = '0.00';
       cF.font = { name:'Arial', size:11, bold:true, color:{argb:txtColor} };
       cF.fill = fillB; cF.border = FH_BORDER;
       cF.alignment = { horizontal:'center', vertical:'middle' };
 
-      // G = Cumul journalier
+      // H = Cumul journalier
       const cumulJour = heuresJour[ligne.date] || 0;
       const isFirstJour = jourFirstRow[ligne.date] === r;
-      const cG = ws.getCell('G' + r);
+      const cG = ws.getCell('H' + r);
       if (isFirstJour && cumulJour > 0) {
         cG.value = cumulJour.toFixed(1) + 'h';
         cG.font = { name:'Arial', size:10, bold:true, color:{argb:txtColor} };
@@ -6139,9 +6149,9 @@
       cG.fill = fillA; cG.border = FH_BORDER;
       cG.alignment = { horizontal:'center', vertical:'middle' };
 
-      // H = Semaine
+      // I = Semaine
       const {week: ns} = fhISOWeek(ligne.date);
-      const cH2 = ws.getCell('H' + r);
+      const cH2 = ws.getCell('I' + r);
       if (isFirstSem) {
         cH2.value = 'S' + ns + '\n' + totalSem.toFixed(1) + 'h';
         cH2.font = { name:'Arial', size:10, bold:true, color:{argb: totalSem > FH_SEUIL ? FH_ROUGE_TXT : totalSem >= FH_SEUIL_WARN ? FH_ORANGE_TXT : FH_VERT_TXT} };
@@ -6152,15 +6162,15 @@
       cH2.fill = fillA; cH2.border = FH_BORDER;
       cH2.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
 
-      // I = vide (peut servir pour annotations manuelles)
-      const cI2 = ws.getCell('I' + r);
+      // J = vide
+      const cI2 = ws.getCell('J' + r);
       cI2.value = '';
       cI2.fill = fillA; cI2.border = FH_BORDER;
     });
 
     const TOT = START + lignes.length;
     ws.getRow(TOT).height = 32;
-    ws.mergeCells(`A${TOT}:E${TOT}`);
+    ws.mergeCells(`A${TOT}:F${TOT}`);
     const cTot = ws.getCell(`A${TOT}`);
     cTot.value = 'TOTAUX';
     cTot.font = { name:'Arial', size:11, bold:true, color:{argb:FH_BLANC} };
@@ -6169,7 +6179,7 @@
     cTot.border = FH_THICK_BORDER;
 
     const totalH = lignes.reduce((s, l) => s + (parseFloat(l.heures) || 0), 0);
-    const cFtot = ws.getCell(`F${TOT}`);
+    const cFtot = ws.getCell(`G${TOT}`);
     cFtot.value = Math.round(totalH * 100) / 100;
     cFtot.numFmt = '0.00';
     cFtot.font = { name:'Arial', size:13, bold:true, color:{argb:FH_BLANC} };
@@ -6177,7 +6187,7 @@
     cFtot.alignment = { horizontal:'center', vertical:'middle' };
     cFtot.border = FH_THICK_BORDER;
 
-    ['G','H','I'].forEach(col => {
+    ['H','I','J'].forEach(col => {
       const c = ws.getCell(col + TOT);
       c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF3A3A3A'} };
       c.border = FH_THICK_BORDER;
@@ -6186,7 +6196,7 @@
     const SIG = TOT + 2;
     [[SIG,14],[SIG+1,45],[SIG+2,14]].forEach(([rr,hh]) => { ws.getRow(rr).height = hh; });
 
-    [['B'+SIG+':C'+SIG,'Signature du collaborateur'],['G'+SIG+':I'+SIG,'Visa du responsable']].forEach(([merge,txt]) => {
+    [['B'+SIG+':C'+SIG,'Signature du collaborateur'],['H'+SIG+':J'+SIG,'Visa du responsable']].forEach(([merge,txt]) => {
       ws.mergeCells(merge);
       const c = ws.getCell(merge.split(':')[0]);
       c.value = txt;
@@ -6194,7 +6204,7 @@
       c.alignment = { horizontal:'center', vertical:'middle' };
     });
 
-    [['B'+(SIG+1)+':C'+(SIG+1)],['G'+(SIG+1)+':I'+(SIG+1)]].forEach(([merge]) => {
+    [['B'+(SIG+1)+':C'+(SIG+1)],['H'+(SIG+1)+':J'+(SIG+1)]].forEach(([merge]) => {
       ws.mergeCells(merge);
       const c = ws.getCell(merge.split(':')[0]);
       c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_GRIS_CLAIR} };
@@ -6266,7 +6276,8 @@
         const vj = vendredi.getDate(), vm = MOIS_FR[vendredi.getMonth()], va = vendredi.getFullYear();
         return lm === vm ? `S${lj}-${vj}_${lm}_${la}` : `S${lj}_${lm}-${vj}_${vm}_${va}`;
       };
-      let dateDebut, dateFin, nomFichier;
+      let dateDebut, dateFin, nomFichier, labelPeriode;
+      const fmtFR = d => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
       if (periode === 'semaine-precedente') {
         const lundi = new Date(now);
         const day = lundi.getDay();
@@ -6277,6 +6288,7 @@
         dateFin = toLocalStr(vendredi);
         const label = labelSemaine(lundi, vendredi);
         nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
+        labelPeriode = `Du ${fmtFR(lundi)} au ${fmtFR(vendredi)}`;
       } else if (periode === 'semaine-en-cours') {
         const lundi = new Date(now);
         const day = lundi.getDay();
@@ -6287,12 +6299,15 @@
         dateFin = toLocalStr(vendredi);
         const label = labelSemaine(lundi, vendredi);
         nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
+        labelPeriode = `Du ${fmtFR(lundi)} au ${fmtFR(vendredi)}`;
       } else if (periode === 'mois-en-cours') {
         const y = now.getFullYear(), m = now.getMonth();
         dateDebut = toLocalStr(new Date(y, m, 1));
         dateFin = toLocalStr(new Date(y, m + 1, 0));
         const label = `${MOIS_FR[m]}_${y}`;
         nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
+        const MOIS_LONG = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+        labelPeriode = `${MOIS_LONG[m]} ${y}`;
       } else {
         const y = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
         const m = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
@@ -6300,6 +6315,8 @@
         dateFin = toLocalStr(new Date(y, m + 1, 0));
         const label = `${MOIS_FR[m]}_${y}`;
         nomFichier = tousLesCollabs ? `feuille_heures_tous_${label}` : `feuille_heures_${collabNom.replace(/ /g,'_')}_${label}`;
+        const MOIS_LONG = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+        labelPeriode = `${MOIS_LONG[m]} ${y}`;
       }
 
       // Charger les saisies
@@ -6346,7 +6363,7 @@
         dataParCollab[rCollab].lignes.push({ date, chantier, tache, sousTache, heures, notes, vehicule, zone });
       });
 
-      const wb = await genererClasseurFichesHeures(dataParCollab, nomFichier.replace(/_/g,' '));
+      const wb = await genererClasseurFichesHeures(dataParCollab, labelPeriode);
       const buffer = await wb.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/octet-stream' });
       const a = document.createElement('a');
