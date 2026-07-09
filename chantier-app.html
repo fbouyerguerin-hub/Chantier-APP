@@ -1454,7 +1454,7 @@
 
         let statutClass = 'attente';
         let statutEmoji = '⏳';
-        if (statut === 'Validé' || statut === 'Approuvé') { statutClass = 'valide'; statutEmoji = '✅'; }
+        if (statut === 'Validé') { statutClass = 'valide'; statutEmoji = '✅'; }
         if (statut === 'Refusé') { statutClass = 'refuse'; statutEmoji = '❌'; }
 
         const dateLigne = heuresExplicites > 0 ? `📅 Le ${debut}` : `📅 Du ${debut} au ${fin}`;
@@ -1936,14 +1936,14 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
         const statut = r['Statut']?.value || 'En attente';
-        if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
+        if (statut === 'Validé') { pris += jours; prisHeures += heures; }
         else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
       });
 
       const absencesBloquantes = congesCollab.filter(r => {
         const type = r['Type de demande']?.value;
         const statut = r['Statut']?.value || 'En attente';
-        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
       });
 
       const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
@@ -1962,7 +1962,7 @@
       const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
 
       const validees = demandesRtt
-        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé'; })
         .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
 
       const enAttenteListe = demandesRtt
@@ -2158,14 +2158,14 @@
             const jours = joursRttDemande(r);
             const heures = heuresRttDemande(r, toutesLesSaisies, c.id);
             const statut = r['Statut']?.value || 'En attente';
-            if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
+            if (statut === 'Validé') { pris += jours; prisHeures += heures; }
             else if (statut === 'En attente') enAttente += jours;
           });
 
           const absencesBloquantes = congesCollab.filter(r => {
             const type = r['Type de demande']?.value;
             const statut = r['Statut']?.value || 'En attente';
-            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
           });
           const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
           const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
@@ -2237,14 +2237,14 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, collabId);
         const statut = r['Statut']?.value || 'En attente';
-        if (statut === 'Validé' || statut === 'Approuvé') { pris += jours; prisHeures += heures; }
+        if (statut === 'Validé') { pris += jours; prisHeures += heures; }
         else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
       });
 
       const absencesBloquantes = congesCollab.filter(r => {
         const type = r['Type de demande']?.value;
         const statut = r['Statut']?.value || 'En attente';
-        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
       });
 
       const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true', { headers: HEADERS });
@@ -2260,7 +2260,7 @@
       const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
 
       const validees = demandesRtt
-        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé' || s === 'Approuvé'; })
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé'; })
         .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
 
       const enAttenteListe = demandesRtt
@@ -2353,7 +2353,7 @@
       .filter(d => !filtreNom || (d.collab['Nom Complet'] || '').toLowerCase().includes(filtreNom))
       .filter(d => !filtreType || d.congesCollab.some(r => {
         const statut = r['Statut']?.value || 'En attente';
-        return r['Type de demande']?.value === filtreType && (statut === 'Validé' || statut === 'Approuvé');
+        return r['Type de demande']?.value === filtreType && statut === 'Validé';
       }))
       .sort((a, b) => (a.collab['Nom Complet'] || '').localeCompare(b.collab['Nom Complet'] || ''))
       .map(d => {
@@ -4923,7 +4923,7 @@
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const data = await res.json();
       congesAdminListCache = (data.results || []).sort((a,b) => {
-        const order = {'En attente':0,'Validé':1,'Approuvé':1,'Refusé':2};
+        const order = {'En attente':0,'Validé':1,'Refusé':2};
         return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
       });
       renderCongesAdminList();
@@ -4951,7 +4951,7 @@
       const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
       const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
       const isAttente = statut === 'En attente';
-      const color = isAttente ? 'var(--beige)' : statut.includes('Valid') || statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
+      const color = isAttente ? 'var(--beige)' : statut === 'Validé' ? 'var(--vert)' : '#c0392b';
       return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
@@ -4961,7 +4961,7 @@
         ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
         <div style="display:flex;gap:8px;margin-top:10px">
           ${isAttente ? `
-          <button onclick="validerConge(${r.id},'Approuvé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
+          <button onclick="validerConge(${r.id},'Validé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
           <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
           ` : ''}
           <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
@@ -5801,7 +5801,7 @@
           demandesRtt.forEach(r => {
             const statut = r['Statut']?.value || 'En attente';
             const j = joursRttDemande(r), h = heuresRttDemande(r, toutesLesSaisies, c.id);
-            if (statut === 'Validé' || statut === 'Approuvé') { prisRtt += j; prisRttH += h; }
+            if (statut === 'Validé') { prisRtt += j; prisRttH += h; }
             else if (statut === 'En attente') attenteRtt += j;
           });
 
@@ -5811,14 +5811,14 @@
             const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
             const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
             const j = debutStr ? compterJoursSelonType(debutStr, finStr, [0]) : 0;
-            if (statut === 'Validé' || statut === 'Approuvé') prisCP += j;
+            if (statut === 'Validé') prisCP += j;
             else if (statut === 'En attente') attenteCP += j;
           });
 
           const absencesBloquantes = congesCollab.filter(r => {
             const type = r['Type de demande']?.value;
             const statut = r['Statut']?.value || 'En attente';
-            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && (statut === 'Validé' || statut === 'Approuvé');
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
           });
           const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
           const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
