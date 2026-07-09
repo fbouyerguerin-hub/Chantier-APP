@@ -1454,7 +1454,7 @@
 
         let statutClass = 'attente';
         let statutEmoji = '⏳';
-        if (statut === 'Validé') { statutClass = 'valide'; statutEmoji = '✅'; }
+        if (statut === 'Approuvé') { statutClass = 'valide'; statutEmoji = '✅'; }
         if (statut === 'Refusé') { statutClass = 'refuse'; statutEmoji = '❌'; }
 
         const dateLigne = heuresExplicites > 0 ? `📅 Le ${debut}` : `📅 Du ${debut} au ${fin}`;
@@ -1513,22 +1513,18 @@
     // Point de départ = solde actuel brut (acquis - solde de base)
     const soldeDepart = acquis - soldeDeBasePrevisionnel;
 
-    // RTT futurs validés par semaine (heures + jours pour tooltip)
+    // RTT futurs par semaine (heures + jours pour tooltip) — une demande peut s'étaler sur plusieurs
+    // semaines, elle est donc répartie jour par jour sur la bonne semaine (voir repartirDemandeParSemaine).
     const rttFutursParSemaine = {};
     const rttFutursPrisDetails = {}; // { lundi: { heures, jours } }
     validees.forEach(r => {
-      const dateStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
-      if (!dateStr || dateStr <= aujourdHuiStr) return;
-      const d = new Date(dateStr + 'T12:00:00');
-      const day = d.getDay(); const diff = (day === 0 ? -6 : 1 - day);
-      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
-      const lundiStr = dateYMD(lundi);
-      const h = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
-      const j = joursRttDemande(r);
-      rttFutursParSemaine[lundiStr] = (rttFutursParSemaine[lundiStr] || 0) + h;
-      if (!rttFutursPrisDetails[lundiStr]) rttFutursPrisDetails[lundiStr] = { heures: 0, jours: 0 };
-      rttFutursPrisDetails[lundiStr].heures += h;
-      rttFutursPrisDetails[lundiStr].jours += j;
+      const parSemaine = repartirDemandeParSemaine(r, saisiesCollab, feuilleCollab.id, aujourdHuiStr);
+      Object.entries(parSemaine).forEach(([lundiStr, v]) => {
+        rttFutursParSemaine[lundiStr] = (rttFutursParSemaine[lundiStr] || 0) + v.heures;
+        if (!rttFutursPrisDetails[lundiStr]) rttFutursPrisDetails[lundiStr] = { heures: 0, jours: 0 };
+        rttFutursPrisDetails[lundiStr].heures += v.heures;
+        rttFutursPrisDetails[lundiStr].jours += v.jours;
+      });
     });
 
     // Plages d'absences bloquantes futures (congés, maladie, sans solde, accident)
@@ -1758,18 +1754,60 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
+  // Répartit une demande de congé (RTT ou autre) semaine par semaine, en ne comptant que les jours
+  // ouvrés strictement postérieurs à aujourdHuiStr. Utile pour les demandes qui s'étalent sur plusieurs
+  // semaines (ex : 3 semaines de RTT) : sans ça, tout le volume d'heures était affecté à la seule semaine
+  // de la date de début, laissant les semaines suivantes vides dans le graphique prévisionnel.
+  function repartirDemandeParSemaine(r, saisies, collabId, aujourdHuiStr) {
+    const map = {}; // { lundiStr: { heures, jours } }
+    const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
+    const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+    if (!debutStr) return map;
+    const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+
+    if (heuresExplicites > 0 || debutStr === finStr) {
+      // Demande sur un seul jour : tout sur la semaine de ce jour, si le jour est bien futur
+      if (debutStr <= aujourdHuiStr) return map;
+      const h = heuresRttDemande(r, saisies, collabId);
+      const j = joursRttDemande(r);
+      const d = new Date(debutStr + 'T12:00:00');
+      const day = d.getDay(); const diff = (day === 0 ? -6 : 1 - day);
+      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+      const lundiStr = dateYMD(lundi);
+      if (!map[lundiStr]) map[lundiStr] = { heures: 0, jours: 0 };
+      map[lundiStr].heures += h;
+      map[lundiStr].jours += j;
+      return map;
+    }
+
+    // Demande sur plusieurs jours (voire plusieurs semaines) : répartition jour par jour
+    let d = new Date(debutStr + 'T12:00:00');
+    const fin = new Date(finStr + 'T12:00:00');
+    while (d <= fin) {
+      const dStr = dateYMD(d);
+      const jourSemaine = d.getDay();
+      if (dStr > aujourdHuiStr && jourSemaine >= 1 && jourSemaine <= 5) {
+        const heuresJour = (jourSemaine === 5) ? HEURES_PAR_JOUR_RTT_VENDREDI : HEURES_PAR_JOUR_RTT;
+        const diffLundi = (jourSemaine === 0 ? -6 : 1 - jourSemaine);
+        const lundi = new Date(d); lundi.setDate(lundi.getDate() + diffLundi);
+        const lundiStr = dateYMD(lundi);
+        if (!map[lundiStr]) map[lundiStr] = { heures: 0, jours: 0 };
+        map[lundiStr].heures += heuresJour;
+        map[lundiStr].jours += 1;
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return map;
+  }
+
   // Calcule le nombre d'heures de RTT acquises sur l'année civile en cours :
-  // 4h par semaine complète (lundi-vendredi) entièrement passée, sans absence bloquante
-  // ET avec au moins une saisie de temps dans la semaine.
-  function calculerDonneesGraphRtt(absencesBloquantes, semainesAvecSaisie, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial) {
+  // 4h par semaine où le cumul d'heures normales atteint 42,5h (hors semaine couverte par une absence
+  // bloquante) — même règle que calculerRttEtHeuresSup, via l'ensemble semainesRtt qu'elle retourne.
+  function calculerDonneesGraphRtt(semainesRtt, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial) {
     const annee = new Date().getFullYear();
     const aujourdHuiStr = dateYMD(new Date());
     let lundi = new Date(annee, 0, 1);
     while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
-    const plages = absencesBloquantes.map(r => ({
-      debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
-      fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
-    })).filter(p => p.debut);
     const heuresSupParSemaine = {};
     (heuresSupResult.detail || []).forEach(d => { heuresSupParSemaine[d.lundi] = d.surplus || 0; });
     const semaines = [];
@@ -1782,9 +1820,7 @@
       const estPassee = vendrediStr <= aujourdHuiStr;
       const estCourante = lundiStr <= aujourdHuiStr && vendrediStr >= aujourdHuiStr;
       if (estPassee || estCourante) {
-        const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
-        const sansSaisie = semainesAvecSaisie ? !semainesAvecSaisie.has(lundiStr) : false;
-        if (!semaineBloquee && !sansSaisie) cumulAcquis += HEURES_RTT_PAR_SEMAINE;
+        if (semainesRtt && semainesRtt.has(lundiStr)) cumulAcquis += HEURES_RTT_PAR_SEMAINE;
         cumulAcquis += (heuresSupParSemaine[lundiStr] || 0);
       }
       semaines.push({ lundi: lundiStr, index: semaineIndex, cumul: estPassee || estCourante ? cumulAcquis : null, estAujourdhui: estCourante });
@@ -1794,29 +1830,66 @@
     return semaines;
   }
 
-  function calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie) {
+  // Calcule en une seule passe, pour l'année civile en cours :
+  //  - le nombre d'heures de RTT acquises (4h par semaine où le cumul d'heures normales atteint 42,5h,
+  //    hors semaine couverte par une absence bloquante — congé payé, maladie, sans solde, accident)
+  //  - le cumul d'heures supplémentaires (au-delà de 42,5h/semaine ; les heures entre 39h et 42,5h sont
+  //    payées directement et ne sont donc pas comptabilisées dans le cumul)
+  // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
+  // cumul réel d'heures de la semaine qui détermine si les 4h de RTT sont acquises (seuil : 42,5h).
+  function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId) {
     const annee = new Date().getFullYear();
-    const aujourdHuiStr = dateYMD(new Date());
-    let lundi = new Date(annee, 0, 1);
-    while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
+    const totauxSemaine = {};
+    saisies.forEach(r => {
+      if (!r['Date']) return;
+      if (collabId !== undefined) {
+        const id = (r['Collaborateur'] || [])[0]?.id;
+        if (id !== collabId) return;
+      }
+      const dateStr = String(r['Date']).split('T')[0];
+      const d = new Date(dateStr + 'T12:00:00');
+      if (d.getFullYear() !== annee) return;
+      const day = d.getDay();
+      const diff = (day === 0 ? -6 : 1 - day);
+      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
+      const lundiStr = dateYMD(lundi);
+      const heures = parseFloat(r['Heures Normales']) || 0;
+      totauxSemaine[lundiStr] = (totauxSemaine[lundiStr] || 0) + heures;
+    });
 
     const plages = absencesBloquantes.map(r => ({
       debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
       fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
     })).filter(p => p.debut);
 
-    let semainesCompletes = 0;
+    const aujourdHuiStr = dateYMD(new Date());
+    let lundi = new Date(annee, 0, 1);
+    while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
+
+    let semainesCompletes = 0, heuresSupTotal = 0;
+    const detail = [];
+    const semainesRtt = new Set();
     while (lundi.getFullYear() === annee) {
       const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
       const vendrediStr = dateYMD(vendredi);
       if (vendrediStr > aujourdHuiStr) break; // semaine pas encore terminée
       const lundiStr = dateYMD(lundi);
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
-      const sansSaisie = semainesAvecSaisie ? !semainesAvecSaisie.has(lundiStr) : false;
-      if (!semaineBloquee && !sansSaisie) semainesCompletes++;
+      const totalHeures = totauxSemaine[lundiStr] || 0;
+      if (!semaineBloquee && totalHeures >= HEURES_SEUIL_PAYEES) {
+        semainesCompletes++;
+        semainesRtt.add(lundiStr);
+        if (totalHeures > HEURES_SEUIL_PAYEES) {
+          const heuresPayees = HEURES_SEUIL_PAYEES - HEURES_NORMALES_SEMAINE;
+          const surplus = totalHeures - HEURES_SEUIL_PAYEES;
+          heuresSupTotal += surplus;
+          detail.push({ lundi: lundiStr, totalHeures, heuresPayees, surplus });
+        }
+      }
       lundi.setDate(lundi.getDate() + 7);
     }
-    return semainesCompletes * HEURES_RTT_PAR_SEMAINE;
+    detail.sort((a, b) => b.lundi.localeCompare(a.lundi)); // plus récent en premier
+    return { rttAcquis: semainesCompletes * HEURES_RTT_PAR_SEMAINE, heuresSup: { total: heuresSupTotal, detail }, semainesRtt };
   }
 
   // Récupère toutes les saisies de temps sur une période (pagination incluse), pour un collaborateur ou tous
@@ -1837,64 +1910,11 @@
     return allRows;
   }
 
-  // À partir de lignes de saisies, construit un Set des lundis (YMD) des semaines ayant au moins une saisie.
-  // Si collabId est fourni, ne prend en compte que les lignes de ce collaborateur (utile pour la vue admin groupée).
-  function semainesAvecSaisieDepuisLignes(saisies, collabId) {
-    const set = new Set();
-    saisies.forEach(r => {
-      if (!r['Date']) return;
-      if (collabId !== undefined) {
-        const id = (r['Collaborateur'] || [])[0]?.id;
-        if (id !== collabId) return;
-      }
-      const dateStr = String(r['Date']).split('T')[0];
-      const d = new Date(dateStr + 'T12:00:00');
-      const day = d.getDay();
-      const diff = (day === 0 ? -6 : 1 - day);
-      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
-      set.add(dateYMD(lundi));
-    });
-    return set;
-  }
-
-  // Calcule le total des heures supplémentaires cumulées sur l'année civile en cours, ainsi que le détail
-  // par semaine. Les heures entre 39h et 42,5h sont payées directement (heures sup payées) et ne sont donc
-  // pas comptabilisées dans le cumul ; seul l'excédent au-delà de 42,5h est ajouté au cumul.
+  // Seuils utilisés par calculerRttEtHeuresSup : les heures entre 39h et 42,5h/semaine sont payées
+  // directement (heures sup payées) ; seul l'excédent au-delà de 42,5h est ajouté au cumul d'heures sup.
+  // Les 4h de RTT ne sont acquises que si le cumul hebdomadaire atteint au moins 42,5h.
   const HEURES_NORMALES_SEMAINE = 39;
-  const HEURES_SEUIL_PAYEES = 42.5; // au-delà de ce seuil, les heures sont comptabilisées dans le cumul
-  function calculerHeuresSupplementaires(saisies, collabId) {
-    const annee = new Date().getFullYear();
-    const totauxSemaine = {};
-    saisies.forEach(r => {
-      if (!r['Date']) return;
-      if (collabId !== undefined) {
-        const id = (r['Collaborateur'] || [])[0]?.id;
-        if (id !== collabId) return;
-      }
-      const dateStr = String(r['Date']).split('T')[0];
-      const d = new Date(dateStr + 'T12:00:00');
-      if (d.getFullYear() !== annee) return;
-      const day = d.getDay();
-      const diff = (day === 0 ? -6 : 1 - day);
-      const lundi = new Date(d); lundi.setDate(lundi.getDate() + diff);
-      const lundiStr = dateYMD(lundi);
-      const heures = parseFloat(r['Heures Normales']) || 0;
-      totauxSemaine[lundiStr] = (totauxSemaine[lundiStr] || 0) + heures;
-    });
-    let total = 0;
-    const detail = [];
-    Object.entries(totauxSemaine)
-      .sort((a, b) => b[0].localeCompare(a[0])) // plus récent en premier
-      .forEach(([lundiStr, h]) => {
-        if (h > HEURES_SEUIL_PAYEES) {
-          const heuresPayees = HEURES_SEUIL_PAYEES - HEURES_NORMALES_SEMAINE;
-          const surplus = h - HEURES_SEUIL_PAYEES;
-          total += surplus;
-          detail.push({ lundi: lundiStr, totalHeures: h, heuresPayees, surplus });
-        }
-      });
-    return { total, detail };
-  }
+  const HEURES_SEUIL_PAYEES = 42.5;
 
   // Synchronise le cumul d'heures supplémentaires dans Baserow (fiche Collaborateur), sans bloquer l'affichage.
   async function syncHeuresSupplementaires(collabId, valeur) {
@@ -1928,7 +1948,6 @@
 
       const anneeEnCours = new Date().getFullYear();
       const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
-      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
 
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
       let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
@@ -1936,14 +1955,14 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
         const statut = r['Statut']?.value || 'En attente';
-        if (statut === 'Validé') { pris += jours; prisHeures += heures; }
+        if (statut === 'Approuvé') { pris += jours; prisHeures += heures; }
         else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
       });
 
       const absencesBloquantes = congesCollab.filter(r => {
         const type = r['Type de demande']?.value;
         const statut = r['Statut']?.value || 'En attente';
-        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
       });
 
       const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
@@ -1953,16 +1972,17 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
 
-      const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
-
-      const heuresSupResult = calculerHeuresSupplementaires(saisiesCollab);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id);
+      const acquisSemaines = rttEtSup.rttAcquis;
+      const heuresSupResult = rttEtSup.heuresSup;
+      const semainesRtt = rttEtSup.semainesRtt;
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
       syncHeuresSupplementaires(feuilleCollab.id, heuresSup);
 
       const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
 
       const validees = demandesRtt
-        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé'; })
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Approuvé'; })
         .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
 
       const enAttenteListe = demandesRtt
@@ -2067,7 +2087,7 @@
       `;
 
       // ── Données graphique ──
-      const donneesGraph = calculerDonneesGraphRtt(absencesBloquantes, semainesAvecSaisie, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial);
+      const donneesGraph = calculerDonneesGraphRtt(semainesRtt, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial);
       const nbSemaines = donneesGraph.length;
       const idxAujourdhui = donneesGraph.findIndex(s => s.estAujourdhui);
       const idxRef = idxAujourdhui >= 0 ? idxAujourdhui : donneesGraph.filter(s => s.cumul !== null).length - 1;
@@ -2114,7 +2134,7 @@
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
-          <div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée, + heures sup au-delà de 42,5h/semaine — 1 journée = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
+          <div class="rtt-legende">ℹ️ 4h acquises par semaine où le cumul d'heures atteint 42,5h (hors congé payé/maladie/sans solde/accident cette semaine-là), + heures sup au-delà de 42,5h/semaine — 1 journée = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
           ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
 
@@ -2158,24 +2178,24 @@
             const jours = joursRttDemande(r);
             const heures = heuresRttDemande(r, toutesLesSaisies, c.id);
             const statut = r['Statut']?.value || 'En attente';
-            if (statut === 'Validé') { pris += jours; prisHeures += heures; }
+            if (statut === 'Approuvé') { pris += jours; prisHeures += heures; }
             else if (statut === 'En attente') enAttente += jours;
           });
 
           const absencesBloquantes = congesCollab.filter(r => {
             const type = r['Type de demande']?.value;
             const statut = r['Statut']?.value || 'En attente';
-            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
-          const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
-          const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id);
+          const acquisSemaines = rttEtSup.rttAcquis;
 
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
           const heuresSupSoldeInitial = parseFloat(c['Heures sup solde initial (h)']) || 0;
           const soldeDeBasePrevisionnel = parseFloat(c['Solde de base prévisionnel (h)']) || 0;
           const reliquatAnneePrecedente = parseFloat(c['Reliquat année précédente (h)']) || 0;
 
-          const heuresSup = calculerHeuresSupplementaires(toutesLesSaisies, c.id).total + heuresSupSoldeInitial;
+          const heuresSup = rttEtSup.heuresSup.total + heuresSupSoldeInitial;
           syncHeuresSupplementaires(c.id, heuresSup);
           syncDejaPrisPrevisionnel(c.id, prisHeures + soldeDeBasePrevisionnel);
 
@@ -2229,7 +2249,6 @@
 
       const anneeEnCours = new Date().getFullYear();
       const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), collabId);
-      const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(saisiesCollab);
 
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
       let pris = 0, enAttente = 0, prisHeures = 0, enAttenteHeures = 0;
@@ -2237,14 +2256,14 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, collabId);
         const statut = r['Statut']?.value || 'En attente';
-        if (statut === 'Validé') { pris += jours; prisHeures += heures; }
+        if (statut === 'Approuvé') { pris += jours; prisHeures += heures; }
         else if (statut === 'En attente') { enAttente += jours; enAttenteHeures += heures; }
       });
 
       const absencesBloquantes = congesCollab.filter(r => {
         const type = r['Type de demande']?.value;
         const statut = r['Statut']?.value || 'En attente';
-        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
+        return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
       });
 
       const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true', { headers: HEADERS });
@@ -2254,13 +2273,14 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
 
-      const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
-      const heuresSupResult = calculerHeuresSupplementaires(saisiesCollab);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId);
+      const acquisSemaines = rttEtSup.rttAcquis;
+      const heuresSupResult = rttEtSup.heuresSup;
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
       const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
 
       const validees = demandesRtt
-        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Validé'; })
+        .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Approuvé'; })
         .sort((a, b) => new Date(b['Date de début']) - new Date(a['Date de début']));
 
       const enAttenteListe = demandesRtt
@@ -2353,7 +2373,7 @@
       .filter(d => !filtreNom || (d.collab['Nom Complet'] || '').toLowerCase().includes(filtreNom))
       .filter(d => !filtreType || d.congesCollab.some(r => {
         const statut = r['Statut']?.value || 'En attente';
-        return r['Type de demande']?.value === filtreType && statut === 'Validé';
+        return r['Type de demande']?.value === filtreType && statut === 'Approuvé';
       }))
       .sort((a, b) => (a.collab['Nom Complet'] || '').localeCompare(b.collab['Nom Complet'] || ''))
       .map(d => {
@@ -2367,7 +2387,7 @@
         </tr>`;
       }).join('');
 
-    area.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine complète travaillée (hors congés payés, maladie, sans solde, accident, et hors semaine sans saisie de temps), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+    area.innerHTML = `<div class="rtt-legende">ℹ️ 4h acquises par semaine où le cumul d'heures normales atteint 42,5h (hors semaine couverte par un congé payé, maladie, sans solde ou accident), + heures sup au-delà de 42,5h/semaine ajoutées à l'acquis (39-42,5h payées directement) — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
       <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
       (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
         <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
@@ -4923,7 +4943,7 @@
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const data = await res.json();
       congesAdminListCache = (data.results || []).sort((a,b) => {
-        const order = {'En attente':0,'Validé':1,'Refusé':2};
+        const order = {'En attente':0,'Approuvé':1,'Refusé':2};
         return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
       });
       renderCongesAdminList();
@@ -4951,7 +4971,7 @@
       const heuresExplicites = parseFloat(r["Nombre d'heures"]) || 0;
       const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
       const isAttente = statut === 'En attente';
-      const color = isAttente ? 'var(--beige)' : statut === 'Validé' ? 'var(--vert)' : '#c0392b';
+      const color = isAttente ? 'var(--beige)' : statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
       return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
@@ -4961,7 +4981,7 @@
         ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
         <div style="display:flex;gap:8px;margin-top:10px">
           ${isAttente ? `
-          <button onclick="validerConge(${r.id},'Validé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
+          <button onclick="validerConge(${r.id},'Approuvé')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">✅ Valider</button>
           <button onclick="validerConge(${r.id},'Refusé')" style="flex:1;background:#fde8e8;color:#c0392b;border:none;border-radius:8px;padding:8px;font-size:13px;font-weight:700;cursor:pointer">❌ Refuser</button>
           ` : ''}
           <button onclick="ouvrirFormCongeAdmin(${r.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
@@ -5801,7 +5821,7 @@
           demandesRtt.forEach(r => {
             const statut = r['Statut']?.value || 'En attente';
             const j = joursRttDemande(r), h = heuresRttDemande(r, toutesLesSaisies, c.id);
-            if (statut === 'Validé') { prisRtt += j; prisRttH += h; }
+            if (statut === 'Approuvé') { prisRtt += j; prisRttH += h; }
             else if (statut === 'En attente') attenteRtt += j;
           });
 
@@ -5811,22 +5831,22 @@
             const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
             const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
             const j = debutStr ? compterJoursSelonType(debutStr, finStr, [0]) : 0;
-            if (statut === 'Validé') prisCP += j;
+            if (statut === 'Approuvé') prisCP += j;
             else if (statut === 'En attente') attenteCP += j;
           });
 
           const absencesBloquantes = congesCollab.filter(r => {
             const type = r['Type de demande']?.value;
             const statut = r['Statut']?.value || 'En attente';
-            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Validé';
+            return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
-          const semainesAvecSaisie = semainesAvecSaisieDepuisLignes(toutesLesSaisies, c.id);
-          const acquisSemaines = calculerHeuresRttAcquises(absencesBloquantes, semainesAvecSaisie);
+          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id);
+          const acquisSemaines = rttEtSup.rttAcquis;
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
           const heuresSupSoldeInitial = parseFloat(c['Heures sup solde initial (h)']) || 0;
           const soldeDeBasePrevisionnel = parseFloat(c['Solde de base prévisionnel (h)']) || 0;
           const reliquatAnneePrecedente = parseFloat(c['Reliquat année précédente (h)']) || 0;
-          const heuresSup = calculerHeuresSupplementaires(toutesLesSaisies, c.id).total + heuresSupSoldeInitial;
+          const heuresSup = rttEtSup.heuresSup.total + heuresSupSoldeInitial;
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
           const previsionnelTotalDisponible = HEURES_PREVISIONNEL_ANNUEL_RTT + reliquatAnneePrecedente;
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisRttH) - soldeDeBasePrevisionnel;
@@ -7084,7 +7104,7 @@
       <label>Statut</label>
       <select id="conge-admin-statut" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
         <option value="En attente">⏳ En attente</option>
-        <option value="Validé">✅ Validé</option>
+        <option value="Approuvé">✅ Approuvé</option>
         <option value="Refusé">❌ Refusé</option>
       </select>
     </div>
