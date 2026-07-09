@@ -5615,7 +5615,7 @@
     });
 
     [45, 12, 15, 12, 18, 35].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
-    ws.views = [{ state: 'frozen', ySplit: 6 }];
+    // views frozen supprimé (bug ExcelJS 4.4.0)
     addLogoToSheetCh(ws, wb);
   }
 
@@ -5743,7 +5743,7 @@
     ws.getRow(cr).height = 18;
 
     [14, 22, 22, 12, 20, 12].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
-    ws.views = [{ state: 'frozen', ySplit: 0 }];
+    // views frozen supprimé (bug ExcelJS 4.4.0)
     addLogoToSheetCh(ws, wb);
   }
 
@@ -5863,7 +5863,7 @@
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = EXCEL_BORDURE_FINE;
       });
-      wsRecap.views = [{ state: 'frozen', ySplit: 3 }];
+      // views frozen supprimé (bug ExcelJS 4.4.0)
       wsRecap.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: headerRecap.length } };
 
       const idxRestant = headerRecap.indexOf('Solde prévisionnel restant (h)');
@@ -5898,7 +5898,7 @@
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = EXCEL_BORDURE_FINE;
       });
-      wsDetail.views = [{ state: 'frozen', ySplit: 1 }];
+      // views frozen supprimé (bug ExcelJS 4.4.0)
       wsDetail.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: headerDetail.length } };
 
       rowsDetail.forEach(ligne => {
