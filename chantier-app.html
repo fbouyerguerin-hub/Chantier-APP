@@ -2832,22 +2832,32 @@
     const modal = document.getElementById('modal-nouveau-message');
     modal.style.display = 'flex';
     document.getElementById('nouveau-msg-texte').value = '';
-    // Charger la liste des collaborateurs
-    const sel = document.getElementById('nouveau-msg-destinataire');
-    sel.innerHTML = '<option value="">— Choisir un collaborateur —</option>';
+    document.getElementById('nouveau-msg-dest-count').textContent = '';
+    const container = document.getElementById('nouveau-msg-destinataires');
+    container.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#aaa">Chargement…</div>';
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
       const data = await res.json();
-      (data.results || [])
+      const collabs = (data.results || [])
         .filter(u => u['Actif'] !== false && String(u['Vue ID'] || '').trim() !== String(connectedViewId || '').trim())
-        .sort((a, b) => (a['Nom complet'] || '').localeCompare(b['Nom complet'] || ''))
-        .forEach(u => {
-          const opt = document.createElement('option');
-          opt.value = u['Vue ID'] || '';
-          opt.textContent = u['Nom complet'] || u['Identifiant'];
-          sel.appendChild(opt);
+        .sort((a, b) => (a['Nom complet'] || '').localeCompare(b['Nom complet'] || ''));
+      container.innerHTML = '';
+      collabs.forEach(u => {
+        const id = u['Vue ID'] || '';
+        const nom = u['Nom complet'] || u['Identifiant'] || '';
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px;color:var(--gris)';
+        row.innerHTML = `<input type="checkbox" value="${id}" data-nom="${nom}" style="width:16px;height:16px;accent-color:var(--vert);cursor:pointer"> ${nom}`;
+        row.querySelector('input').addEventListener('change', () => {
+          const checked = container.querySelectorAll('input:checked').length;
+          document.getElementById('nouveau-msg-dest-count').textContent = checked > 0 ? `${checked} destinataire${checked > 1 ? 's' : ''} sélectionné${checked > 1 ? 's' : ''}` : '';
         });
-    } catch(e) {}
+        container.appendChild(row);
+      });
+      if (!collabs.length) container.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#aaa">Aucun collaborateur disponible</div>';
+    } catch(e) {
+      container.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#e74c3c">Erreur de chargement</div>';
+    }
   }
 
   function fermerNouveauMessage() {
@@ -2855,24 +2865,26 @@
   }
 
   async function envoyerNouveauMessage() {
-    const destId = document.getElementById('nouveau-msg-destinataire').value;
+    const checked = document.getElementById('nouveau-msg-destinataires').querySelectorAll('input:checked');
     const texte = document.getElementById('nouveau-msg-texte').value.trim();
-    if (!destId) { alert('Veuillez choisir un destinataire'); return; }
+    if (!checked.length) { alert('Veuillez choisir au moins un destinataire'); return; }
     if (!texte) { alert('Veuillez saisir un message'); return; }
     try {
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
-        method: 'POST',
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          'Messages': texte,
-          'Lu': false,
-          'Destinataire': String(destId),
-          'Expediteur': String(connectedViewId),
-          'Date envoi': new Date().toISOString().split('T')[0]
+      await Promise.all([...checked].map(cb =>
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
+          method: 'POST',
+          headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            'Messages': texte,
+            'Lu': false,
+            'Destinataire': String(cb.value),
+            'Expediteur': String(connectedViewId),
+            'Date envoi': new Date().toISOString().split('T')[0]
+          })
         })
-      });
+      ));
       fermerNouveauMessage();
-      alert('✅ Message envoyé');
+      alert(`✅ Message envoyé à ${checked.length} destinataire${checked.length > 1 ? 's' : ''}`);
       loadHistoriqueMessages();
     } catch(e) {
       alert("Erreur lors de l'envoi du message");
@@ -5615,7 +5627,7 @@
     });
 
     [45, 12, 15, 12, 18, 35].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
-    // views frozen supprimé (bug ExcelJS 4.4.0)
+    ws.views = [{ state: 'frozen', ySplit: 6 }];
     addLogoToSheetCh(ws, wb);
   }
 
@@ -5743,7 +5755,7 @@
     ws.getRow(cr).height = 18;
 
     [14, 22, 22, 12, 20, 12].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
-    // views frozen supprimé (bug ExcelJS 4.4.0)
+    ws.views = [{ state: 'frozen', ySplit: 0 }];
     addLogoToSheetCh(ws, wb);
   }
 
@@ -5863,7 +5875,7 @@
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = EXCEL_BORDURE_FINE;
       });
-      // views frozen supprimé (bug ExcelJS 4.4.0)
+      wsRecap.views = [{ state: 'frozen', ySplit: 3 }];
       wsRecap.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: headerRecap.length } };
 
       const idxRestant = headerRecap.indexOf('Solde prévisionnel restant (h)');
@@ -5898,7 +5910,7 @@
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
         cell.border = EXCEL_BORDURE_FINE;
       });
-      // views frozen supprimé (bug ExcelJS 4.4.0)
+      wsDetail.views = [{ state: 'frozen', ySplit: 1 }];
       wsDetail.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: headerDetail.length } };
 
       rowsDetail.forEach(ligne => {
@@ -7182,10 +7194,11 @@
       <button onclick="fermerNouveauMessage()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
     </div>
     <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Destinataire</label>
-      <select id="nouveau-msg-destinataire" style="width:100%;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
-        <option value="">— Choisir un collaborateur —</option>
-      </select>
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Destinataires</label>
+      <div id="nouveau-msg-destinataires" style="border:1px solid #ddd;border-radius:8px;background:#fafafa;max-height:160px;overflow-y:auto;padding:4px 0">
+        <div style="padding:10px 12px;font-size:12px;color:#aaa">Chargement…</div>
+      </div>
+      <div id="nouveau-msg-dest-count" style="font-size:11px;color:var(--beige);margin-top:4px;font-weight:600"></div>
     </div>
     <div style="margin-bottom:16px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
