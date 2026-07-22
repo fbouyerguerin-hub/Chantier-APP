@@ -712,6 +712,8 @@
     // Afficher/masquer les onglets selon le droit
     const navGestion = document.getElementById('nav-gestion');
     if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
+    const navCharge = document.getElementById('nav-charge');
+    if (navCharge) navCharge.style.display = (droit === 'Administrateur' || droit === 'Gestionnaire') ? '' : 'none';
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
     const tabRttAdmin = document.getElementById('tab-rtt-admin');
@@ -1029,6 +1031,9 @@
     } else if (nav === 'gestion') {
       showPage('page-gestion');
       loadGestion();
+    } else if (nav === 'charge') {
+      showPage('page-charge');
+      loadPlanCharge();
     } else if (nav === 'messages') {
       showPage('page-messages');
       loadHistoriqueMessages();
@@ -2926,6 +2931,438 @@
     }
   }
 
+  // ── PLAN DE CHARGE ──
+  const POSTES_CHARGE = [
+    { key: 'Étude',     field: 'Heures études',     color: '#1F6AA5', posteCollab: 'Étude' },
+    { key: 'Fab Bois',  field: 'Heures Fab Bois',  color: '#2D8A4E', posteCollab: 'Fab Bois' },
+    { key: 'Fab Acier', field: 'Heures Fab Acier', color: '#8B6340', posteCollab: 'Fab Acier' },
+    { key: 'Pose',      field: 'Heures Pose',      color: '#6B4EA8', posteCollab: 'Pose' },
+  ];
+  let chargeDateRef = new Date();
+  let chargePosteActif = 'tous';
+
+  function filtrerPosteCharge(poste) {
+    chargePosteActif = poste;
+    // Mettre à jour les boutons
+    const btns = {
+      'tous': 'btn-poste-tous',
+      'Étude': 'btn-poste-etude',
+      'Fab Bois': 'btn-poste-fabbois',
+      'Fab Acier': 'btn-poste-fabacier',
+      'Pose': 'btn-poste-pose'
+    };
+    Object.entries(btns).forEach(([key, id]) => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      const p = POSTES_CHARGE.find(p => p.key === key);
+      const couleur = p ? p.color : 'var(--vert)';
+      if (key === poste) {
+        btn.style.background = couleur;
+        btn.style.color = '#fff';
+      } else {
+        btn.style.background = '#f0f0f0';
+        btn.style.color = '#555';
+      }
+    });
+    loadPlanCharge();
+  }
+
+  function changerMoisCharge(delta) {
+    chargeDateRef = new Date(chargeDateRef.getFullYear(), chargeDateRef.getMonth() + delta, 1);
+    loadPlanCharge();
+  }
+
+  async function loadPlanCharge() {
+    const container = document.getElementById('charge-content');
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    const annee = chargeDateRef.getFullYear();
+    const mois = chargeDateRef.getMonth();
+    const moisLabels = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+    document.getElementById('charge-mois-label').textContent = moisLabels[mois] + ' ' + annee;
+    const pad2 = n => String(n).padStart(2, '0');
+    const dateDebut = annee + '-' + pad2(mois + 1) + '-01';
+    const dateFin = annee + '-' + pad2(mois + 1) + '-' + pad2(new Date(annee, mois + 1, 0).getDate());
+    try {
+      const [resCollabs, resCharge, resUsers] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabs = (await resCollabs.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+      // Exclure les collaborateurs dont l'utilisateur est inactif (par Nom complet)
+      const usersData = (await resUsers.json()).results || [];
+      const inactifsNoms = new Set(
+        usersData.filter(u => u['Actif'] === false).map(u => (u['Nom complet'] || '').trim().toLowerCase()).filter(n => n)
+      );
+      const collabs = allCollabs.filter(c => !inactifsNoms.has((c['Nom Complet'] || '').trim().toLowerCase()));
+
+      // Pagination complète pour les congés
+      let allConges = [];
+      let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrl) {
+        const resC = await fetch(congesUrl, { headers: HEADERS });
+        const dataC = await resC.json();
+        allConges = allConges.concat(dataC.results || []);
+        congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+
+      const congesValides = allConges.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFin && f >= dateDebut;
+      });
+
+      // Jours ouvrés du mois
+      const joursOuvres = [];
+      const cur = new Date(annee, mois, 1);
+      while (cur.getMonth() === mois) {
+        const day = cur.getDay();
+        if (day !== 0 && day !== 6) joursOuvres.push(dateYMD(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      const nbJours = joursOuvres.length;
+
+      // Capacité et consommation par poste avec détail par collaborateur
+      const capacites = {}, consommes = {}, detailsCollabs = {};
+      POSTES_CHARGE.forEach(p => {
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        let joursAbsentTotal = 0;
+        const detail = collabsPoste.map(c => {
+          let joursAbsC = 0;
+          const absences = congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id));
+          absences.forEach(abs => {
+            const d = abs['Date de début'] ? String(abs['Date de début']).split('T')[0] : null;
+            const f = abs['Date de fin journée (inclus)'] ? String(abs['Date de fin journée (inclus)']).split('T')[0] : d;
+            if (!d) return;
+            joursOuvres.forEach(j => { if (j >= d && j <= f) joursAbsC++; });
+          });
+          joursAbsentTotal += joursAbsC;
+          return {
+            nom: c['Nom Complet'] || c['Nom complet'] || '?',
+            joursPresents: nbJours - joursAbsC,
+            joursAbsents: joursAbsC,
+            absences: absences.map(abs => abs['Type de demande']?.value || 'Absence').filter((v,i,a) => a.indexOf(v) === i)
+          };
+        });
+        detailsCollabs[p.key] = detail;
+        capacites[p.key] = Math.round((collabsPoste.length * nbJours - joursAbsentTotal) * 7.8);
+
+        // Heures consommées ce mois
+        let total = 0;
+        affaires.forEach(a => {
+          const dateA = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
+          if (!dateA) return;
+          const heures = parseFloat(a[p.field]) || 0;
+          if (!heures) return;
+          const capHebdo = collabsPoste.length * 39;
+          if (!capHebdo) return;
+          const nbSem = Math.ceil(heures / capHebdo);
+          const finA = new Date(dateA + 'T12:00:00');
+          finA.setDate(finA.getDate() + nbSem * 7);
+          const finAStr = dateYMD(finA);
+          if (dateA <= dateFin && finAStr >= dateDebut) {
+            const totalDays = Math.max(1, (finA - new Date(dateA + 'T12:00:00')) / 86400000);
+            const oS = dateA > dateDebut ? dateA : dateDebut;
+            const oE = finAStr < dateFin ? finAStr : dateFin;
+            const overlapDays = Math.max(0, (new Date(oE + 'T12:00:00') - new Date(oS + 'T12:00:00')) / 86400000);
+            total += heures * (overlapDays / totalDays);
+          }
+        });
+        consommes[p.key] = Math.round(total);
+      });
+
+      // Calculer les semaines du mois
+      const semaines = [];
+      let lundiCur = new Date(annee, mois, 1);
+      while (lundiCur.getDay() !== 1) lundiCur.setDate(lundiCur.getDate() - 1);
+      while (true) {
+        const lundi = new Date(lundiCur);
+        const vendredi = new Date(lundiCur); vendredi.setDate(lundiCur.getDate() + 4);
+        const lundiStr = dateYMD(lundi);
+        const vendrediStr = dateYMD(vendredi);
+        if (lundiStr > dateFin) break;
+        // Jours ouvrés de cette semaine dans le mois
+        const joursSemine = [];
+        for (let i = 0; i < 5; i++) {
+          const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+          const js = dateYMD(j);
+          if (js >= dateDebut && js <= dateFin) joursSemine.push(js);
+        }
+        // N'inclure la semaine que si elle a au moins un jour dans le mois
+        if (joursSemine.length > 0) {
+          semaines.push({ lundiStr, vendrediStr, jours: joursSemine,
+            label: lundi.getDate() + '/' + pad2(lundi.getMonth()+1) + '→' + vendredi.getDate() + '/' + pad2(vendredi.getMonth()+1) });
+        }
+        lundiCur.setDate(lundiCur.getDate() + 7);
+      }
+
+      // Capacité par poste par semaine
+      const capSemaine = {}; // capSemaine[posteKey][lundiStr]
+      POSTES_CHARGE.forEach(p => {
+        capSemaine[p.key] = {};
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        semaines.forEach(sem => {
+          let joursAbs = 0;
+          collabsPoste.forEach(c => {
+            congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id)).forEach(abs => {
+              const d = abs['Date de début'] ? String(abs['Date de début']).split('T')[0] : null;
+              const f = abs['Date de fin journée (inclus)'] ? String(abs['Date de fin journée (inclus)']).split('T')[0] : d;
+              if (!d) return;
+              sem.jours.forEach(j => { if (j >= d && j <= f) joursAbs++; });
+            });
+          });
+          capSemaine[p.key][sem.lundiStr] = Math.round((collabsPoste.length * sem.jours.length - joursAbs) * 7.8);
+        });
+      });
+
+      // Consommation par poste par semaine
+      const consSemaine = {}; // consSemaine[posteKey][lundiStr]
+      POSTES_CHARGE.forEach(p => {
+        consSemaine[p.key] = {};
+        semaines.forEach(sem => { consSemaine[p.key][sem.lundiStr] = 0; });
+        affaires.forEach(a => {
+          const dateA = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
+          if (!dateA) return;
+          const heures = parseFloat(a[p.field]) || 0;
+          if (!heures) return;
+          const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+          const capHebdo = collabsPoste.length * 39;
+          if (!capHebdo) return;
+          const nbSem = Math.ceil(heures / capHebdo);
+          const finA = new Date(dateA + 'T12:00:00');
+          finA.setDate(finA.getDate() + nbSem * 7);
+          const finAStr = dateYMD(finA);
+          // Répartir les heures sur les semaines couvertes
+          const semainesCouvertes = semaines.filter(s => s.vendrediStr >= dateA && s.lundiStr <= finAStr);
+          if (!semainesCouvertes.length) return;
+          const hParSemaine = heures / Math.max(semainesCouvertes.length, 1);
+          semainesCouvertes.forEach(s => {
+            if (consSemaine[p.key][s.lundiStr] !== undefined)
+              consSemaine[p.key][s.lundiStr] += hParSemaine;
+          });
+        });
+        // Arrondir
+        semaines.forEach(s => {
+          if (consSemaine[p.key][s.lundiStr] !== undefined)
+            consSemaine[p.key][s.lundiStr] = Math.round(consSemaine[p.key][s.lundiStr]);
+        });
+      });
+
+      // Filtrer les postes selon la sélection
+      const postesAffiches = chargePosteActif === 'tous' ? POSTES_CHARGE : POSTES_CHARGE.filter(p => p.key === chargePosteActif);
+
+      let html = '';
+      postesAffiches.forEach(p => {
+        const detail = detailsCollabs[p.key] || [];
+        // Chantiers par semaine pour ce poste
+        const chantiersParSemaine = {};
+        semaines.forEach(s => {
+          chantiersParSemaine[s.lundiStr] = affaires
+            .filter(a => {
+              const dateA = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
+              if (!dateA || !parseFloat(a[p.field])) return false;
+              const collabsPoste = collabs.filter(c2 => (c2['Poste / Métier'] || '') === p.posteCollab);
+              const capHebdo = collabsPoste.length * 39;
+              if (!capHebdo) return false;
+              const nbSem = Math.ceil(parseFloat(a[p.field]) / capHebdo);
+              const finA = new Date(dateA + 'T12:00:00');
+              finA.setDate(finA.getDate() + nbSem * 7);
+              return s.vendrediStr >= dateA && s.lundiStr <= dateYMD(finA);
+            })
+            .map(a => (a['Chantier'] || [])[0]?.value || 'Sans nom');
+        });
+
+        // Absences par collaborateur : regroupées en dropdown
+        const absencesParCollab = {};
+        detail.forEach(c => {
+          const absDetail = [];
+          congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => {
+            const collab = collabs.find(co => co['Nom Complet'] === c.nom || co['Nom complet'] === c.nom);
+            return collab && cc.id === collab.id;
+          })).forEach(abs => {
+            const d = abs['Date de début'] ? String(abs['Date de début']).split('T')[0] : null;
+            const f = abs['Date de fin journée (inclus)'] ? String(abs['Date de fin journée (inclus)']).split('T')[0] : d;
+            if (d) absDetail.push({ type: abs['Type de demande']?.value || 'Absence', debut: d, fin: f });
+          });
+          absencesParCollab[c.nom] = absDetail;
+        });
+
+        const detailHtml = detail.length ? `
+          <tr>
+            <td style="padding:6px 8px;font-size:11px;color:#555;vertical-align:top">
+              <details>
+                <summary style="cursor:pointer;font-weight:600;color:var(--gris);font-size:11px;list-style:none;display:flex;align-items:center;gap:4px">
+                  <span>▶</span> Ressources (${detail.length})
+                </summary>
+                <div style="margin-top:6px">
+                ${detail.map(c => {
+                  const abs = absencesParCollab[c.nom] || [];
+                  return `<div style="padding:3px 0;border-top:1px solid #f0f0f0;font-size:10px;color:#555">
+                    👤 ${c.nom}
+                    ${abs.length ? `<span style="color:#c0392b;margin-left:4px">(${abs.map(a => a.type + ' ' + a.debut + (a.fin !== a.debut ? '→' + a.fin : '')).join(', ')})</span>` : ''}
+                  </div>`;
+                }).join('')}
+                </div>
+              </details>
+            </td>
+            ${semaines.map(s => {
+              const chantiers = chantiersParSemaine[s.lundiStr] || [];
+              return `<td style="padding:6px 8px;vertical-align:top;font-size:10px;border-left:1px solid #f0f0f0">
+                ${chantiers.length ? chantiers.map(ch => `<div style="background:#e8f0e7;border-radius:4px;padding:3px 6px;margin-bottom:3px;color:#0B3C1E;font-weight:600;font-size:10px;word-break:break-word;white-space:normal;min-width:80px">${ch}</div>`).join('') : '<span style="color:#ddd">—</span>'}
+              </td>`;
+            }).join('')}
+          </tr>` : `<tr><td colspan="${semaines.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucun collaborateur affecté</td></tr>`;
+
+        html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.06);overflow:hidden">
+          <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
+            <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${detail.length} pers.)</span></span>
+          </div>
+          <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead>
+              <tr style="background:#f8f8f8">
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:140px">Ressources / Chantiers</th>
+                ${semaines.map(s => `<th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:110px">${s.label}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${detailHtml}
+              <tr style="background:#f0f0f0;border-top:2px solid #e0e0e0">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris)">Capacité (h)</td>
+                ${semaines.map(s => {
+                  const cap = capSemaine[p.key][s.lundiStr] || 0;
+                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:var(--gris)">${cap}h</td>`;
+                }).join('')}
+              </tr>
+              <tr style="background:#fff3e0;border-top:1px solid #ffe0b2">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#e65100">Charge (h)</td>
+                ${semaines.map(s => {
+                  const cap = capSemaine[p.key][s.lundiStr] || 0;
+                  const cons = consSemaine[p.key][s.lundiStr] || 0;
+                  const surcharge = cons > cap;
+                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:${surcharge ? '#c0392b' : '#e65100'}">${cons}h${surcharge ? ' ⚠️' : ''}</td>`;
+                }).join('')}
+              </tr>
+              <tr style="border-top:1px solid #e0f2e9">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#2D8A4E">Disponible (h)</td>
+                ${semaines.map(s => {
+                  const cap = capSemaine[p.key][s.lundiStr] || 0;
+                  const cons = consSemaine[p.key][s.lundiStr] || 0;
+                  const dispo = cap - cons;
+                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'}">${dispo}h</td>`;
+                }).join('')}
+              </tr>
+            </tbody>
+          </table>
+          </div>
+        </div>`;
+      });
+
+      html += '<div style="font-size:12px;font-weight:700;color:var(--gris);margin:16px 0 8px">📋 Affaires ce mois</div>';
+      const affairesMois = affaires.filter(a => {
+        const d = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
+        if (!d || d > dateFin) return false;
+        // Si filtre poste actif, n'afficher que les affaires avec des heures sur ce poste
+        if (chargePosteActif !== 'tous') {
+          const poste = POSTES_CHARGE.find(p => p.key === chargePosteActif);
+          return poste && parseFloat(a[poste.field]) > 0;
+        }
+        return true;
+      }).sort((a,b) => (a['Date début']||'').localeCompare(b['Date début']||''));
+
+      if (!affairesMois.length) {
+        html += '<div class="feuille-empty">Aucune affaire</div>';
+      } else {
+        affairesMois.forEach(a => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const debut = a['Date début'] || '';
+          const postes = POSTES_CHARGE.filter(p => parseFloat(a[p.field]) > 0).map(p => p.key + ': ' + a[p.field] + 'h').join(' · ');
+          html += `<div style="background:#fff;border-radius:10px;margin-bottom:8px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:var(--gris)">${nom}</div>
+              <div style="font-size:10px;color:#aaa">${debut ? '📅 ' + debut : ''}</div>
+              <div style="font-size:11px;color:#666;margin-top:3px">${postes}</div>
+            </div>
+            <div style="display:flex;gap:6px">
+              <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
+              <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
+            </div>
+          </div>`;
+        });
+      }
+      container.innerHTML = html;
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
+      console.error(e);
+    }
+  }
+
+  async function ouvrirFormCharge(rowId) {
+    document.getElementById('charge-row-id').value = rowId || '';
+    document.getElementById('charge-modal-titre').textContent = rowId ? 'Modifier affaire' : 'Nouvelle affaire';
+    document.getElementById('charge-date-debut').value = '';
+    ['charge-h-etude','charge-h-fab-bois','charge-h-fab-acier','charge-h-pose'].forEach(id => document.getElementById(id).value = '');
+    const sel = document.getElementById('charge-chantier');
+    sel.innerHTML = '<option value="">— Choisir —</option>';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      (data.results || []).sort((a,b) => (a['Nom du chantier']||'').localeCompare(b['Nom du chantier']||'')).forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c['Nom du chantier'] || '#' + c.id;
+        sel.appendChild(opt);
+      });
+    } catch(e) {}
+    if (rowId) {
+      try {
+        const r = await (await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + rowId + '/?user_field_names=true', { headers: HEADERS })).json();
+        const chantierId = (r['Chantier'] || [])[0]?.id;
+        if (chantierId) sel.value = chantierId;
+        document.getElementById('charge-date-debut').value = r['Date début'] || '';
+        document.getElementById('charge-h-etude').value = r['Heures études'] || '';
+        document.getElementById('charge-h-fab-bois').value = r['Heures Fab Bois'] || '';
+        document.getElementById('charge-h-fab-acier').value = r['Heures Fab Acier'] || '';
+        document.getElementById('charge-h-pose').value = r['Heures Pose'] || '';
+      } catch(e) {}
+    }
+    document.getElementById('modal-charge').style.display = 'flex';
+  }
+
+  function fermerFormCharge() {
+    document.getElementById('modal-charge').style.display = 'none';
+  }
+
+  async function sauvegarderCharge() {
+    const rowId = document.getElementById('charge-row-id').value;
+    const chantierId = document.getElementById('charge-chantier').value;
+    const dateDebut = document.getElementById('charge-date-debut').value;
+    if (!chantierId) { alert('Veuillez choisir un chantier'); return; }
+    if (!dateDebut) { alert('Veuillez saisir une date de début'); return; }
+    const payload = {
+      'Chantier': chantierId ? [parseInt(chantierId)] : [],
+      'Date début': dateDebut || null,
+      'Heures études': parseFloat(document.getElementById('charge-h-etude').value) || 0,
+      'Heures Fab Bois': parseFloat(document.getElementById('charge-h-fab-bois').value) || 0,
+      'Heures Fab Acier': parseFloat(document.getElementById('charge-h-fab-acier').value) || 0,
+      'Heures Pose': parseFloat(document.getElementById('charge-h-pose').value) || 0,
+    };
+    try {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
+      await fetch(url, { method: rowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      fermerFormCharge();
+      loadPlanCharge();
+    } catch(e) { alert('Erreur lors de la sauvegarde'); }
+  }
+
+  async function supprimerCharge(rowId) {
+    if (!confirm('Supprimer cette affaire du plan de charge ?')) return;
+    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
+    loadPlanCharge();
+  }
+
   function toggleSemaine(id) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -4117,6 +4554,7 @@
   // ── PLANNING ADMIN ──
   const TABLE_PLANNING_ADMIN = '1023480';
   const TABLE_CHANTIERS_ADMIN = '1014441';
+  const TABLE_PLAN_CHARGE = '1091566';
   const TABLE_CONGES_PLANNING = '1022869';
   const TABLE_COLLABS_ADMIN = '1014431';
   const TABLE_VEHICULES_COLLECTIF = '1017158';
@@ -4773,6 +5211,27 @@
     ));
   }
 
+  async function chargerPostesSelect(valeurActuelle) {
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const data = await res.json();
+      const postes = [...new Set((data.results || []).map(r => r['Poste / Métier'] || '').filter(p => p))].sort();
+      ['user-poste', 'user-poste-modif'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        const valeur = valeurActuelle || sel.value;
+        sel.innerHTML = '<option value="">-- Sélectionner --</option>';
+        postes.forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p;
+          opt.textContent = p;
+          if (p === valeur) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      });
+    } catch(e) { console.warn('Erreur chargement postes:', e); }
+  }
+
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
     document.getElementById('user-id').value = '';
@@ -4806,7 +5265,9 @@
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
         // Poste depuis Collaborateurs
         const collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
-        document.getElementById('user-poste-modif').value = collabFound?.poste || u['Poste / Métier'] || '';
+        const posteModif = collabFound?.poste || u['Poste / Métier'] || '';
+        await chargerPostesSelect(posteModif);
+        document.getElementById('user-poste-modif').value = posteModif;
         if (collabFound) {
           try {
             const resCol = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabFound.collabId + '/?user_field_names=true', { headers: HEADERS });
@@ -4826,6 +5287,7 @@
         }
       } catch(e) {}
     }
+    await chargerPostesSelect();
     document.getElementById('modal-user').style.display = 'flex';
   }
 
@@ -6984,13 +7446,7 @@
           <label>Poste / Métier <span style="color:#c0392b">*</span></label>
           <select id="user-poste" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
             <option value="">-- Sélectionner --</option>
-            <option value="Pose">Pose</option>
-            <option value="Apprenti">Apprenti</option>
-            <option value="Chef de chantier">Chef de chantier</option>
-            <option value="Conducteur de travaux">Conducteur de travaux</option>
-            <option value="Bureau">Bureau</option>
-            <option value="Direction">Direction</option>
-            <option value="Autre">Autre</option>
+          
           </select>
         </div>
         <div style="background:#f5f0eb;border-left:3px solid var(--beige);border-radius:8px;padding:10px 14px;margin:0 0 14px;font-size:12px;font-weight:700;color:var(--gris)">
@@ -7016,13 +7472,7 @@
           <label>Poste / Métier</label>
           <select id="user-poste-modif" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
             <option value="">-- Sélectionner --</option>
-            <option value="Pose">Pose</option>
-            <option value="Apprenti">Apprenti</option>
-            <option value="Chef de chantier">Chef de chantier</option>
-            <option value="Conducteur de travaux">Conducteur de travaux</option>
-            <option value="Bureau">Bureau</option>
-            <option value="Direction">Direction</option>
-            <option value="Autre">Autre</option>
+          
           </select>
         </div>
       </div>div>
@@ -7195,6 +7645,71 @@
 </div>
 
 <!-- NAVIGATION BAS -->
+<!-- PAGE PLAN DE CHARGE -->
+<div id="page-charge" class="page" style="display:none">
+  <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">👷 Plan de charge</div>
+    <button onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
+  </div>
+  <!-- Filtres par poste -->
+  <div style="display:flex;gap:6px;margin:0 16px 12px;overflow-x:auto;padding-bottom:2px">
+    <button id="btn-poste-tous" onclick="filtrerPosteCharge('tous')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
+    <button id="btn-poste-etude" onclick="filtrerPosteCharge('Étude')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Étude</button>
+    <button id="btn-poste-fabbois" onclick="filtrerPosteCharge('Fab Bois')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Bois</button>
+    <button id="btn-poste-fabacier" onclick="filtrerPosteCharge('Fab Acier')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Acier</button>
+    <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px">
+    <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
+    <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
+    <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+  </div>
+  <div id="charge-content" style="padding:0 16px 100px">
+    <div class="feuille-loading">⏳ Chargement…</div>
+  </div>
+</div>
+
+<!-- MODAL AFFAIRE PLAN DE CHARGE -->
+<div id="modal-charge" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:flex-end;justify-content:center">
+  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:20px 20px 30px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div id="charge-modal-titre" style="font-size:15px;font-weight:800;color:var(--gris)">Nouvelle affaire</div>
+      <button onclick="fermerFormCharge()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+    </div>
+    <input type="hidden" id="charge-row-id" value="">
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Chantier</label>
+      <select id="charge-chantier" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none"></select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Date début</label>
+      <input type="date" id="charge-date-debut" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+      <div>
+        <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Étude</label>
+        <input type="number" id="charge-h-etude" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Fab Bois</label>
+        <input type="number" id="charge-h-fab-bois" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Fab Acier</label>
+        <input type="number" id="charge-h-fab-acier" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+      </div>
+      <div>
+        <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Pose</label>
+        <input type="number" id="charge-h-pose" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box">
+      </div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button onclick="sauvegarderCharge()" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Enregistrer</button>
+      <button onclick="fermerFormCharge()" style="background:#f0f0f0;border:none;border-radius:10px;padding:13px 20px;font-size:14px;cursor:pointer">Annuler</button>
+    </div>
+  </div>
+</div>
+
 <!-- PAGE MESSAGES -->
 <div id="page-messages" class="page" style="display:none">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
@@ -7253,6 +7768,10 @@
   <button class="nav-btn" id="nav-messages" onclick="switchPage('messages')">
     <span class="nav-icon" style="position:relative">✉️<span id="badge-messages" style="display:none;position:absolute;top:-4px;right:-6px;background:#c0392b;color:#fff;font-size:9px;font-weight:800;border-radius:50%;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px"></span></span>
     Messages
+  </button>
+  <button class="nav-btn" id="nav-charge" style="display:none" onclick="switchPage('charge')">
+    <span class="nav-icon">👷</span>
+    Charge
   </button>
   <button class="nav-btn" id="nav-collectif" style="display:none" onclick="switchPage('collectif')">
     <span class="nav-icon">📋</span>
