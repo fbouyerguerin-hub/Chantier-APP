@@ -735,6 +735,21 @@
     Zones:         { id: '1016786', field: 'Nom',             label: 'Zone' },
   };
   const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
+
+  // Baserow limite chaque page d'API à 200 lignes (paramètre size). Au-delà, il faut boucler sur `next`
+  // pour récupérer toutes les lignes, sans quoi les entrées les plus récentes (ID les plus élevés)
+  // peuvent être silencieusement absentes des résultats.
+  async function fetchToutesLesPages(url) {
+    let resultats = [];
+    let next = url;
+    while (next) {
+      const res = await fetch(next, { headers: HEADERS });
+      const data = await res.json();
+      resultats = resultats.concat(data.results || []);
+      next = data.next ? data.next.replace('http://', 'https://') : null;
+    }
+    return resultats;
+  }
   const tableData = {};
   const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null };
   let lignes = [];
@@ -1122,7 +1137,7 @@
         const d = new Date(date + 'T12:00:00');
         const monday = new Date(d);
         monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-        const weekKey = monday.toISOString().split('T')[0];
+        const weekKey = dateYMD(monday);
         if (!byWeek[weekKey]) byWeek[weekKey] = [];
         byWeek[weekKey].push(date);
       });
@@ -1270,7 +1285,7 @@
     let count = 0;
     for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
       if (joursExclus.includes(d.getDay())) continue;
-      if (nomJourFerie(d.toISOString().split('T')[0])) continue;
+      if (nomJourFerie(dateYMD(d))) continue;
       count++;
     }
     return count;
@@ -1316,7 +1331,7 @@
       if (elFeries && diff > 0) {
         const feriesInclus = [];
         for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
-          const dateStr = d.toISOString().split('T')[0];
+          const dateStr = dateYMD(d);
           const nom = nomJourFerie(dateStr);
           if (nom) feriesInclus.push(nom);
         }
@@ -1419,11 +1434,10 @@
       if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
-      const res = await fetch(url, { headers: HEADERS });
-      const data = await res.json();
+      const rowsToutes = await fetchToutesLesPages(url);
 
       // Filtrer par collaborateur connecté (sécurité, en plus du filtre serveur ci-dessus)
-      const rows = (data.results || []).filter(r => {
+      const rows = rowsToutes.filter(r => {
         const collabs = r['Collaborateurs'] || [];
         return collabs.some(c => c.id === feuilleCollab.id);
       });
@@ -1759,6 +1773,12 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
+  // Date de fin d'un congé avec repli sur la date de début si le champ n'est pas renseigné
+  // (cas d'une demande sur une seule journée saisie sans que ce champ soit rempli, ex. directement dans Baserow).
+  function finConge(r) {
+    return r['Date de fin journée (inclus)'] || r['Date de début'];
+  }
+
   // Répartit une demande de congé (RTT ou autre) semaine par semaine, en ne comptant que les jours
   // ouvrés strictement postérieurs à aujourdHuiStr. Utile pour les demandes qui s'étalent sur plusieurs
   // semaines (ex : 3 semaines de RTT) : sans ça, tout le volume d'heures était affecté à la seule semaine
@@ -1947,9 +1967,8 @@
         return;
       }
 
-      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const dataConges = await resConges.json();
-      const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
+      const congesResultatsRttPerso = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200');
+      const congesCollab = congesResultatsRttPerso.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
 
       const anneeEnCours = new Date().getFullYear();
       const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
@@ -2166,8 +2185,7 @@
       const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const collabs = (await resCollabs.json()).results || [];
 
-      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const conges = (await resConges.json()).results || [];
+      const conges = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200');
 
       const anneeEnCours = new Date().getFullYear();
       const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), null);
@@ -2248,9 +2266,8 @@
   async function loadRTTCollabModal(collabId, collabNom) {
     const container = document.getElementById('modal-rtt-collab-content');
     try {
-      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=' + collabId, { headers: HEADERS });
-      const dataConges = await resConges.json();
-      const congesCollab = (dataConges.results || []).filter(r => (r['Collaborateurs']||[]).some(c => c.id === collabId));
+      const congesCollabToutes = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=' + collabId);
+      const congesCollab = congesCollabToutes.filter(r => (r['Collaborateurs']||[]).some(c => c.id === collabId));
 
       const anneeEnCours = new Date().getFullYear();
       const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), collabId);
@@ -2466,24 +2483,23 @@
     updatePlanningLabel();
 
     const lundi = getLundi(planningDate);
-    const today = new Date().toISOString().split('T')[0];
+    const today = dateYMD(new Date());
     const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
     const jours = [];
     for (let i = 0; i < 5; i++) {
       const j = new Date(lundi); j.setDate(lundi.getDate() + i);
       jours.push(j);
     }
-    const dateDebut = jours[0].toISOString().split('T')[0];
-    const dateFin = jours[4].toISOString().split('T')[0];
+    const dateDebut = dateYMD(jours[0]);
+    const dateFin = dateYMD(jours[4]);
 
     try {
       if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
       // Charger congés
-      const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100`;
-      const resConges = await fetch(urlConges, { headers: HEADERS });
-      const dataConges = await resConges.json();
-      const conges = (dataConges.results || []).filter(r =>
+      const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=200`;
+      const congesResultatsPerso = await fetchToutesLesPages(urlConges);
+      const conges = congesResultatsPerso.filter(r =>
         (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id) && r['Statut']?.value !== 'Refusé'
       );
 
@@ -2520,7 +2536,7 @@
 
       // En-têtes communs
       const thHTML = jours.map((j, i) => {
-        const dateStr = j.toISOString().split('T')[0];
+        const dateStr = dateYMD(j);
         const isToday = dateStr === today;
         const ferie = nomJourFerie(dateStr);
         const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -2532,8 +2548,8 @@
       }).join('');
 
       const mkRow = (byDate, isSaisie) => jours.map(j => {
-        const dateStr = j.toISOString().split('T')[0];
-        const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']);
+        const dateStr = dateYMD(j);
+        const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= finConge(c));
         const ferie = nomJourFerie(dateStr);
         let cellHTML = '';
         if (congeJour) {
@@ -2622,7 +2638,7 @@
         await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${messageActifId}/?user_field_names=true`, {
           method: 'PATCH',
           headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 'Lu': true, 'Date lecture': new Date().toISOString().split('T')[0] })
+          body: JSON.stringify({ 'Lu': true, 'Date lecture': dateYMD(new Date()) })
         });
       } catch(e) {}
       messageActifId = null;
@@ -2767,7 +2783,7 @@
           'Lu': false,
           'Destinataire': String(expediteurId),
           'Expediteur': String(connectedViewId),
-          'Date envoi': new Date().toISOString().split('T')[0]
+          'Date envoi': dateYMD(new Date())
         })
       });
       alert('✅ Réponse envoyée');
@@ -2904,7 +2920,7 @@
             'Lu': false,
             'Destinataire': String(cb.value),
             'Expediteur': String(connectedViewId),
-            'Date envoi': new Date().toISOString().split('T')[0]
+            'Date envoi': dateYMD(new Date())
           })
         })
       ));
@@ -2923,7 +2939,7 @@
       await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
         method: 'POST',
         headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 'Messages': texte.trim(), 'Lu': false, 'Destinataire': String(collabId), 'Expediteur': String(connectedViewId), 'Date envoi': new Date().toISOString().split('T')[0] })
+        body: JSON.stringify({ 'Messages': texte.trim(), 'Lu': false, 'Destinataire': String(collabId), 'Expediteur': String(connectedViewId), 'Date envoi': dateYMD(new Date()) })
       });
       alert(`✅ Message envoyé à ${collabNom}`);
     } catch(e) {
@@ -3539,20 +3555,20 @@
     const lundi = getLundiAdmin(semaineCollectif);
     joursCollectif = [];
     for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); joursCollectif.push(j); }
-    const dateDebut = joursCollectif[0].toISOString().split('T')[0];
-    const dateFin = joursCollectif[4].toISOString().split('T')[0];
-    todayCollectif = new Date().toISOString().split('T')[0];
+    const dateDebut = dateYMD(joursCollectif[0]);
+    const dateFin = dateYMD(joursCollectif[4]);
+    todayCollectif = dateYMD(new Date());
 
     document.getElementById('planning-collectif-loading').style.display = 'block';
     document.getElementById('planning-collectif-grid').innerHTML = '';
 
-    const [resP, resConges, resVeh] = await Promise.all([
+    const [resP, congesResultats, resVeh] = await Promise.all([
       fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200'),
       vehiculesCollectif.length ? Promise.resolve(null) : fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200', { headers: HEADERS })
     ]);
     planningCollectifData = (await resP.json()).results || [];
-    congesCollectifData = ((await resConges.json()).results || []).filter(r => r['Statut']?.value !== 'Refusé');
+    congesCollectifData = congesResultats.filter(r => r['Statut']?.value !== 'Refusé');
     if (resVeh) { vehiculesCollectif = ((await resVeh.json()).results || []).map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id })); }
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
@@ -3613,15 +3629,15 @@
     thC.textContent = 'Chantier (' + chantiersAffiches.length + ')';
     trH.appendChild(thC);
     jours.forEach((j, i) => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       const th = document.createElement('th');
       const ferie = nomJourFerie(dateStr);
       th.style.cssText = 'background:' + (ferie ? '#c0392b' : (dateStr === today ? 'var(--beige)' : 'var(--vert)')) + ';color:#fff;padding:4px 2px;font-size:10px;text-align:center;min-width:70px;position:sticky;top:0;z-index:3';
       const absentsDetail = collaborateursFiltre.filter(c => c.collabId && congesCollectifData.some(cc =>
         (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) &&
-        dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+        dateStr >= cc['Date de début'] && dateStr <= finConge(cc)
       )).map(c => {
-        const cg = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
+        const cg = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
         return { nom: c.nom.split(' ')[0], raison: cg?.['Type de demande']?.value || 'Absence' };
       });
       const absents = absentsDetail;
@@ -3712,7 +3728,7 @@
         tr.appendChild(tdNom);
 
         jours.forEach(j => {
-          const dateStr = j.toISOString().split('T')[0];
+          const dateStr = dateYMD(j);
           const td = document.createElement('td');
           const ferieCell = estJourFerie(dateStr);
           td.style.cssText = 'padding:4px;vertical-align:top;border:1px solid #f0f0f0;border-top:2px solid #e0e0e0;min-height:44px;' + (ferieCell ? 'background:rgba(192,57,43,0.08);' : '') + (isGestAdmin && !isPasseCollectif ? 'cursor:pointer' : '');
@@ -3872,7 +3888,7 @@
   function ouvrirModalCollabCase(chantier, dateStr) {
     const affectesJour = planningCollectifData.filter(p => p['Date'] === dateStr).map(p => (p['Collaborateurs']||p['Collaborateur']||[])[0]?.id).filter(Boolean);
     const collabsDispo = collaborateursFiltre.filter(c => {
-      const absent = congesCollectifData.some(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']);
+      const absent = congesCollectifData.some(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
       return !absent && !affectesJour.includes(c.collabId);
     });
     if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
@@ -4461,16 +4477,16 @@
     // { dateStr: [{nom, raison}, ...] }
     const absentsParJour = {};
     jours.forEach(j => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       absentsParJour[dateStr] = COLLABORATEURS_ADMIN
         .filter(c => c.collabId && congesCollectifData.some(cc =>
           (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
-          dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+          dateStr >= cc['Date de début'] && dateStr <= finConge(cc)
         ))
         .map(c => {
           const cg = congesCollectifData.find(cc =>
             (cc['Collaborateurs'] || []).some(ccc => ccc.id === c.collabId) &&
-            dateStr >= cc['Date de début'] && dateStr <= cc['Date de fin journée (inclus)']
+            dateStr >= cc['Date de début'] && dateStr <= finConge(cc)
           );
           const raison = cg?.['Type de demande']?.value || 'Absence';
           return { nom: c.nom, raison };
@@ -4481,7 +4497,7 @@
     // { chantierNom: { dateStr: { collabs: [...], vehs: [...] } } }
     const chantiersMap = {};
     jours.forEach(j => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       planningCollectifData
         .filter(p => p['Date'] === dateStr)
         .forEach(p => {
@@ -4557,7 +4573,7 @@
     absHdr.alignment = { horizontal: 'center', vertical: 'middle' };
 
     jours.forEach((j, i) => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       const absents = absentsParJour[dateStr] || [];
       const c = ws.getCell(ROW_ABS, 2 + i);
       c.value = absents.length
@@ -4581,7 +4597,7 @@
     hChantier.alignment = { horizontal: 'center', vertical: 'middle' };
 
     jours.forEach((j, i) => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       const ferie = nomJourFerie(dateStr);
       const nbAbs = (absentsParJour[dateStr] || []).length;
       const c = ws.getCell(ROW_HDR, 2 + i);
@@ -4603,7 +4619,7 @@
       // Hauteur dynamique selon max de collaborateurs par case
       let maxLines = 1;
       jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
+        const dateStr = dateYMD(j);
         const entry = chantiersMap[chantierNom]?.[dateStr];
         if (entry) {
           const lines = entry.collabs.length + (entry.vehs.length > 0 ? 1 : 0);
@@ -4620,7 +4636,7 @@
       cNom.border = { left: { style: 'medium', color: { argb: VERT } }, bottom: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
 
       jours.forEach((j, ci) => {
-        const dateStr = j.toISOString().split('T')[0];
+        const dateStr = dateYMD(j);
         const entry = chantiersMap[chantierNom]?.[dateStr];
         const c = ws.getCell(r, 2 + ci);
 
@@ -4669,7 +4685,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Planning_chantiers_' + lundi.toISOString().split('T')[0] + '.xlsx';
+    a.download = 'Planning_chantiers_' + dateYMD(lundi) + '.xlsx';
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -4724,28 +4740,27 @@
       const j = new Date(lundi); j.setDate(lundi.getDate() + i);
       jours.push(j);
     }
-    const dateDebut = jours[0].toISOString().split('T')[0];
-    const dateFin = jours[4].toISOString().split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
+    const dateDebut = dateYMD(jours[0]);
+    const dateFin = dateYMD(jours[4]);
+    const today = dateYMD(new Date());
 
     document.getElementById('planning-admin-loading').style.display = 'block';
     document.getElementById('planning-admin-grid').innerHTML = '';
 
-    const [resP, resConges] = await Promise.all([
+    const [resP, congesResultatsAdmin] = await Promise.all([
       fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200', { headers: HEADERS })
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200')
     ]);
     const dataP = await resP.json();
-    const dataConges = await resConges.json();
     planningAdminData = dataP.results || [];
-    congesAdminData = (dataConges.results || []).filter(r => r['Statut']?.value !== 'Refusé');
+    congesAdminData = congesResultatsAdmin.filter(r => r['Statut']?.value !== 'Refusé');
 
     document.getElementById('planning-admin-loading').style.display = 'none';
 
     const joursNoms = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven'];
     let html = '<thead><tr><th class="col-collab">Collaborateur</th>';
     jours.forEach((j, i) => {
-      const dateStr = j.toISOString().split('T')[0];
+      const dateStr = dateYMD(j);
       const isToday = dateStr === today;
       const ferie = nomJourFerie(dateStr);
       const dateLabel = j.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
@@ -4756,11 +4771,11 @@
     COLLABORATEURS_ADMIN.forEach(collab => {
       html += '<tr><td class="col-collab-cell"><div class="collab-initiales">' + collab.initiales + '</div><div class="collab-name">' + collab.nom.split(' ')[0] + '<br><strong>' + collab.nom.split(' ').slice(1).join(' ') + '</strong></div></td>';
       jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
+        const dateStr = dateYMD(j);
         const ferie = nomJourFerie(dateStr);
         const conge = congesAdminData.find(c =>
           (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+          dateStr >= c['Date de début'] && dateStr <= finConge(c)
         );
         const affs = planningAdminData.filter(p =>
           p['Date'] === dateStr && (p['Collaborateurs'] || []).some(cc => cc.id === collab.collabId)
@@ -4918,10 +4933,10 @@
     COLLABORATEURS_ADMIN.forEach(collab => {
       const row = [collab.nom];
       jours.forEach(j => {
-        const dateStr = j.toISOString().split('T')[0];
+        const dateStr = dateYMD(j);
         const conge = congesAdminData.find(c =>
           (c['Collaborateurs'] || []).some(cc => cc.id === collab.collabId) &&
-          dateStr >= c['Date de début'] && dateStr <= c['Date de fin journée (inclus)']
+          dateStr >= c['Date de début'] && dateStr <= finConge(c)
         );
         if (conge) { row.push('Congé - ' + (conge['Type de demande']?.value || 'Absence')); return; }
         const affs = planningAdminData.filter(p =>
@@ -4937,7 +4952,7 @@
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'Planning_' + lundi.toISOString().split('T')[0] + '.csv';
+    a.href = url; a.download = 'Planning_' + dateYMD(lundi) + '.csv';
     a.click(); URL.revokeObjectURL(url);
   }
 
@@ -5525,9 +5540,8 @@
     const container = document.getElementById('liste-conges-admin');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      congesAdminListCache = (data.results || []).sort((a,b) => {
+      const resultats = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200');
+      congesAdminListCache = resultats.sort((a,b) => {
         const order = {'En attente':0,'Approuvé':1,'Refusé':2};
         return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
       });
@@ -5629,7 +5643,7 @@
         const d2 = new Date(fin + 'T12:00:00');
         const feriesInclus = [];
         for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) {
-          const nom = nomJourFerie(d.toISOString().split('T')[0]);
+          const nom = nomJourFerie(dateYMD(d));
           if (nom) feriesInclus.push(nom);
         }
         if (feriesInclus.length > 0) {
@@ -6384,8 +6398,7 @@
       const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const collabs = (await resCollabs.json()).results || [];
 
-      const resConges = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const conges = (await resConges.json()).results || [];
+      const conges = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200');
 
       const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', aujourdHuiStr, null);
 
@@ -7005,13 +7018,13 @@
         lundi.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
         lundi.setHours(0,0,0,0);
         const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
-        dateDebut = lundi.toISOString().split('T')[0];
-        dateFin = vendredi.toISOString().split('T')[0];
+        dateDebut = dateYMD(lundi);
+        dateFin = dateYMD(vendredi);
         nomFichier = 'analyse_chantiers_semaine_' + dateDebut;
       } else if (periode === 'mois') {
         const y = now.getFullYear(), m = now.getMonth();
-        dateDebut = new Date(y, m, 1).toISOString().split('T')[0];
-        dateFin = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        dateDebut = dateYMD(new Date(y, m, 1));
+        dateFin = dateYMD(new Date(y, m + 1, 0));
         nomFichier = 'analyse_chantiers_mois_' + y + '_' + String(m+1).padStart(2,'0');
       } else if (periode === 'annee') {
         const y = now.getFullYear();
@@ -7021,7 +7034,7 @@
       } else {
         dateDebut = null;
         dateFin = null;
-        nomFichier = 'analyse_chantiers_complet_' + now.toISOString().split('T')[0];
+        nomFichier = 'analyse_chantiers_complet_' + dateYMD(now);
       }
 
       let allRows = [];
@@ -7082,14 +7095,14 @@
         lundi.setHours(0,0,0,0);
         const vendredi = new Date(lundi);
         vendredi.setDate(lundi.getDate() + 4);
-        dateDebut = lundi.toISOString().split('T')[0];
-        dateFin = vendredi.toISOString().split('T')[0];
+        dateDebut = dateYMD(lundi);
+        dateFin = dateYMD(vendredi);
         nomFichier = 'Saisies_semaine_' + dateDebut;
       } else {
         const year = now.getFullYear();
         const month = now.getMonth();
-        dateDebut = new Date(year, month, 1).toISOString().split('T')[0];
-        dateFin = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        dateDebut = dateYMD(new Date(year, month, 1));
+        dateFin = dateYMD(new Date(year, month + 1, 0));
         nomFichier = 'Saisies_mois_' + year + '_' + String(month+1).padStart(2,'0');
       }
       let allRows = [];
@@ -7159,7 +7172,7 @@
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = nom + '_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.href = url; a.download = nom + '_' + dateYMD(new Date()) + '.csv';
       a.click(); URL.revokeObjectURL(url);
     } catch(e) { alert('Erreur export : ' + e.message); }
     finally { btn.textContent = '📥 ' + nom; btn.disabled = false; }
