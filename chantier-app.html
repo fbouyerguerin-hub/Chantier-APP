@@ -1048,7 +1048,8 @@
       loadGestion();
     } else if (nav === 'charge') {
       showPage('page-charge');
-      loadPlanCharge();
+      chargeTabActif = 'affaires';
+      switchChargeTab('affaires');
     } else if (nav === 'messages') {
       showPage('page-messages');
       loadHistoriqueMessages();
@@ -2955,6 +2956,44 @@
     { key: 'Pose',      field: 'Heures Pose',      color: '#6B4EA8', posteCollab: 'Pose' },
   ];
   let chargeDateRef = new Date();
+  let chargeTabActif = 'affaires';
+
+  function switchChargeTab(tab) {
+    chargeTabActif = tab;
+    ['affaires','capacite','suivi'].forEach(t => {
+      const el = document.getElementById('charge-tab-' + t);
+      const btn = document.getElementById('charge-tab-btn-' + t);
+      if (el) el.style.display = t === tab ? '' : 'none';
+      if (btn) {
+        btn.style.color = t === tab ? 'var(--vert)' : '#aaa';
+        btn.style.borderBottomColor = t === tab ? 'var(--vert)' : 'transparent';
+      }
+    });
+    // Afficher/masquer le bouton + Affaire
+    const btnNew = document.getElementById('btn-nouvelle-affaire');
+    if (btnNew) btnNew.style.display = tab === 'affaires' ? '' : 'none';
+    if (tab === 'capacite') loadPlanCharge();
+    if (tab === 'suivi') chargerSuiviAffairesOnglet();
+  }
+
+  async function chargerSuiviAffairesOnglet() {
+    const container = document.getElementById('charge-suivi-content');
+    if (!container) return;
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    // Charger affaires et collabs
+    const [resCollabs, resCharge, resUsers] = await Promise.all([
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+    ]);
+    const allCollabs = (await resCollabs.json()).results || [];
+    const affaires = (await resCharge.json()).results || [];
+    const usersData = (await resUsers.json()).results || [];
+    const inactifsNoms = new Set(usersData.filter(u => u['Actif'] === false).map(u => (u['Nom complet']||'').trim().toLowerCase()).filter(n=>n));
+    const collabs = allCollabs.filter(c => !inactifsNoms.has((c['Nom Complet']||'').trim().toLowerCase()));
+    // Appeler chargerSuiviAffaires avec un conteneur différent
+    await chargerSuiviAffairesAvecContainer(affaires, collabs, container);
+  }
   let chargePosteActif = 'tous';
 
   function filtrerPosteCharge(poste) {
@@ -2989,6 +3028,8 @@
   }
 
   async function loadPlanCharge() {
+    // Charger aussi la liste des affaires dans l'onglet Affaires
+    chargerListeAffaires();
     const container = document.getElementById('charge-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     const annee = chargeDateRef.getFullYear();
@@ -3276,7 +3317,9 @@
         </div>`;
       });
 
-      html += '<div style="font-size:12px;font-weight:700;color:var(--gris);margin:16px 0 8px">📋 Affaires ce mois</div>';
+      // Ne plus afficher la liste des affaires dans l'onglet Capacité
+      // Elle est dans l'onglet Affaires
+      html += ''; // placeholder vide
       const affairesMois = affaires.filter(a => {
         const d = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
         if (!d || d > dateFin) return false;
@@ -3320,8 +3363,8 @@
   }
 
   async function chargerSuiviAffaires(affaires, collabs) {
-    const container = document.getElementById('charge-content');
-    if (!container) return;
+    // Dans le nouvel onglet, on n'affiche plus le suivi dans charge-content
+    return;
 
     // Charger toutes les saisies avec pagination complète (filtrage côté client)
     let allSaisies = [];
@@ -3500,6 +3543,102 @@
     if (!confirm('Supprimer cette affaire du plan de charge ?')) return;
     await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
     loadPlanCharge();
+  }
+
+  async function chargerListeAffaires() {
+    const container = document.getElementById('charge-tab-affaires');
+    if (!container) return;
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const affaires = (await res.json()).results || [];
+      if (!affaires.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucune affaire — cliquez sur + Affaire pour commencer</div>'; return; }
+      let html = '<div style="padding:8px 16px 0">';
+      affaires.sort((a,b) => (a['Date début']||'').localeCompare(b['Date début']||'')).forEach(a => {
+        const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
+        const debut = a['Date début'] || '';
+        const postes = POSTES_CHARGE.filter(p => parseFloat(a[p.field]) > 0).map(p => `<span style="background:${p.color}22;color:${p.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;margin-right:4px">${p.key} : ${a[p.field]}h</span>`).join('');
+        html += `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">${nom}</div>
+              ${debut ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">📅 ${debut}</div>` : ''}
+              <div>${postes}</div>
+            </div>
+            <div style="display:flex;gap:6px;margin-left:8px">
+              <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
+              <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
+            </div>
+          </div>
+        </div>`;
+      });
+      html += '</div>';
+      container.innerHTML = html;
+    } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  // Renommer chargerSuiviAffaires pour accepter un conteneur
+  async function chargerSuiviAffairesAvecContainer(affaires, collabs, container) {
+    // Charger toutes les saisies avec pagination complète
+    let allSaisies = [];
+    let urlSaisies = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200';
+    while (urlSaisies) {
+      const res = await fetch(urlSaisies, { headers: HEADERS });
+      const data = await res.json();
+      allSaisies = allSaisies.concat(data.results || []);
+      urlSaisies = data.next ? data.next.replace('http://', 'https://') : null;
+    }
+    const saisiesParChantier = {};
+    allSaisies.forEach(s => {
+      const cId = (s['Chantiers'] || s['Chantier'] || [])[0]?.id;
+      if (!cId) return;
+      if (!saisiesParChantier[cId]) saisiesParChantier[cId] = [];
+      saisiesParChantier[cId].push(s);
+    });
+
+    let suivi = '<div style="padding:8px 16px 0"><div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:12px">📈 Réel vs Prévu par affaire</div>';
+    suivi += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
+    suivi += '<thead><tr style="background:#f8f8f8"><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd;min-width:140px">Affaire</th><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd">Date début</th>';
+    POSTES_CHARGE.forEach(p => { suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${p.color};border-left:2px solid #eee">${p.key}</th>`; });
+    suivi += '</tr><tr style="background:#fafafa"><th style="padding:4px 8px;border-bottom:1px solid #eee"></th><th style="padding:4px 8px;border-bottom:1px solid #eee"></th>';
+    POSTES_CHARGE.forEach(() => {
+      suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;border-left:2px solid #eee">Prévu</th>';
+      suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Réel</th>';
+      suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Écart</th>';
+    });
+    suivi += '</tr></thead><tbody>';
+
+    affaires.forEach((a, idx) => {
+      const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
+      const chantierId = (a['Chantier']||[])[0]?.id;
+      const dateDebut = a['Date début'] ? String(a['Date début']).split('T')[0] : null;
+      const bgRow = idx % 2 === 0 ? '#fff' : '#fafafa';
+      suivi += `<tr style="background:${bgRow};border-bottom:1px solid #f0f0f0">`;
+      suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom}</td>`;
+      suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateDebut||'—'}</td>`;
+      POSTES_CHARGE.forEach(p => {
+        const prevu = parseFloat(a[p.field]) || 0;
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier']||'') === p.posteCollab);
+        const collabIds = new Set(collabsPoste.map(c => c.id));
+        const saisiesChantier = saisiesParChantier[chantierId] || [];
+        const reel = saisiesChantier.filter(s => {
+          const sCollab = (s['Collaborateur']||[])[0]?.id;
+          const sPoste = (s['Poste']||[])[0]?.value || '';
+          const sDate = s['Date'] ? String(s['Date']).split('T')[0] : null;
+          return (sPoste === p.posteCollab || collabIds.has(sCollab)) && (!dateDebut || sDate >= dateDebut);
+        }).reduce((sum, s) => sum + (parseFloat(s['Heures Normales'])||parseFloat(s['Total Heures'])||0), 0);
+        const reelArrondi = Math.round(reel * 10) / 10;
+        const ecart = Math.round((prevu - reel) * 10) / 10; // positif = il reste des heures
+        const pct = prevu > 0 ? Math.round((reel / prevu) * 100) : null;
+        const couleur = ecart < 0 ? '#c0392b' : ecart < prevu * 0.1 ? '#d99a3d' : '#2D8A4E';
+        suivi += `<td style="padding:8px;text-align:center;border-left:2px solid #eee;color:#555">${prevu > 0 ? prevu + 'h' : '—'}</td>`;
+        suivi += `<td style="padding:8px;text-align:center;font-weight:700">${prevu > 0 ? reelArrondi + 'h' : '—'}</td>`;
+        suivi += `<td style="padding:8px;text-align:center;color:${prevu > 0 ? couleur : '#ddd'};font-weight:700">${prevu > 0 ? (ecart > 0 ? '+' : '') + ecart + 'h' + (pct !== null ? ' (' + pct + '%)' : '') : '—'}</td>`;
+      });
+      suivi += '</tr>';
+    });
+    suivi += '</tbody></table></div></div>';
+    container.innerHTML = suivi;
   }
 
   function toggleSemaine(id) {
@@ -7785,23 +7924,49 @@
 <div id="page-charge" class="page" style="display:none">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">👷 Plan de charge</div>
-    <button onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
+    <button id="btn-nouvelle-affaire" onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
   </div>
-  <!-- Filtres par poste -->
-  <div style="display:flex;gap:6px;margin:0 16px 12px;overflow-x:auto;padding-bottom:2px">
-    <button id="btn-poste-tous" onclick="filtrerPosteCharge('tous')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
-    <button id="btn-poste-etude" onclick="filtrerPosteCharge('Étude')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Étude</button>
-    <button id="btn-poste-fabbois" onclick="filtrerPosteCharge('Fab Bois')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Bois</button>
-    <button id="btn-poste-fabacier" onclick="filtrerPosteCharge('Fab Acier')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Acier</button>
-    <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
+
+  <!-- Sous-onglets -->
+  <div style="display:flex;gap:6px;margin:0 16px 12px;border-bottom:2px solid #eee;padding-bottom:0">
+    <button id="charge-tab-btn-affaires" onclick="switchChargeTab('affaires')"
+      style="padding:8px 16px;border:none;border-bottom:3px solid var(--vert);background:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--vert)">📋 Affaires</button>
+    <button id="charge-tab-btn-capacite" onclick="switchChargeTab('capacite')"
+      style="padding:8px 16px;border:none;border-bottom:3px solid transparent;background:none;font-size:13px;font-weight:700;cursor:pointer;color:#aaa">📊 Capacité</button>
+    <button id="charge-tab-btn-suivi" onclick="switchChargeTab('suivi')"
+      style="padding:8px 16px;border:none;border-bottom:3px solid transparent;background:none;font-size:13px;font-weight:700;cursor:pointer;color:#aaa">📈 Suivi</button>
   </div>
-  <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px">
-    <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
-    <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
-    <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
-  </div>
-  <div id="charge-content" style="padding:0 16px 100px">
+
+  <!-- Sous-onglet Affaires -->
+  <div id="charge-tab-affaires" style="padding:0 16px 100px">
     <div class="feuille-loading">⏳ Chargement…</div>
+  </div>
+
+  <!-- Sous-onglet Capacité -->
+  <div id="charge-tab-capacite" style="display:none">
+    <!-- Filtres par poste -->
+    <div style="display:flex;gap:6px;margin:8px 16px 12px;overflow-x:auto;padding-bottom:2px">
+      <button id="btn-poste-tous" onclick="filtrerPosteCharge('tous')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
+      <button id="btn-poste-etude" onclick="filtrerPosteCharge('Étude')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Étude</button>
+      <button id="btn-poste-fabbois" onclick="filtrerPosteCharge('Fab Bois')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Bois</button>
+      <button id="btn-poste-fabacier" onclick="filtrerPosteCharge('Fab Acier')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Acier</button>
+      <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px">
+      <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
+      <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
+      <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+    </div>
+    <div id="charge-content" style="padding:0 16px 100px">
+      <div class="feuille-loading">⏳ Chargement…</div>
+    </div>
+  </div>
+
+  <!-- Sous-onglet Suivi -->
+  <div id="charge-tab-suivi" style="display:none;padding:0 0 100px">
+    <div id="charge-suivi-content" style="padding:8px 0">
+      <div class="feuille-loading">⏳ Chargement…</div>
+    </div>
   </div>
 </div>
 
