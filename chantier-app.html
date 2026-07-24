@@ -3933,12 +3933,32 @@
       const dateDebutAn = annee + '-01-01';
       const dateFinAn = annee + '-12-31';
 
-      const [resCollabs, resCharge] = await Promise.all([
+      const [resCollabsAll, resCharge, resUsers] = await Promise.all([
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
-      const collabs = (await resCollabs.json()).results || [];
+      const allCollabsGantt = (await resCollabsAll.json()).results || [];
       const affaires = (await resCharge.json()).results || [];
+      const usersDataGantt = (await resUsers.json()).results || [];
+      const inactifsIdsGantt = getInactifsCollabIds(usersDataGantt, allCollabsGantt);
+      const collabs = allCollabsGantt.filter(c => !inactifsIdsGantt.has(String(c.id)));
+
+      // Congés sur toute l'année, pour calculer la capacité par poste/semaine
+      let allCongesGantt = [];
+      let congesUrlGantt = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrlGantt) {
+        const resC = await fetch(congesUrlGantt, { headers: HEADERS });
+        const dataC = await resC.json();
+        allCongesGantt = allCongesGantt.concat(dataC.results || []);
+        congesUrlGantt = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+      const congesValidesGantt = allCongesGantt.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFinAn && f >= dateDebutAn;
+      });
 
       // Semaines de l'année (mêmes règles que l'export annuel par poste)
       const semainesAnnee = [];
@@ -4096,7 +4116,68 @@
         c.value = 'Aucune affaire active cette année.';
         c.font = { name: 'Arial', size: 9, italic: true, color: { argb: GRIS } };
         c.alignment = { horizontal: 'center', vertical: 'middle' };
+        row++;
       }
+
+      // ── Lignes de charge par poste (rouge = charge > capacité cette semaine) ──
+      row++;
+      ws.mergeCells(row, 1, row, NB_COLS);
+      const cSepTitre = ws.getCell(row, 1);
+      cSepTitre.value = 'CHARGE PAR POSTE (rouge = charge > capacité de la semaine)';
+      cSepTitre.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+      cSepTitre.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+      row++;
+
+      POSTES_CHARGE.forEach(p => {
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const posteArgb = 'FF' + p.color.replace('#', '');
+
+        ws.getRow(row).height = 15;
+        const c0 = ws.getCell(row, 1);
+        c0.value = p.key;
+        c0.font = { name: 'Arial', size: 9, bold: true, color: { argb: posteArgb } };
+        c0.border = { left: { style: 'medium', color: { argb: posteArgb } } };
+
+        semainesAnnee.forEach((s, i) => {
+          // Capacité de la semaine (jours fériés + absences déduits, 8h/jour/personne)
+          let capSem = 0;
+          s.jours.forEach(dateStr => {
+            if (estJourFerie(dateStr)) return;
+            let joursAbs = 0;
+            collabsPoste.forEach(c => {
+              const absent = congesValidesGantt.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && dateStr >= d && dateStr <= f;
+                })()
+              );
+              if (absent) joursAbs++;
+            });
+            capSem += (collabsPoste.length - joursAbs) * 8;
+          });
+          capSem = Math.round(capSem);
+
+          // Charge de la semaine (même logique que l'export "Année")
+          let consSem = 0;
+          affairesAnnee.forEach(a => {
+            const per = calculerPeriodesAffaire(a, collabs)[p.key];
+            const heures = parseFloat(a[p.field]) || 0;
+            if (!per.jours || !heures) return;
+            const hParJour = heures / per.jours;
+            s.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+          });
+          consSem = Math.round(consSem);
+
+          const surcharge = consSem > capSem;
+          const c = ws.getCell(row, 2 + i);
+          c.value = consSem > 0 ? consSem + 'h' : '';
+          c.font = { name: 'Arial', size: 7, bold: true, color: { argb: surcharge ? 'FFC0392B' : GRIS } };
+          if (surcharge) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE0DE' } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        row++;
+      });
 
       ws.views = [{ state: 'frozen', xSplit: 1, ySplit: ROW_HDR }];
 
