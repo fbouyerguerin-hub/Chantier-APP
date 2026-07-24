@@ -4436,15 +4436,15 @@
       suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateLivraison||'—'}</td>`;
       POSTES_CHARGE.forEach(p => {
         const prevu = parseFloat(a[p.field]) || 0;
-        const debutPhase = periodes ? periodes[p.key].debut : null;
         const collabsPoste = collabs.filter(c => (c['Poste / Métier']||'') === p.posteCollab);
         const collabIds = new Set(collabsPoste.map(c => c.id));
         const saisiesChantier = saisiesParChantier[chantierId] || [];
+        // Le Réel reflète TOUTES les heures réellement saisies sur ce chantier pour ce poste,
+        // sans se limiter à la fenêtre de date prévisionnelle (qui n'est qu'une projection).
         const reel = saisiesChantier.filter(s => {
           const sCollab = (s['Collaborateur']||[])[0]?.id;
           const sPoste = (s['Poste']||[])[0]?.value || '';
-          const sDate = s['Date'] ? String(s['Date']).split('T')[0] : null;
-          return (sPoste === p.posteCollab || collabIds.has(sCollab)) && (!debutPhase || sDate >= debutPhase);
+          return sPoste === p.posteCollab || collabIds.has(sCollab);
         }).reduce((sum, s) => sum + (parseFloat(s['Heures Normales'])||parseFloat(s['Total Heures'])||0), 0);
         const reelArrondi = Math.round(reel * 10) / 10;
         const ecart = Math.round((prevu - reel) * 10) / 10; // positif = il reste des heures
