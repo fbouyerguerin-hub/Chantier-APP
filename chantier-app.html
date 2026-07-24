@@ -1923,16 +1923,16 @@
         // RTT acquis dès 35h
         semainesCompletes++;
         semainesRtt.add(lundiStr);
+        let heuresSup = 0, surplus = 0;
         if (totalHeures > HEURES_NORMALES_SEMAINE) {
           // Heures sup entre 39h et 42.5h
-          const heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
+          heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
           // Heures en plus au-delà de 42.5h
-          const surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
-          if (heuresSup > 0 || surplus > 0) {
-            heuresSupTotal += heuresSup + surplus;
-            detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus });
-          }
+          surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
+          heuresSupTotal += heuresSup + surplus;
         }
+        // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
+        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus });
       }
       lundi.setDate(lundi.getDate() + 7);
     }
@@ -2081,7 +2081,7 @@
       ` : '';
 
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
-        <div class="rtt-table-title">⚡ Détail des heures supplémentaires</div>
+        <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (+4h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
