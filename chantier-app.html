@@ -3663,6 +3663,455 @@
     }
   }
 
+  // ── EXPORT EXCEL ANNUEL DU PLAN DE CHARGE (charge par semaine) ──
+  async function exportPlanChargeExcelAnnuel() {
+    const btn = document.getElementById('btn-export-charge-annuel');
+    const btnLabelOrig = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Export…'; }
+    try {
+      const annee = chargeDateRef.getFullYear();
+      const pad2 = n => String(n).padStart(2, '0');
+      const moisLabelsCourt = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+      const dateDebutAn = annee + '-01-01';
+      const dateFinAn = annee + '-12-31';
+
+      const [resCollabs, resCharge, resUsers] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabs = (await resCollabs.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+      const usersData = (await resUsers.json()).results || [];
+      const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
+      const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
+
+      // Congés sur toute l'année (et pas juste le mois courant)
+      let allConges = [];
+      let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrl) {
+        const resC = await fetch(congesUrl, { headers: HEADERS });
+        const dataC = await resC.json();
+        allConges = allConges.concat(dataC.results || []);
+        congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+      const congesValides = allConges.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFinAn && f >= dateDebutAn;
+      });
+
+      // Semaines de l'année (lundi-vendredi), en ne gardant que les jours ouvrés de l'année en cours
+      const semainesAnnee = [];
+      let lundiCur = new Date(annee, 0, 1);
+      while (lundiCur.getDay() !== 1) lundiCur.setDate(lundiCur.getDate() - 1);
+      let semNum = 0;
+      while (true) {
+        const lundi = new Date(lundiCur);
+        const vendredi = new Date(lundiCur); vendredi.setDate(lundiCur.getDate() + 4);
+        const lundiStr = dateYMD(lundi);
+        if (lundiStr > dateFinAn) break;
+        const jours = [];
+        for (let i = 0; i < 5; i++) {
+          const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+          const js = dateYMD(j);
+          if (js >= dateDebutAn && js <= dateFinAn) jours.push(js);
+        }
+        if (jours.length > 0) {
+          semNum++;
+          semainesAnnee.push({
+            lundiStr, vendrediStr: dateYMD(vendredi), jours,
+            mois: lundi.getMonth(),
+            label: 'S' + semNum + '\n' + lundi.getDate() + '/' + pad2(lundi.getMonth() + 1)
+          });
+        }
+        lundiCur.setDate(lundiCur.getDate() + 7);
+      }
+
+      const wb = new ExcelJS.Workbook();
+      const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+
+      const VERT = 'FF0B3C1E', GRIS = 'FF494949', BLANC = 'FFFFFFFF';
+      const ROUGE = 'FFC0392B', ORANGE = 'FFE65100', VERTCLAIR = 'FFE8F0E7';
+      const MOIS_BG = ['FFF5F2EE', 'FFEDEAE4']; // alternance claire par mois
+
+      POSTES_CHARGE.forEach(p => {
+        const ws = wb.addWorksheet(p.key);
+        const NB_COLS = 1 + semainesAnnee.length;
+        const posteArgb = 'FF' + p.color.replace('#', '');
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+
+        ws.getColumn(1).width = 32;
+        semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 7; });
+
+        // ── Logo + titre ──
+        ws.getRow(1).height = 8;
+        ws.getRow(2).height = 40;
+        ws.getRow(3).height = 6;
+        ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 170, height: 39 } });
+        for (let c = 1; c <= NB_COLS; c++) {
+          ws.getCell(1, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+          ws.getCell(3, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+        }
+        ws.mergeCells(2, 3, 2, NB_COLS);
+        const titreCell = ws.getCell(2, 3);
+        titreCell.value = 'PLAN DE CHARGE ANNUEL — ' + p.key.toUpperCase() + ' — ' + annee;
+        titreCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: posteArgb } };
+        titreCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+        // ── Ligne mois (fusionnée par mois) ──
+        const ROW_MOIS = 4;
+        ws.getRow(ROW_MOIS).height = 14;
+        ws.getCell(ROW_MOIS, 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+        let iCol = 2;
+        for (let m = 0; m < 12; m++) {
+          const nbSemMois = semainesAnnee.filter(s => s.mois === m).length;
+          if (!nbSemMois) continue;
+          if (nbSemMois > 1) ws.mergeCells(ROW_MOIS, iCol, ROW_MOIS, iCol + nbSemMois - 1);
+          const c = ws.getCell(ROW_MOIS, iCol);
+          c.value = moisLabelsCourt[m];
+          c.font = { name: 'Arial', size: 8, bold: true, color: { argb: GRIS } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MOIS_BG[m % 2] } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          for (let k = 0; k < nbSemMois; k++) {
+            ws.getCell(ROW_MOIS, iCol + k).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MOIS_BG[m % 2] } };
+          }
+          iCol += nbSemMois;
+        }
+
+        // ── En-têtes colonnes (semaines) ──
+        const ROW_HDR = 5;
+        ws.getRow(ROW_HDR).height = 24;
+        const hChantier = ws.getCell(ROW_HDR, 1);
+        hChantier.value = 'Chantier';
+        hChantier.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+        hChantier.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+        hChantier.alignment = { horizontal: 'left', vertical: 'middle' };
+        semainesAnnee.forEach((s, i) => {
+          const c = ws.getCell(ROW_HDR, 2 + i);
+          c.value = s.label;
+          c.font = { name: 'Arial', size: 7, bold: true, color: { argb: BLANC } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+          c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        });
+
+        // ── Capacité / Charge par semaine ──
+        const capSemaineAn = {}, consSemaineAn = {};
+        semainesAnnee.forEach(s => {
+          let capSem = 0;
+          s.jours.forEach(dateStr => {
+            if (estJourFerie(dateStr)) return; // 0h ce jour-là
+            let joursAbs = 0;
+            collabsPoste.forEach(c => {
+              const absent = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && dateStr >= d && dateStr <= f;
+                })()
+              );
+              if (absent) joursAbs++;
+            });
+            capSem += (collabsPoste.length - joursAbs) * 8;
+          });
+          capSemaineAn[s.lundiStr] = Math.round(capSem);
+          consSemaineAn[s.lundiStr] = 0;
+        });
+
+        // ── Affaires actives cette année sur ce poste ──
+        const affairesPoste = affaires.filter(a => {
+          if (!(parseFloat(a[p.field]) > 0)) return false;
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          if (!periodes) return false;
+          const per = periodes[p.key];
+          return per.jours > 0 && per.debut <= dateFinAn && per.fin >= dateDebutAn;
+        }).sort((a, b) => {
+          const perA = calculerPeriodesAffaire(a, collabs)[p.key].debut;
+          const perB = calculerPeriodesAffaire(b, collabs)[p.key].debut;
+          return perA.localeCompare(perB);
+        });
+
+        let row = ROW_HDR + 1;
+        affairesPoste.forEach((a, idx) => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const per = calculerPeriodesAffaire(a, collabs)[p.key];
+          const heures = parseFloat(a[p.field]) || 0;
+          const hParJour = heures / per.jours;
+          const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
+
+          ws.getRow(row).height = 15;
+          const cNom = ws.getCell(row, 1);
+          cNom.value = nom;
+          cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+          cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+          cNom.alignment = { vertical: 'middle' };
+          cNom.border = { left: { style: 'medium', color: { argb: posteArgb } } };
+
+          semainesAnnee.forEach((s, i) => {
+            const hSemaine = s.jours.reduce((sum, dateStr) => {
+              if (dateStr >= per.debut && dateStr <= per.fin) {
+                sum += hParJour;
+                consSemaineAn[s.lundiStr] += hParJour;
+              }
+              return sum;
+            }, 0);
+            const c = ws.getCell(row, 2 + i);
+            c.value = hSemaine > 0 ? Math.round(hSemaine * 10) / 10 : '';
+            c.font = { name: 'Arial', size: 7, bold: true, color: { argb: hSemaine > 0 ? VERT : GRIS } };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: hSemaine > 0 ? VERTCLAIR : bgRow } };
+            c.alignment = { horizontal: 'center', vertical: 'middle' };
+          });
+          row++;
+        });
+
+        if (!affairesPoste.length) {
+          ws.mergeCells(row, 1, row, NB_COLS);
+          const c = ws.getCell(row, 1);
+          c.value = 'Aucune affaire sur ce poste cette année.';
+          c.font = { name: 'Arial', size: 9, italic: true, color: { argb: GRIS } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          row++;
+        }
+
+        // ── Lignes de synthèse ──
+        const ligneIndicAn = (label, argbTxt, argbBg, valeurFn, alerteFn) => {
+          ws.getRow(row).height = 15;
+          const c0 = ws.getCell(row, 1);
+          c0.value = label;
+          c0.font = { name: 'Arial', size: 9, bold: true, color: { argb: argbTxt } };
+          c0.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbBg } };
+          c0.border = { top: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
+          semainesAnnee.forEach((s, i) => {
+            const v = valeurFn(s);
+            const alerte = alerteFn ? alerteFn(s) : false;
+            const c = ws.getCell(row, 2 + i);
+            c.value = v + 'h';
+            c.font = { name: 'Arial', size: 7, bold: true, color: { argb: alerte ? ROUGE : argbTxt } };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbBg } };
+            c.alignment = { horizontal: 'center', vertical: 'middle' };
+            c.border = { top: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
+          });
+          row++;
+        };
+        ligneIndicAn('Capacité (h)', GRIS, 'FFF0F0F0', s => capSemaineAn[s.lundiStr] || 0);
+        ligneIndicAn('Charge (h)', ORANGE, 'FFFFF3E0', s => Math.round(consSemaineAn[s.lundiStr] || 0), s => Math.round(consSemaineAn[s.lundiStr]||0) > (capSemaineAn[s.lundiStr]||0));
+        ligneIndicAn('Disponible (h)', VERT, 'FFF0F7F2', s => Math.round((capSemaineAn[s.lundiStr]||0) - (consSemaineAn[s.lundiStr]||0)), s => ((capSemaineAn[s.lundiStr]||0) - Math.round(consSemaineAn[s.lundiStr]||0)) < 0);
+
+        ws.views = [{ state: 'frozen', xSplit: 1, ySplit: ROW_HDR }];
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const aLink = document.createElement('a');
+      aLink.href = url;
+      aLink.download = 'Plan_de_charge_annuel_' + annee + '.xlsx';
+      aLink.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      console.error(e);
+      alert('❌ Erreur lors de l\'export Excel annuel');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btnLabelOrig; }
+    }
+  }
+
+  // ── EXPORT EXCEL ANNUEL — VUE GANTT (une ligne par affaire, 4 phases colorées) ──
+  async function exportPlanChargeGanttAnnuel() {
+    const btn = document.getElementById('btn-export-charge-gantt');
+    const btnLabelOrig = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Export…'; }
+    try {
+      const annee = chargeDateRef.getFullYear();
+      const pad2 = n => String(n).padStart(2, '0');
+      const moisLabelsCourt = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+      const dateDebutAn = annee + '-01-01';
+      const dateFinAn = annee + '-12-31';
+
+      const [resCollabs, resCharge] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const collabs = (await resCollabs.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+
+      // Semaines de l'année (mêmes règles que l'export annuel par poste)
+      const semainesAnnee = [];
+      let lundiCur = new Date(annee, 0, 1);
+      while (lundiCur.getDay() !== 1) lundiCur.setDate(lundiCur.getDate() - 1);
+      let semNum = 0;
+      while (true) {
+        const lundi = new Date(lundiCur);
+        const vendredi = new Date(lundiCur); vendredi.setDate(lundiCur.getDate() + 4);
+        const lundiStr = dateYMD(lundi);
+        if (lundiStr > dateFinAn) break;
+        const jours = [];
+        for (let i = 0; i < 5; i++) {
+          const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+          const js = dateYMD(j);
+          if (js >= dateDebutAn && js <= dateFinAn) jours.push(js);
+        }
+        if (jours.length > 0) {
+          semNum++;
+          semainesAnnee.push({ lundiStr, vendrediStr: dateYMD(vendredi), jours, mois: lundi.getMonth(),
+            label: 'S' + semNum + '\n' + lundi.getDate() + '/' + pad2(lundi.getMonth() + 1) });
+        }
+        lundiCur.setDate(lundiCur.getDate() + 7);
+      }
+
+      const wb = new ExcelJS.Workbook();
+      const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+      const ws = wb.addWorksheet('Gantt annuel');
+
+      const GRIS = 'FF494949', BLANC = 'FFFFFFFF';
+      const COUL_ETUDE = 'FF1F6AA5', COUL_FABBOIS = 'FF2D8A4E', COUL_FABACIER = 'FF8B6340', COUL_POSE = 'FF6B4EA8';
+      const MOIS_BG = ['FFF5F2EE', 'FFEDEAE4'];
+      const NB_COLS = 1 + semainesAnnee.length;
+
+      ws.getColumn(1).width = 34;
+      semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 6.5; });
+
+      // ── Logo + titre ──
+      ws.getRow(1).height = 8;
+      ws.getRow(2).height = 40;
+      ws.getRow(3).height = 6;
+      ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 170, height: 39 } });
+      for (let c = 1; c <= NB_COLS; c++) {
+        ws.getCell(1, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+        ws.getCell(3, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+      }
+      ws.mergeCells(2, 3, 2, Math.min(NB_COLS, 20));
+      const titreCell = ws.getCell(2, 3);
+      titreCell.value = 'PLAN DE CHARGE ANNUEL — VUE GANTT — ' + annee;
+      titreCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: GRIS } };
+      titreCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+      // ── Légende ──
+      const ROW_LEGENDE = 4;
+      ws.getRow(ROW_LEGENDE).height = 14;
+      const legende = [['Étude', COUL_ETUDE], ['Fab Bois', COUL_FABBOIS], ['Fab Acier', COUL_FABACIER], ['Pose', COUL_POSE]];
+      legende.forEach(([label, couleur], i) => {
+        const c = ws.getCell(ROW_LEGENDE, 2 + i * 3);
+        if (2 + i * 3 + 1 <= NB_COLS) ws.mergeCells(ROW_LEGENDE, 2 + i * 3, ROW_LEGENDE, Math.min(2 + i * 3 + 1, NB_COLS));
+        c.value = '■ ' + label;
+        c.font = { name: 'Arial', size: 8, bold: true, color: { argb: couleur } };
+        c.alignment = { horizontal: 'left', vertical: 'middle' };
+      });
+
+      // ── Ligne mois ──
+      const ROW_MOIS = 5;
+      ws.getRow(ROW_MOIS).height = 14;
+      let iCol = 2;
+      for (let m = 0; m < 12; m++) {
+        const nbSemMois = semainesAnnee.filter(s => s.mois === m).length;
+        if (!nbSemMois) continue;
+        if (nbSemMois > 1) ws.mergeCells(ROW_MOIS, iCol, ROW_MOIS, iCol + nbSemMois - 1);
+        const c = ws.getCell(ROW_MOIS, iCol);
+        c.value = moisLabelsCourt[m];
+        c.font = { name: 'Arial', size: 8, bold: true, color: { argb: GRIS } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+        for (let k = 0; k < nbSemMois; k++) {
+          ws.getCell(ROW_MOIS, iCol + k).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MOIS_BG[m % 2] } };
+        }
+        iCol += nbSemMois;
+      }
+
+      // ── En-têtes semaines ──
+      const ROW_HDR = 6;
+      ws.getRow(ROW_HDR).height = 24;
+      const hChantier = ws.getCell(ROW_HDR, 1);
+      hChantier.value = 'Affaire';
+      hChantier.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+      hChantier.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3C1E' } };
+      hChantier.alignment = { horizontal: 'left', vertical: 'middle' };
+      semainesAnnee.forEach((s, i) => {
+        const c = ws.getCell(ROW_HDR, 2 + i);
+        c.value = s.label;
+        c.font = { name: 'Arial', size: 7, bold: true, color: { argb: BLANC } };
+        c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3C1E' } };
+        c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      });
+
+      // ── Affaires actives cette année (toutes phases confondues) ──
+      const affairesAnnee = affaires.filter(a => {
+        const periodes = calculerPeriodesAffaire(a, collabs);
+        if (!periodes) return false;
+        const debuts = ['Étude','Fab Bois','Fab Acier','Pose'].map(k => periodes[k]).filter(p => p.jours > 0 || p.debut === p.fin);
+        if (!debuts.length) return false;
+        const debutMin = debuts.map(p => p.debut).sort()[0];
+        const finMax = debuts.map(p => p.fin).sort().slice(-1)[0];
+        return debutMin <= dateFinAn && finMax >= dateDebutAn;
+      }).sort((a, b) => (a['Date livraison']||'').localeCompare(b['Date livraison']||''));
+
+      let row = ROW_HDR + 1;
+      const COUL_POSTE = { 'Étude': COUL_ETUDE, 'Fab Bois': COUL_FABBOIS, 'Fab Acier': COUL_FABACIER, 'Pose': COUL_POSE };
+      const CODE_POSTE = { 'Étude': 'É', 'Fab Bois': 'FB', 'Fab Acier': 'FA', 'Pose': 'P' };
+
+      affairesAnnee.forEach((a, idx) => {
+        const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+        const periodes = calculerPeriodesAffaire(a, collabs);
+        const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
+
+        ws.getRow(row).height = 16;
+        const cNom = ws.getCell(row, 1);
+        cNom.value = nom + (a['Date livraison'] ? '  (livr. ' + a['Date livraison'] + ')' : '');
+        cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+        cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+        cNom.alignment = { vertical: 'middle' };
+        cNom.border = { left: { style: 'medium', color: { argb: 'FF0B3C1E' } } };
+
+        semainesAnnee.forEach((s, i) => {
+          // Postes actifs cette semaine pour cette affaire
+          const postesActifs = ['Étude','Fab Bois','Fab Acier','Pose'].filter(k => {
+            const per = periodes[k];
+            if (!(per.jours > 0)) return false;
+            return s.jours.some(j => j >= per.debut && j <= per.fin);
+          });
+          const c = ws.getCell(row, 2 + i);
+          if (postesActifs.length === 1) {
+            c.value = CODE_POSTE[postesActifs[0]];
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COUL_POSTE[postesActifs[0]] } };
+            c.font = { name: 'Arial', size: 7, bold: true, color: { argb: BLANC } };
+          } else if (postesActifs.length > 1) {
+            // Fab Acier + Fab Bois en parallèle : remplissage hachuré combinant les deux couleurs
+            c.value = postesActifs.map(k => CODE_POSTE[k]).join('+');
+            c.fill = { type: 'pattern', pattern: 'lightUp', fgColor: { argb: COUL_POSTE[postesActifs[0]] }, bgColor: { argb: COUL_POSTE[postesActifs[1]] } };
+            c.font = { name: 'Arial', size: 6, bold: true, color: { argb: BLANC } };
+          } else {
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+          }
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        row++;
+      });
+
+      if (!affairesAnnee.length) {
+        ws.mergeCells(row, 1, row, NB_COLS);
+        const c = ws.getCell(row, 1);
+        c.value = 'Aucune affaire active cette année.';
+        c.font = { name: 'Arial', size: 9, italic: true, color: { argb: GRIS } };
+        c.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+
+      ws.views = [{ state: 'frozen', xSplit: 1, ySplit: ROW_HDR }];
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const aLink = document.createElement('a');
+      aLink.href = url;
+      aLink.download = 'Plan_de_charge_Gantt_' + annee + '.xlsx';
+      aLink.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      console.error(e);
+      alert('❌ Erreur lors de l\'export Gantt');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btnLabelOrig; }
+    }
+  }
+
   async function chargerSuiviAffaires(affaires, collabs) {
     // Dans le nouvel onglet, on n'affiche plus le suivi dans charge-content
     return;
@@ -8350,7 +8799,9 @@
       <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
       <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
       <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
-      <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Excel</button>
+      <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Mois</button>
+      <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
+      <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="background:#6B4EA8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt</button>
     </div>
     <div id="charge-content" style="padding:0 16px 100px">
       <div class="feuille-loading">⏳ Chargement…</div>
