@@ -4343,36 +4343,55 @@
     loadPlanCharge();
   }
 
+  let _affairesListeCache = [];
+
   async function chargerListeAffaires() {
-    const container = document.getElementById('charge-tab-affaires');
+    const container = document.getElementById('charge-affaires-liste');
     if (!container) return;
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const affaires = (await res.json()).results || [];
-      if (!affaires.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucune affaire — cliquez sur + Affaire pour commencer</div>'; return; }
-      let html = '<div style="padding:8px 16px 0">';
-      affaires.sort((a,b) => (a['Date livraison']||'').localeCompare(b['Date livraison']||'')).forEach(a => {
-        const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
-        const livraison = a['Date livraison'] || '';
-        const postes = POSTES_CHARGE.filter(p => parseFloat(a[p.field]) > 0).map(p => `<span style="background:${p.color}22;color:${p.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;margin-right:4px">${p.key} : ${a[p.field]}h${parseFloat(a[p.personnesField]) > 0 ? ' (' + a[p.personnesField] + ' pers.)' : ''}</span>`).join('');
-        html += `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div style="flex:1">
-              <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">${nom}</div>
-              ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🚚 Livraison ${livraison}</div>` : ''}
-              <div>${postes}</div>
-            </div>
-            <div style="display:flex;gap:6px;margin-left:8px">
-              <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
-              <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
-            </div>
-          </div>
-        </div>`;
-      });
-      html += '</div>';
-      container.innerHTML = html;
+      _affairesListeCache = (await res.json()).results || [];
+      renderListeAffaires();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  function filtrerListeAffaires(valeur) {
+    renderListeAffaires(valeur);
+  }
+
+  function renderListeAffaires(filtreParam) {
+    const container = document.getElementById('charge-affaires-liste');
+    if (!container) return;
+    if (!_affairesListeCache.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucune affaire — cliquez sur + Affaire pour commencer</div>'; return; }
+    const filtre = (filtreParam !== undefined ? filtreParam : (document.getElementById('charge-affaires-recherche')?.value || '')).toLowerCase().trim();
+    const affaires = _affairesListeCache.filter(a => {
+      if (!filtre) return true;
+      const nom = (a['Chantier']||[])[0]?.value || '';
+      return nom.toLowerCase().includes(filtre);
+    });
+    if (!affaires.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucun chantier ne correspond à cette recherche</div>'; return; }
+    let html = '<div style="padding:8px 0 0">';
+    affaires.sort((a,b) => (a['Date livraison']||'').localeCompare(b['Date livraison']||'')).forEach(a => {
+      const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
+      const livraison = a['Date livraison'] || '';
+      const postes = POSTES_CHARGE.filter(p => parseFloat(a[p.field]) > 0).map(p => `<span style="background:${p.color}22;color:${p.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;margin-right:4px">${p.key} : ${a[p.field]}h${parseFloat(a[p.personnesField]) > 0 ? ' (' + a[p.personnesField] + ' pers.)' : ''}</span>`).join('');
+      html += `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">${nom}</div>
+            ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🚚 Livraison ${livraison}</div>` : ''}
+            <div>${postes}</div>
+          </div>
+          <div style="display:flex;gap:6px;margin-left:8px">
+            <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
+            <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
+          </div>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+    container.innerHTML = html;
   }
 
   // Renommer chargerSuiviAffaires pour accepter un conteneur
@@ -8786,7 +8805,13 @@
 
   <!-- Sous-onglet Affaires -->
   <div id="charge-tab-affaires" style="padding:0 16px 100px">
-    <div class="feuille-loading">⏳ Chargement…</div>
+    <div style="margin:8px 0 4px">
+      <input type="text" id="charge-affaires-recherche" placeholder="🔍 Rechercher un chantier…" oninput="filtrerListeAffaires(this.value)"
+        style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
+    </div>
+    <div id="charge-affaires-liste">
+      <div class="feuille-loading">⏳ Chargement…</div>
+    </div>
   </div>
 
   <!-- Sous-onglet Capacité -->
