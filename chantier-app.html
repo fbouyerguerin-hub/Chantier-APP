@@ -1846,8 +1846,9 @@
   }
 
   // Calcule le nombre d'heures de RTT acquises sur l'année civile en cours :
-  // 4h par semaine où le cumul d'heures normales atteint 42,5h (hors semaine couverte par une absence
-  // bloquante) — même règle que calculerRttEtHeuresSup, via l'ensemble semainesRtt qu'elle retourne.
+  // le nombre d'heures réellement travaillées entre 35h et 39h chaque semaine (plafonné à 4h),
+  // hors semaine couverte par une absence bloquante — même règle que calculerRttEtHeuresSup,
+  // via la Map semainesRtt (lundiStr → heures RTT de cette semaine) qu'elle retourne.
   function calculerDonneesGraphRtt(semainesRtt, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial) {
     const annee = new Date().getFullYear();
     const aujourdHuiStr = dateYMD(new Date());
@@ -1865,7 +1866,7 @@
       const estPassee = vendrediStr <= aujourdHuiStr;
       const estCourante = lundiStr <= aujourdHuiStr && vendrediStr >= aujourdHuiStr;
       if (estPassee || estCourante) {
-        if (semainesRtt && semainesRtt.has(lundiStr)) cumulAcquis += HEURES_RTT_PAR_SEMAINE;
+        if (semainesRtt && semainesRtt.has(lundiStr)) cumulAcquis += semainesRtt.get(lundiStr);
         cumulAcquis += (heuresSupParSemaine[lundiStr] || 0);
       }
       semaines.push({ lundi: lundiStr, index: semaineIndex, cumul: estPassee || estCourante ? cumulAcquis : null, estAujourdhui: estCourante });
@@ -1876,12 +1877,13 @@
   }
 
   // Calcule en une seule passe, pour l'année civile en cours :
-  //  - le nombre d'heures de RTT acquises (4h par semaine où le cumul d'heures normales atteint 42,5h,
-  //    hors semaine couverte par une absence bloquante — congé payé, maladie, sans solde, accident)
+  //  - le nombre d'heures de RTT acquises : le nombre réel d'heures travaillées entre 35h et 39h
+  //    chaque semaine (plafonné à 4h/semaine), hors semaine couverte par une absence bloquante
+  //    (congé payé, maladie, sans solde, accident)
   //  - le cumul d'heures supplémentaires (au-delà de 42,5h/semaine ; les heures entre 39h et 42,5h sont
   //    payées directement et ne sont donc pas comptabilisées dans le cumul)
   // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
-  // cumul réel d'heures de la semaine qui détermine si les 4h de RTT sont acquises (seuil : 35h).
+  // cumul réel d'heures de la semaine qui détermine le nombre d'heures de RTT acquises (seuil : 35h).
   function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId) {
     const annee = new Date().getFullYear();
     const totauxSemaine = {};
@@ -1911,9 +1913,9 @@
     let lundi = new Date(annee, 0, 1);
     while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
 
-    let semainesCompletes = 0, heuresSupTotal = 0;
+    let semainesCompletes = 0, heuresSupTotal = 0, rttTotal = 0;
     const detail = [];
-    const semainesRtt = new Set();
+    const semainesRtt = new Map(); // lundiStr -> heures de RTT réellement acquises cette semaine
     while (lundi.getFullYear() === annee) {
       const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
       const vendrediStr = dateYMD(vendredi);
@@ -1922,9 +1924,11 @@
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
       const totalHeures = totauxSemaine[lundiStr] || 0;
       if (!semaineBloquee && totalHeures >= HEURES_BASE_RTT) {
-        // RTT acquis dès 35h
+        // RTT = nombre d'heures réellement travaillées entre 35h et 39h (pas un forfait fixe)
         semainesCompletes++;
-        semainesRtt.add(lundiStr);
+        const rttSemaine = Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_BASE_RTT;
+        rttTotal += rttSemaine;
+        semainesRtt.set(lundiStr, rttSemaine);
         let heuresSup = 0, surplus = 0;
         if (totalHeures > HEURES_NORMALES_SEMAINE) {
           // Heures sup entre 39h et 42.5h
@@ -1934,12 +1938,12 @@
           heuresSupTotal += heuresSup + surplus;
         }
         // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
-        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus });
+        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus, rttSemaine });
       }
       lundi.setDate(lundi.getDate() + 7);
     }
     detail.sort((a, b) => b.lundi.localeCompare(a.lundi)); // plus récent en premier
-    return { rttAcquis: semainesCompletes * HEURES_RTT_PAR_SEMAINE, heuresSup: { total: heuresSupTotal, detail }, semainesRtt };
+    return { rttAcquis: rttTotal, heuresSup: { total: heuresSupTotal, detail }, semainesRtt };
   }
 
   // Récupère toutes les saisies de temps sur une période (pagination incluse), pour un collaborateur ou tous
@@ -1962,7 +1966,7 @@
 
   // Seuils hebdomadaires :
   //  0 → 35h  : heures normales
-  // 35 → 39h  : génère 4h de RTT par semaine (HEURES_BASE_RTT → HEURES_NORMALES_SEMAINE)
+  // 35 → 39h  : génère de la RTT au prorata des heures réellement travaillées (4h max) (HEURES_BASE_RTT → HEURES_NORMALES_SEMAINE)
   // 39 → 42.5h: heures supplémentaires (HEURES_NORMALES_SEMAINE → HEURES_SEUIL_PAYEES)
   // > 42.5h   : heures en plus (surplus)
   const HEURES_BASE_RTT = 35;          // seuil déclencheur RTT
@@ -2086,14 +2090,14 @@
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
         <div class="rtt-table-wrap">
           <table class="rtt-table">
-            <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (+4h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
+            <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
             <tbody>
               ${heuresSupResult.detail.map(d => {
                 const lundi = new Date(d.lundi + 'T12:00:00');
                 const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
                 const label = lundi.toLocaleDateString('fr-FR') + ' au ' + vendredi.toLocaleDateString('fr-FR');
-                const hRtt = 4; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
-                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">+${hRtt} h RTT</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
               }).join('')}
             </tbody>
           </table>
@@ -2187,7 +2191,7 @@
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
-          <div class="rtt-legende">ℹ️ 4h de RTT acquises par semaine où le cumul d'heures atteint 35h (hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
+          <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
           ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
 
@@ -2365,13 +2369,13 @@
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
         <div class="rtt-table-wrap"><table class="rtt-table">
-          <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (+4h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
+          <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
           <tbody>${heuresSupResult.detail.map(d => {
             const lundi = new Date(d.lundi + 'T12:00:00');
             const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
             const label = lundi.toLocaleDateString('fr-FR') + ' – ' + vendredi.toLocaleDateString('fr-FR');
-            const hRtt = 4; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
-                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">+${hRtt} h RTT</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+            const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '';
 
@@ -2439,7 +2443,7 @@
         </tr>`;
       }).join('');
 
-    area.innerHTML = `<div class="rtt-legende">ℹ️ 4h de RTT acquises par semaine où le cumul d'heures atteint 35h (hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+    area.innerHTML = `<div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
       <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
       (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
         <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
@@ -4562,12 +4566,16 @@
     suivi += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     suivi += '<thead><tr style="background:#f8f8f8"><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd;min-width:140px">Affaire</th><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd">Livraison</th>';
     POSTES_CHARGE.forEach(p => { suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${p.color};border-left:2px solid #eee">${p.key}</th>`; });
+    suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:var(--gris);border-left:2px solid #ccc;background:#f0ede8">TOTAL CHANTIER</th>`;
     suivi += '</tr><tr style="background:#fafafa"><th style="padding:4px 8px;border-bottom:1px solid #eee"></th><th style="padding:4px 8px;border-bottom:1px solid #eee"></th>';
     POSTES_CHARGE.forEach(() => {
       suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;border-left:2px solid #eee">Prévu</th>';
       suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Réel</th>';
       suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Écart</th>';
     });
+    suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;border-left:2px solid #ccc;background:#f0ede8">Prévu</th>`;
+    suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;background:#f0ede8">Réel</th>`;
+    suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;background:#f0ede8">Écart</th>`;
     suivi += '</tr></thead><tbody>';
 
     affaires.forEach((a, idx) => {
@@ -4579,6 +4587,7 @@
       suivi += `<tr style="background:${bgRow};border-bottom:1px solid #f0f0f0">`;
       suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom} <button onclick="afficherDetailSaisiesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" title="Voir toutes les saisies de ce chantier" style="background:#eef5f0;border:none;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;color:var(--vert);vertical-align:middle">📋</button></td>`;
       suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateLivraison||'—'}</td>`;
+      let totalPrevu = 0, totalReel = 0;
       POSTES_CHARGE.forEach(p => {
         const prevu = parseFloat(a[p.field]) || 0;
         const collabsPoste = collabs.filter(c => (c['Poste / Métier']||'') === p.posteCollab);
@@ -4598,7 +4607,17 @@
         suivi += `<td style="padding:8px;text-align:center;border-left:2px solid #eee;color:#555">${prevu > 0 ? prevu + 'h' : '—'}</td>`;
         suivi += `<td style="padding:8px;text-align:center;font-weight:700">${prevu > 0 ? reelArrondi + 'h' : '—'}</td>`;
         suivi += `<td style="padding:8px;text-align:center;color:${prevu > 0 ? couleur : '#ddd'};font-weight:700">${prevu > 0 ? (ecart > 0 ? '+' : '') + ecart + 'h' + (pct !== null ? ' (' + pct + '%)' : '') : '—'}</td>`;
+        totalPrevu += prevu;
+        totalReel += reel;
       });
+      // Colonne TOTAL CHANTIER : somme tous postes confondus, pour une vision globale positive/négative
+      const totalReelArrondi = Math.round(totalReel * 10) / 10;
+      const totalEcart = Math.round((totalPrevu - totalReel) * 10) / 10; // positif = il reste des heures (chantier dans les temps)
+      const totalPct = totalPrevu > 0 ? Math.round((totalReel / totalPrevu) * 100) : null;
+      const totalCouleur = totalEcart < 0 ? '#c0392b' : totalEcart < totalPrevu * 0.1 ? '#d99a3d' : '#2D8A4E';
+      suivi += `<td style="padding:8px;text-align:center;border-left:2px solid #ccc;background:#f7f5f2;color:#555;font-weight:700">${totalPrevu > 0 ? totalPrevu + 'h' : '—'}</td>`;
+      suivi += `<td style="padding:8px;text-align:center;background:#f7f5f2;font-weight:700">${totalPrevu > 0 ? totalReelArrondi + 'h' : '—'}</td>`;
+      suivi += `<td style="padding:8px;text-align:center;background:#f7f5f2;color:${totalPrevu > 0 ? totalCouleur : '#ddd'};font-weight:800">${totalPrevu > 0 ? (totalEcart > 0 ? '+' : '') + totalEcart + 'h' + (totalPct !== null ? ' (' + totalPct + '%)' : '') : '—'}</td>`;
       suivi += '</tr>';
     });
     suivi += '</tbody></table></div></div>';
