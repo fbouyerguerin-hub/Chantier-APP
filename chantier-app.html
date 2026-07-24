@@ -2541,19 +2541,24 @@
       ]);
 
       const planRows = (await resPlan.json()).results || [];
-      // Véhicules par date (lignes sans collaborateur)
-      const byDateVehicules = {};
+      // Véhicules par date + chantier (lignes sans collaborateur), pour ne montrer un véhicule
+      // qu'aux collaborateurs réellement affectés à CE chantier ce jour-là
+      const byDateVehicules = {}; // clé: "date|chantierId"
       planRows.filter(r => !(r['Collaborateurs'] || []).length && (r['Véhicule'] || []).length).forEach(r => {
         const d = r['Date'];
-        if (!byDateVehicules[d]) byDateVehicules[d] = [];
-        (r['Véhicule'] || []).forEach(v => { if (!byDateVehicules[d].includes(v.value)) byDateVehicules[d].push(v.value); });
+        const chId = (r['Chantier'] || [])[0]?.id;
+        if (!d || !chId) return;
+        const cle = d + '|' + chId;
+        if (!byDateVehicules[cle]) byDateVehicules[cle] = [];
+        (r['Véhicule'] || []).forEach(v => { if (!byDateVehicules[cle].includes(v.value)) byDateVehicules[cle].push(v.value); });
       });
       planRows.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
         const d = r['Date'];
         if (!byDatePlanning[d]) byDatePlanning[d] = [];
         const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
         const heuresEstimees = estimerHeuresPeriode(d, periode);
-        byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', notes: r['Notes'] || '', periode, heures: heuresEstimees });
+        const chantierId = (r['Chantier'] || [])[0]?.id;
+        byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', chantierId, notes: r['Notes'] || '', periode, heures: heuresEstimees });
       });
 
       (await resSaisies.json()).results?.forEach(r => {
@@ -2583,23 +2588,20 @@
         if (congeJour) {
           cellHTML = `<div class="planning-cell-conge">${labelAbsence(congeJour['Type de demande']?.value)}</div>`;
         } else if (byDate[dateStr]?.length > 0) {
-          const vehs = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
-          const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.join(' · ')}</div>` : '';
-          cellHTML = vehHTML + byDate[dateStr].map(r =>
-            `<div class="planning-cell-chantier">🏗 ${r.chantier}
+          cellHTML = byDate[dateStr].map(r => {
+            // Le véhicule ne s'affiche que s'il est associé à CE chantier précis, ce jour-là
+            const vehs = (!isSaisie && r.chantierId) ? (byDateVehicules[dateStr + '|' + r.chantierId] || []) : [];
+            const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.join(' · ')}</div>` : '';
+            return `${vehHTML}<div class="planning-cell-chantier">🏗 ${r.chantier}
               ${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}
               ${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}
               ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
-            </div>`
-          ).join('');
+            </div>`;
+          }).join('');
         } else if (ferie) {
-          const vehsFerie = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
-          cellHTML = (vehsFerie.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehsFerie.join(' · ')}</div>` : '') + `<div class="planning-cell-ferie">🔴 Férié</div>`;
+          cellHTML = `<div class="planning-cell-ferie">🔴 Férié</div>`;
         } else {
-          const vehsVide = !isSaisie ? (byDateVehicules[dateStr] || []) : [];
-          cellHTML = vehsVide.length
-            ? `<div style="font-size:9px;font-weight:700;color:var(--vert)">🚐 ${vehsVide.join(' · ')}</div>`
-            : `<div class="planning-cell-vide">—</div>`;
+          cellHTML = `<div class="planning-cell-vide">—</div>`;
         }
         return `<td${ferie ? ' class="td-ferie"' : ''}>${cellHTML}</td>`;
       }).join('');
