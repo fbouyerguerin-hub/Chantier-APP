@@ -4395,6 +4395,69 @@
   }
 
   // Renommer chargerSuiviAffaires pour accepter un conteneur
+  let _suiviSaisiesParChantierCache = {};
+
+  // Affiche, dans une fenêtre modale, le détail de toutes les saisies de temps réalisées sur un chantier
+  function afficherDetailSaisiesChantier(chantierId, nomChantier) {
+    const saisies = (_suiviSaisiesParChantierCache[chantierId] || []).slice()
+      .sort((a, b) => (b['Date'] || '').localeCompare(a['Date'] || ''));
+
+    let ancien = document.getElementById('modal-detail-saisies');
+    if (ancien) ancien.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'modal-detail-saisies';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+    const lignes = saisies.length ? saisies.map(s => {
+      const date = s['Date'] ? String(s['Date']).split('T')[0] : '—';
+      const collab = (s['Collaborateur'] || [])[0]?.value || '—';
+      const poste = (s['Poste'] || [])[0]?.value || '—';
+      const phase = (s['Type de taches'] || [])[0]?.value || '—';
+      const sousPhase = (s['Sous Taches'] || [])[0]?.value || '—';
+      const commentaire = s['Notes'] || '';
+      const heures = parseFloat(s['Heures Normales']) || parseFloat(s['Total Heures']) || 0;
+      return `<tr style="border-bottom:1px solid #f0f0f0">
+        <td style="padding:6px 8px;font-size:11px;color:#555">${date}</td>
+        <td style="padding:6px 8px;font-size:11px;font-weight:600;color:var(--gris)">${collab}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#888">${poste}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#888">${phase}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#aaa">${sousPhase}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#666;max-width:160px;white-space:normal">${commentaire ? '📝 ' + commentaire : ''}</td>
+        <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--vert);text-align:right">${heures}h</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="7" style="padding:16px;text-align:center;color:#aaa;font-size:12px">Aucune saisie trouvée pour ce chantier</td></tr>`;
+
+    const totalHeures = saisies.reduce((sum, s) => sum + (parseFloat(s['Heures Normales']) || parseFloat(s['Total Heures']) || 0), 0);
+
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 18px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--gris)">📋 Saisies — ${nomChantier}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px">${saisies.length} saisie${saisies.length > 1 ? 's' : ''} · ${Math.round(totalHeures * 10) / 10}h au total</div>
+          </div>
+          <button onclick="document.getElementById('modal-detail-saisies').remove()" style="background:#f5f0eb;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">✕</button>
+        </div>
+        <div style="overflow-y:auto;flex:1">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:#f8f8f8;position:sticky;top:0">
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Date</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Collaborateur</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Poste</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Phase</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Sous-phase</th>
+              <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888">Commentaire</th>
+              <th style="padding:6px 8px;text-align:right;font-size:10px;color:#888">Heures</th>
+            </tr></thead>
+            <tbody>${lignes}</tbody>
+          </table>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+  }
+
   async function chargerSuiviAffairesAvecContainer(affaires, collabs, container) {
     // Charger toutes les saisies avec pagination complète
     let allSaisies = [];
@@ -4412,6 +4475,7 @@
       if (!saisiesParChantier[cId]) saisiesParChantier[cId] = [];
       saisiesParChantier[cId].push(s);
     });
+    _suiviSaisiesParChantierCache = saisiesParChantier;
 
     let suivi = '<div style="padding:8px 16px 0"><div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:12px">📈 Réel vs Prévu par affaire</div>';
     suivi += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
@@ -4432,7 +4496,7 @@
       const periodes = calculerPeriodesAffaire(a, collabs);
       const bgRow = idx % 2 === 0 ? '#fff' : '#fafafa';
       suivi += `<tr style="background:${bgRow};border-bottom:1px solid #f0f0f0">`;
-      suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom}</td>`;
+      suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom} <button onclick="afficherDetailSaisiesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" title="Voir toutes les saisies de ce chantier" style="background:#eef5f0;border:none;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;color:var(--vert);vertical-align:middle">📋</button></td>`;
       suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateLivraison||'—'}</td>`;
       POSTES_CHARGE.forEach(p => {
         const prevu = parseFloat(a[p.field]) || 0;
