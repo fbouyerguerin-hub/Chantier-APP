@@ -2987,52 +2987,63 @@
 
   // Calcule, pour une affaire donnée, les périodes [début, fin] de chaque phase
   // en remontant depuis la Date livraison (fin de chantier) :
-  //   Pose se termine à la livraison → Fab Acier + Fab Bois se terminent au début de la Pose (en parallèle)
-  //   → Étude se termine au début de la plus longue des deux Fab.
-  // Le nombre de semaines de chaque phase dépend des heures prévues et du nombre de personnes
-  // affectées à l'affaire sur ce poste (champ "Personnes ..."), avec repli sur l'effectif total
-  // du poste si ce champ n'est pas renseigné.
+  //   Pose se termine à la livraison → Fab Acier + Fab Bois se terminent la veille ouvrée du début de la Pose (en parallèle)
+  //   → Étude se termine la veille ouvrée du début de la plus longue des deux Fab.
+  // La durée de chaque phase est calculée en JOURS OUVRÉS (et non en semaines entières), pour que le
+  // délai soit le plus court possible compte tenu des heures prévues et du nombre de personnes affectées
+  // à l'affaire sur ce poste (champ "Personnes ..."), avec repli sur l'effectif total du poste si ce champ
+  // n'est pas renseigné. Capacité retenue : 7,8h/jour/personne (39h/semaine ÷ 5 jours).
   function calculerPeriodesAffaire(a, collabs) {
     const dateLivraison = a['Date livraison'] ? String(a['Date livraison']).split('T')[0] : null;
     if (!dateLivraison) return null;
-    const capHebdo = (posteKey) => {
+    const capJour = (posteKey) => {
       const p = POSTES_CHARGE.find(pp => pp.key === posteKey);
       const personnes = parseFloat(a[p.personnesField]) || 0;
-      if (personnes > 0) return personnes * 39;
+      if (personnes > 0) return personnes * 8;
       const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
-      return (collabsPoste.length * 39) || 39;
+      return (collabsPoste.length * 8) || 8;
     };
-    const nbSemaines = (posteKey) => {
+    const nbJours = (posteKey) => {
       const p = POSTES_CHARGE.find(pp => pp.key === posteKey);
       const heures = parseFloat(a[p.field]) || 0;
       if (!heures) return 0;
-      return Math.ceil(heures / capHebdo(posteKey));
+      return Math.ceil(heures / capJour(posteKey));
     };
-    const reculer = (dateStr, semaines) => {
+    // Recule de nbJours jours OUVRÉS (lun-ven) par rapport à dateStr (dateStr exclue du décompte)
+    const reculerJoursOuvres = (dateStr, jours) => {
       const d = new Date(dateStr + 'T12:00:00');
-      d.setDate(d.getDate() - semaines * 7);
+      let restant = jours;
+      while (restant > 0) {
+        d.setDate(d.getDate() - 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) restant--;
+      }
       return dateYMD(d);
     };
+    // Point de départ d'une phase de durée `jours` se terminant (dernier jour inclus) à `finStr`
+    const debutDe = (finStr, jours) => jours > 0 ? reculerJoursOuvres(finStr, jours - 1) : finStr;
+    // Veille ouvrée de dateStr (pour enchaîner une phase juste avant une autre, sans chevauchement)
+    const veilleOuvree = (dateStr) => reculerJoursOuvres(dateStr, 1);
 
-    const semPose = nbSemaines('Pose');
+    const joursPose = nbJours('Pose');
     const finPose = dateLivraison;
-    const debutPose = reculer(finPose, semPose);
+    const debutPose = debutDe(finPose, joursPose);
 
-    const semFabAcier = nbSemaines('Fab Acier');
-    const semFabBois = nbSemaines('Fab Bois');
-    const finFab = debutPose;
-    const debutFabAcier = reculer(finFab, semFabAcier);
-    const debutFabBois = reculer(finFab, semFabBois);
+    const finFab = veilleOuvree(debutPose);
+    const joursFabAcier = nbJours('Fab Acier');
+    const joursFabBois = nbJours('Fab Bois');
+    const debutFabAcier = debutDe(finFab, joursFabAcier);
+    const debutFabBois = debutDe(finFab, joursFabBois);
 
-    const finEtude = debutFabAcier < debutFabBois ? debutFabAcier : debutFabBois;
-    const semEtude = nbSemaines('Étude');
-    const debutEtude = reculer(finEtude, semEtude);
+    const finEtude = veilleOuvree(debutFabAcier < debutFabBois ? debutFabAcier : debutFabBois);
+    const joursEtude = nbJours('Étude');
+    const debutEtude = debutDe(finEtude, joursEtude);
 
     return {
-      'Pose':      { debut: debutPose,     fin: finPose,   semaines: semPose },
-      'Fab Acier': { debut: debutFabAcier, fin: finFab,     semaines: semFabAcier },
-      'Fab Bois':  { debut: debutFabBois,  fin: finFab,     semaines: semFabBois },
-      'Étude':     { debut: debutEtude,    fin: finEtude,   semaines: semEtude },
+      'Pose':      { debut: debutPose,     fin: finPose,   jours: joursPose,     semaines: joursPose },
+      'Fab Acier': { debut: debutFabAcier, fin: finFab,     jours: joursFabAcier, semaines: joursFabAcier },
+      'Fab Bois':  { debut: debutFabBois,  fin: finFab,     jours: joursFabBois,  semaines: joursFabBois },
+      'Étude':     { debut: debutEtude,    fin: finEtude,   jours: joursEtude,    semaines: joursEtude },
     };
   }
 
@@ -3117,6 +3128,7 @@
     const pad2 = n => String(n).padStart(2, '0');
     const dateDebut = annee + '-' + pad2(mois + 1) + '-01';
     const dateFin = annee + '-' + pad2(mois + 1) + '-' + pad2(new Date(annee, mois + 1, 0).getDate());
+    const todayStrCharge = dateYMD(new Date());
     try {
       const [resCollabs, resCharge, resUsers] = await Promise.all([
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
@@ -3163,14 +3175,17 @@
         const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
         let joursAbsentTotal = 0;
         const detail = collabsPoste.map(c => {
-          let joursAbsC = 0;
           const absences = congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id));
+          // Un collaborateur ne peut être absent qu'une fois par jour : on déduplique via un Set de dates,
+          // même si plusieurs demandes (doublon, amendement...) se chevauchent sur les mêmes jours.
+          const joursAbsSet = new Set();
           absences.forEach(abs => {
             const d = abs['Date de début'] ? String(abs['Date de début']).split('T')[0] : null;
             const f = abs['Date de fin journée (inclus)'] ? String(abs['Date de fin journée (inclus)']).split('T')[0] : d;
             if (!d) return;
-            joursOuvres.forEach(j => { if (j >= d && j <= f) joursAbsC++; });
+            joursOuvres.forEach(j => { if (j >= d && j <= f) joursAbsSet.add(j); });
           });
+          const joursAbsC = joursAbsSet.size;
           joursAbsentTotal += joursAbsC;
           return {
             nom: c['Nom Complet'] || c['Nom complet'] || '?',
@@ -3180,7 +3195,7 @@
           };
         });
         detailsCollabs[p.key] = detail;
-        capacites[p.key] = Math.round((collabsPoste.length * nbJours - joursAbsentTotal) * 7.8);
+        capacites[p.key] = Math.round((collabsPoste.length * nbJours - joursAbsentTotal) * 8);
 
         // Heures consommées ce mois
         let total = 0;
@@ -3202,75 +3217,60 @@
         consommes[p.key] = Math.round(total);
       });
 
-      // Calculer les semaines du mois
-      const semaines = [];
-      let lundiCur = new Date(annee, mois, 1);
-      while (lundiCur.getDay() !== 1) lundiCur.setDate(lundiCur.getDate() - 1);
-      while (true) {
-        const lundi = new Date(lundiCur);
-        const vendredi = new Date(lundiCur); vendredi.setDate(lundiCur.getDate() + 4);
-        const lundiStr = dateYMD(lundi);
-        const vendrediStr = dateYMD(vendredi);
-        if (lundiStr > dateFin) break;
-        // Jours ouvrés de cette semaine dans le mois
-        const joursSemine = [];
-        for (let i = 0; i < 5; i++) {
-          const j = new Date(lundi); j.setDate(lundi.getDate() + i);
-          const js = dateYMD(j);
-          if (js >= dateDebut && js <= dateFin) joursSemine.push(js);
-        }
-        // N'inclure la semaine que si elle a au moins un jour dans le mois
-        if (joursSemine.length > 0) {
-          semaines.push({ lundiStr, vendrediStr, jours: joursSemine,
-            label: lundi.getDate() + '/' + pad2(lundi.getMonth()+1) + '→' + vendredi.getDate() + '/' + pad2(vendredi.getMonth()+1) });
-        }
-        lundiCur.setDate(lundiCur.getDate() + 7);
-      }
+      // Colonnes = un jour ouvré par colonne (au lieu d'une semaine)
+      const jourColonnes = joursOuvres.map(js => {
+        const d = new Date(js + 'T12:00:00');
+        const joursNomsCourt = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+        return { dateStr: js, estLundi: d.getDay() === 1,
+          label: joursNomsCourt[d.getDay()] + ' ' + d.getDate() + '/' + pad2(d.getMonth()+1) };
+      });
 
-      // Capacité par poste par semaine
-      const capSemaine = {}; // capSemaine[posteKey][lundiStr]
+      // Capacité par poste par jour
+      const capJour = {}; // capJour[posteKey][dateStr]
       POSTES_CHARGE.forEach(p => {
-        capSemaine[p.key] = {};
+        capJour[p.key] = {};
         const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
-        semaines.forEach(sem => {
+        jourColonnes.forEach(jc => {
           let joursAbs = 0;
           collabsPoste.forEach(c => {
-            congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id)).forEach(abs => {
-              const d = abs['Date de début'] ? String(abs['Date de début']).split('T')[0] : null;
-              const f = abs['Date de fin journée (inclus)'] ? String(abs['Date de fin journée (inclus)']).split('T')[0] : d;
-              if (!d) return;
-              sem.jours.forEach(j => { if (j >= d && j <= f) joursAbs++; });
-            });
+            const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+              (() => {
+                const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                return d && jc.dateStr >= d && jc.dateStr <= f;
+              })()
+            );
+            if (absentCeJour) joursAbs++;
           });
-          capSemaine[p.key][sem.lundiStr] = Math.round((collabsPoste.length * sem.jours.length - joursAbs) * 7.8);
+          capJour[p.key][jc.dateStr] = Math.round((collabsPoste.length - joursAbs) * 8);
         });
       });
 
-      // Consommation par poste par semaine
-      const consSemaine = {}; // consSemaine[posteKey][lundiStr]
+      // Consommation par poste par jour
+      const consJour = {}; // consJour[posteKey][dateStr]
       POSTES_CHARGE.forEach(p => {
-        consSemaine[p.key] = {};
-        semaines.forEach(sem => { consSemaine[p.key][sem.lundiStr] = 0; });
+        consJour[p.key] = {};
+        jourColonnes.forEach(jc => { consJour[p.key][jc.dateStr] = 0; });
         affaires.forEach(a => {
           const periodes = calculerPeriodesAffaire(a, collabs);
           if (!periodes) return;
           const per = periodes[p.key];
           const heures = parseFloat(a[p.field]) || 0;
-          if (!heures || !per.semaines) return;
+          if (!heures || !per.jours) return;
           const dateA = per.debut, finAStr = per.fin;
-          // Répartir les heures sur les semaines couvertes
-          const semainesCouvertes = semaines.filter(s => s.vendrediStr >= dateA && s.lundiStr <= finAStr);
-          if (!semainesCouvertes.length) return;
-          const hParSemaine = heures / Math.max(semainesCouvertes.length, 1);
-          semainesCouvertes.forEach(s => {
-            if (consSemaine[p.key][s.lundiStr] !== undefined)
-              consSemaine[p.key][s.lundiStr] += hParSemaine;
+          // Répartir les heures sur les jours ouvrés couverts (dans le mois affiché)
+          const joursCouverts = jourColonnes.filter(jc => jc.dateStr >= dateA && jc.dateStr <= finAStr);
+          if (!joursCouverts.length) return;
+          const hParJour = heures / Math.max(joursCouverts.length, 1);
+          joursCouverts.forEach(jc => {
+            if (consJour[p.key][jc.dateStr] !== undefined)
+              consJour[p.key][jc.dateStr] += hParJour;
           });
         });
         // Arrondir
-        semaines.forEach(s => {
-          if (consSemaine[p.key][s.lundiStr] !== undefined)
-            consSemaine[p.key][s.lundiStr] = Math.round(consSemaine[p.key][s.lundiStr]);
+        jourColonnes.forEach(jc => {
+          if (consJour[p.key][jc.dateStr] !== undefined)
+            consJour[p.key][jc.dateStr] = Math.round(consJour[p.key][jc.dateStr]);
         });
       });
 
@@ -3280,17 +3280,17 @@
       let html = '';
       postesAffiches.forEach(p => {
         const detail = detailsCollabs[p.key] || [];
-        // Chantiers par semaine pour ce poste
-        const chantiersParSemaine = {};
-        semaines.forEach(s => {
-          chantiersParSemaine[s.lundiStr] = affaires
+        // Chantiers par jour pour ce poste
+        const chantiersParJour = {};
+        jourColonnes.forEach(jc => {
+          chantiersParJour[jc.dateStr] = affaires
             .filter(a => {
               if (!parseFloat(a[p.field])) return false;
               const periodes = calculerPeriodesAffaire(a, collabs);
               if (!periodes) return false;
               const per = periodes[p.key];
-              if (!per.semaines) return false;
-              return s.vendrediStr >= per.debut && s.lundiStr <= per.fin;
+              if (!per.jours) return false;
+              return jc.dateStr >= per.debut && jc.dateStr <= per.fin;
             })
             .map(a => (a['Chantier'] || [])[0]?.value || 'Sans nom');
         });
@@ -3310,9 +3310,11 @@
           absencesParCollab[c.nom] = absDetail;
         });
 
+        const bordureSemaine = jc => jc.estLundi ? 'border-left:2px solid #ddd' : 'border-left:1px solid #f0f0f0';
+
         const detailHtml = detail.length ? `
           <tr>
-            <td style="padding:6px 8px;font-size:11px;color:#555;vertical-align:top">
+            <td style="padding:6px 8px;font-size:11px;color:#555;vertical-align:top;position:sticky;left:0;background:#fff;z-index:1">
               <details>
                 <summary style="cursor:pointer;font-weight:600;color:var(--gris);font-size:11px;list-style:none;display:flex;align-items:center;gap:4px">
                   <span>▶</span> Ressources (${detail.length})
@@ -3328,13 +3330,13 @@
                 </div>
               </details>
             </td>
-            ${semaines.map(s => {
-              const chantiers = chantiersParSemaine[s.lundiStr] || [];
-              return `<td style="padding:6px 8px;vertical-align:top;font-size:10px;border-left:1px solid #f0f0f0">
-                ${chantiers.length ? chantiers.map(ch => `<div style="background:#e8f0e7;border-radius:4px;padding:3px 6px;margin-bottom:3px;color:#0B3C1E;font-weight:600;font-size:10px;word-break:break-word;white-space:normal;min-width:80px">${ch}</div>`).join('') : '<span style="color:#ddd">—</span>'}
+            ${jourColonnes.map(jc => {
+              const chantiers = chantiersParJour[jc.dateStr] || [];
+              return `<td style="padding:4px 5px;vertical-align:top;font-size:9px;${bordureSemaine(jc)}">
+                ${chantiers.length ? chantiers.map(ch => `<div style="background:#e8f0e7;border-radius:4px;padding:2px 4px;margin-bottom:2px;color:#0B3C1E;font-weight:600;font-size:9px;word-break:break-word;white-space:normal;min-width:52px">${ch}</div>`).join('') : '<span style="color:#ddd">—</span>'}
               </td>`;
             }).join('')}
-          </tr>` : `<tr><td colspan="${semaines.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucun collaborateur affecté</td></tr>`;
+          </tr>` : `<tr><td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucun collaborateur affecté</td></tr>`;
 
         html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.06);overflow:hidden">
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
@@ -3344,35 +3346,35 @@
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:140px">Ressources / Chantiers</th>
-                ${semaines.map(s => `<th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:110px">${s.label}</th>`).join('')}
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:140px;position:sticky;left:0;background:#f8f8f8;z-index:2">Ressources / Chantiers</th>
+                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : 'transparent'};font-weight:700;white-space:nowrap;min-width:52px;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
               ${detailHtml}
               <tr style="background:#f0f0f0;border-top:2px solid #e0e0e0">
-                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris)">Capacité (h)</td>
-                ${semaines.map(s => {
-                  const cap = capSemaine[p.key][s.lundiStr] || 0;
-                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:var(--gris)">${cap}h</td>`;
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris);position:sticky;left:0;background:#f0f0f0;z-index:1">Capacité (h)</td>
+                ${jourColonnes.map(jc => {
+                  const cap = capJour[p.key][jc.dateStr] || 0;
+                  return `<td style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:var(--gris);${bordureSemaine(jc)}">${cap}h</td>`;
                 }).join('')}
               </tr>
               <tr style="background:#fff3e0;border-top:1px solid #ffe0b2">
-                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#e65100">Charge (h)</td>
-                ${semaines.map(s => {
-                  const cap = capSemaine[p.key][s.lundiStr] || 0;
-                  const cons = consSemaine[p.key][s.lundiStr] || 0;
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#e65100;position:sticky;left:0;background:#fff3e0;z-index:1">Charge (h)</td>
+                ${jourColonnes.map(jc => {
+                  const cap = capJour[p.key][jc.dateStr] || 0;
+                  const cons = consJour[p.key][jc.dateStr] || 0;
                   const surcharge = cons > cap;
-                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:${surcharge ? '#c0392b' : '#e65100'}">${cons}h${surcharge ? ' ⚠️' : ''}</td>`;
+                  return `<td style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:${surcharge ? '#c0392b' : '#e65100'};${bordureSemaine(jc)}">${cons}h${surcharge ? ' ⚠️' : ''}</td>`;
                 }).join('')}
               </tr>
               <tr style="border-top:1px solid #e0f2e9">
-                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#2D8A4E">Disponible (h)</td>
-                ${semaines.map(s => {
-                  const cap = capSemaine[p.key][s.lundiStr] || 0;
-                  const cons = consSemaine[p.key][s.lundiStr] || 0;
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#2D8A4E;position:sticky;left:0;background:#fff;z-index:1">Disponible (h)</td>
+                ${jourColonnes.map(jc => {
+                  const cap = capJour[p.key][jc.dateStr] || 0;
+                  const cons = consJour[p.key][jc.dateStr] || 0;
                   const dispo = cap - cons;
-                  return `<td style="padding:6px 8px;text-align:center;font-size:11px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'}">${dispo}h</td>`;
+                  return `<td style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'};${bordureSemaine(jc)}">${dispo}h</td>`;
                 }).join('')}
               </tr>
             </tbody>
@@ -3426,6 +3428,226 @@
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
       console.error(e);
+    }
+  }
+
+  // ── EXPORT EXCEL DU PLAN DE CHARGE (mensuel) ──
+  async function exportPlanChargeExcel() {
+    const btn = document.getElementById('btn-export-charge');
+    const btnLabelOrig = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Export…'; }
+    try {
+      const annee = chargeDateRef.getFullYear();
+      const mois = chargeDateRef.getMonth();
+      const moisLabels = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+      const pad2 = n => String(n).padStart(2, '0');
+      const dateDebut = annee + '-' + pad2(mois + 1) + '-01';
+      const dateFin = annee + '-' + pad2(mois + 1) + '-' + pad2(new Date(annee, mois + 1, 0).getDate());
+
+      const [resCollabs, resCharge, resUsers] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabs = (await resCollabs.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+      const usersData = (await resUsers.json()).results || [];
+      const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
+      const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
+
+      let allConges = [];
+      let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrl) {
+        const resC = await fetch(congesUrl, { headers: HEADERS });
+        const dataC = await resC.json();
+        allConges = allConges.concat(dataC.results || []);
+        congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+      const congesValides = allConges.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFin && f >= dateDebut;
+      });
+
+      // Jours ouvrés du mois
+      const joursOuvresExp = [];
+      const cur = new Date(annee, mois, 1);
+      while (cur.getMonth() === mois) {
+        const day = cur.getDay();
+        if (day !== 0 && day !== 6) joursOuvresExp.push(dateYMD(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      const joursNomsCourt = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+      const jourColonnesExp = joursOuvresExp.map(js => {
+        const d = new Date(js + 'T12:00:00');
+        return { dateStr: js, estLundi: d.getDay() === 1, jourNum: d.getDate(),
+          label: joursNomsCourt[d.getDay()] + ' ' + d.getDate() + '/' + pad2(d.getMonth()+1) };
+      });
+
+      const wb = new ExcelJS.Workbook();
+      const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+
+      const VERT = 'FF0B3C1E', BEIGE = 'FFA28A6E', GRIS = 'FF494949', BLANC = 'FFFFFFFF';
+      const ROUGE = 'FFC0392B', ORANGE = 'FFE65100', VERTCLAIR = 'FFE8F0E7';
+
+      POSTES_CHARGE.forEach(p => {
+        const ws = wb.addWorksheet(p.key);
+        const NB_COLS = 1 + jourColonnesExp.length;
+        const posteArgb = 'FF' + p.color.replace('#', '');
+
+        ws.getColumn(1).width = 32;
+        jourColonnesExp.forEach((_, i) => { ws.getColumn(2 + i).width = 9; });
+
+        // ── Logo + titre ──
+        ws.getRow(1).height = 8;
+        ws.getRow(2).height = 40;
+        ws.getRow(3).height = 6;
+        ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 170, height: 39 } });
+        for (let c = 1; c <= NB_COLS; c++) {
+          ws.getCell(1, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+          ws.getCell(3, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+        }
+        ws.mergeCells(2, 3, 2, NB_COLS);
+        const titreCell = ws.getCell(2, 3);
+        titreCell.value = 'PLAN DE CHARGE — ' + p.key.toUpperCase() + ' — ' + moisLabels[mois] + ' ' + annee;
+        titreCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: posteArgb } };
+        titreCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+        // ── En-têtes colonnes (jours) ──
+        const ROW_HDR = 4;
+        ws.getRow(ROW_HDR).height = 20;
+        const hChantier = ws.getCell(ROW_HDR, 1);
+        hChantier.value = 'Chantier';
+        hChantier.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+        hChantier.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+        hChantier.alignment = { horizontal: 'left', vertical: 'middle' };
+        jourColonnesExp.forEach((jc, i) => {
+          const c = ws.getCell(ROW_HDR, 2 + i);
+          c.value = jc.label;
+          c.font = { name: 'Arial', size: 8, bold: true, color: { argb: BLANC } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          c.border = { left: { style: jc.estLundi ? 'medium' : 'thin', color: { argb: jc.estLundi ? GRIS : 'FFD0C8BE' } } };
+        });
+
+        // ── Lignes affaires (une par affaire ayant des heures ce poste, active ce mois) ──
+        const affairesPoste = affaires.filter(a => {
+          if (!(parseFloat(a[p.field]) > 0)) return false;
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          if (!periodes) return false;
+          const per = periodes[p.key];
+          return per.jours > 0 && per.debut <= dateFin && per.fin >= dateDebut;
+        }).sort((a, b) => {
+          const perA = calculerPeriodesAffaire(a, collabs)[p.key].debut;
+          const perB = calculerPeriodesAffaire(b, collabs)[p.key].debut;
+          return perA.localeCompare(perB);
+        });
+
+        let row = ROW_HDR + 1;
+        affairesPoste.forEach((a, idx) => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          const per = periodes[p.key];
+          const heures = parseFloat(a[p.field]) || 0;
+          const joursCouverts = jourColonnesExp.filter(jc => jc.dateStr >= per.debut && jc.dateStr <= per.fin);
+          const hParJour = heures / Math.max(joursCouverts.length, 1);
+          const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
+
+          ws.getRow(row).height = 16;
+          const cNom = ws.getCell(row, 1);
+          cNom.value = nom;
+          cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+          cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+          cNom.alignment = { vertical: 'middle' };
+          cNom.border = { left: { style: 'medium', color: { argb: posteArgb } } };
+
+          jourColonnesExp.forEach((jc, i) => {
+            const actif = jc.dateStr >= per.debut && jc.dateStr <= per.fin;
+            const c = ws.getCell(row, 2 + i);
+            c.value = actif ? Math.round(hParJour * 10) / 10 : '';
+            c.font = { name: 'Arial', size: 8, bold: true, color: { argb: actif ? VERT : GRIS } };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: actif ? VERTCLAIR : bgRow } };
+            c.alignment = { horizontal: 'center', vertical: 'middle' };
+            c.border = { left: { style: jc.estLundi ? 'medium' : 'thin', color: { argb: jc.estLundi ? GRIS : 'FFEAE5DE' } } };
+          });
+          row++;
+        });
+
+        if (!affairesPoste.length) {
+          ws.mergeCells(row, 1, row, NB_COLS);
+          const c = ws.getCell(row, 1);
+          c.value = 'Aucune affaire sur ce poste ce mois-ci.';
+          c.font = { name: 'Arial', size: 9, italic: true, color: { argb: GRIS } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          row++;
+        }
+
+        // ── Capacité / Charge / Disponible par jour ──
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const capJourExp = {}, consJourExp = {};
+        jourColonnesExp.forEach(jc => {
+          let joursAbs = 0;
+          collabsPoste.forEach(c => {
+            const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+              (() => {
+                const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                return d && jc.dateStr >= d && jc.dateStr <= f;
+              })()
+            );
+            if (absentCeJour) joursAbs++;
+          });
+          capJourExp[jc.dateStr] = Math.round((collabsPoste.length - joursAbs) * 8);
+          let cons = 0;
+          affairesPoste.forEach(a => {
+            const per = calculerPeriodesAffaire(a, collabs)[p.key];
+            const heures = parseFloat(a[p.field]) || 0;
+            const joursCouverts = jourColonnesExp.filter(j => j.dateStr >= per.debut && j.dateStr <= per.fin);
+            if (jc.dateStr >= per.debut && jc.dateStr <= per.fin) cons += heures / Math.max(joursCouverts.length, 1);
+          });
+          consJourExp[jc.dateStr] = Math.round(cons);
+        });
+
+        const ligneIndic = (label, argbTxt, argbBg, valeurFn, alerteFn) => {
+          ws.getRow(row).height = 16;
+          const c0 = ws.getCell(row, 1);
+          c0.value = label;
+          c0.font = { name: 'Arial', size: 9, bold: true, color: { argb: argbTxt } };
+          c0.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbBg } };
+          c0.border = { top: { style: 'thin', color: { argb: 'FFD0C8BE' } } };
+          jourColonnesExp.forEach((jc, i) => {
+            const v = valeurFn(jc);
+            const alerte = alerteFn ? alerteFn(jc) : false;
+            const c = ws.getCell(row, 2 + i);
+            c.value = v + 'h';
+            c.font = { name: 'Arial', size: 8, bold: true, color: { argb: alerte ? ROUGE : argbTxt } };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbBg } };
+            c.alignment = { horizontal: 'center', vertical: 'middle' };
+            c.border = { top: { style: 'thin', color: { argb: 'FFD0C8BE' } }, left: { style: jc.estLundi ? 'medium' : 'thin', color: { argb: jc.estLundi ? GRIS : 'FFEAE5DE' } } };
+          });
+          row++;
+        };
+        ligneIndic('Capacité (h)', GRIS, 'FFF0F0F0', jc => capJourExp[jc.dateStr] || 0);
+        ligneIndic('Charge (h)', ORANGE, 'FFFFF3E0', jc => consJourExp[jc.dateStr] || 0, jc => (consJourExp[jc.dateStr]||0) > (capJourExp[jc.dateStr]||0));
+        ligneIndic('Disponible (h)', VERT, 'FFF0F7F2', jc => (capJourExp[jc.dateStr]||0) - (consJourExp[jc.dateStr]||0), jc => ((capJourExp[jc.dateStr]||0) - (consJourExp[jc.dateStr]||0)) < 0);
+
+        ws.views = [{ state: 'frozen', xSplit: 1, ySplit: ROW_HDR }];
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const aLink = document.createElement('a');
+      aLink.href = url;
+      aLink.download = 'Plan_de_charge_' + annee + '-' + pad2(mois + 1) + '.xlsx';
+      aLink.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      console.error(e);
+      alert('❌ Erreur lors de l\'export Excel');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btnLabelOrig; }
     }
   }
 
@@ -3619,8 +3841,8 @@
     el.innerHTML = ['Étude','Fab Bois','Fab Acier','Pose'].map(k => {
       const p = periodes[k];
       const poste = POSTES_CHARGE.find(pp => pp.key === k);
-      if (!p.semaines) return `<div style="color:#ccc">${k} : —</div>`;
-      return `<div><span style="color:${poste.color};font-weight:700">${k}</span> : ${fmt(p.debut)} → ${fmt(p.fin)} <span style="color:#aaa">(${p.semaines} sem.)</span></div>`;
+      if (!p.jours) return `<div style="color:#ccc">${k} : —</div>`;
+      return `<div><span style="color:${poste.color};font-weight:700">${k}</span> : ${fmt(p.debut)} → ${fmt(p.fin)} <span style="color:#aaa">(${p.jours} j. ouvré${p.jours>1?'s':''})</span></div>`;
     }).join('');
   }
 
@@ -8116,6 +8338,7 @@
       <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
       <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
       <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+      <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Excel</button>
     </div>
     <div id="charge-content" style="padding:0 16px 100px">
       <div class="feuille-loading">⏳ Chargement…</div>
