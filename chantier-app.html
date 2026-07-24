@@ -736,6 +736,23 @@
   };
   const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
 
+  // Détermine les IDs de collaborateurs (table Collaborateurs) dont l'utilisateur lié est inactif.
+  // Le lien fiable est le champ "Vue ID" (Utilisateurs) = ID de la ligne Collaborateur correspondante.
+  // On garde un repli par nom (trim + minuscule) pour les fiches Utilisateur sans Vue ID renseigné.
+  function getInactifsCollabIds(usersData, allCollabs) {
+    const inactifs = usersData.filter(u => u['Actif'] === false);
+    const idsParVueId = new Set(inactifs.map(u => String(u['Vue ID'] || '').trim()).filter(v => v));
+    const nomsInactifs = new Set(
+      inactifs.map(u => (u['Nom complet'] || '').trim().toLowerCase()).filter(n => n)
+    );
+    const idsParNom = new Set(
+      (allCollabs || [])
+        .filter(c => nomsInactifs.has((c['Nom Complet'] || '').trim().toLowerCase()))
+        .map(c => String(c.id))
+    );
+    return new Set([...idsParVueId, ...idsParNom]);
+  }
+
   // Baserow limite chaque page d'API à 200 lignes (paramètre size). Au-delà, il faut boucler sur `next`
   // pour récupérer toutes les lignes, sans quoi les entrées les plus récentes (ID les plus élevés)
   // peuvent être silencieusement absentes des résultats.
@@ -3050,8 +3067,8 @@
     const allCollabs = (await resCollabs.json()).results || [];
     const affaires = (await resCharge.json()).results || [];
     const usersData = (await resUsers.json()).results || [];
-    const inactifsNoms = new Set(usersData.filter(u => u['Actif'] === false).map(u => (u['Nom complet']||'').trim().toLowerCase()).filter(n=>n));
-    const collabs = allCollabs.filter(c => !inactifsNoms.has((c['Nom Complet']||'').trim().toLowerCase()));
+    const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
+    const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
     // Appeler chargerSuiviAffaires avec un conteneur différent
     await chargerSuiviAffairesAvecContainer(affaires, collabs, container);
   }
@@ -3108,12 +3125,10 @@
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
       const affaires = (await resCharge.json()).results || [];
-      // Exclure les collaborateurs dont l'utilisateur est inactif (par Nom complet)
+      // Exclure les collaborateurs dont l'utilisateur est inactif (via Vue ID, repli par nom)
       const usersData = (await resUsers.json()).results || [];
-      const inactifsNoms = new Set(
-        usersData.filter(u => u['Actif'] === false).map(u => (u['Nom complet'] || '').trim().toLowerCase()).filter(n => n)
-      );
-      const collabs = allCollabs.filter(c => !inactifsNoms.has((c['Nom Complet'] || '').trim().toLowerCase()));
+      const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
+      const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
 
       // Pagination complète pour les congés
       let allConges = [];
@@ -3759,6 +3774,7 @@
   let filtreChantierCollectif = '';
   let filtreStatutCollectif = 'En cours'; // 'En cours' | 'En pause' | 'Terminé' | 'tous'
   let collaborateursFiltre = []; // liste filtrée selon poste
+  let inactifsCollabIdsCollectif = new Set(); // IDs collaborateurs inactifs, pour masquer aussi leurs affectations déjà enregistrées
   let postesSelectionnes = new Set(['Pose', 'Apprenti']);
   let postesDisponibles = [];
   let collabsSelectionnesParJour = {};
@@ -3769,10 +3785,19 @@
   let dataChantiersCached = null;
 
   async function loadPlanningCollectif() {
-    // Charger collaborateurs
-    const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+    // Charger collaborateurs, en excluant ceux dont l'utilisateur est inactif
+    const [resC, resUsersActif] = await Promise.all([
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+    ]);
     const postes = new Set();
-    COLLABORATEURS_ADMIN = ((await resC.json()).results || []).map(r => {
+    const allCollabsCollectif = (await resC.json()).results || [];
+    const usersDataActif = (await resUsersActif.json()).results || [];
+    const inactifsIdsCollectif = getInactifsCollabIds(usersDataActif, allCollabsCollectif);
+    inactifsCollabIdsCollectif = inactifsIdsCollectif;
+    COLLABORATEURS_ADMIN = allCollabsCollectif
+      .filter(r => !inactifsIdsCollectif.has(String(r.id)))
+      .map(r => {
       const nom = r['Nom Complet'] || '';
       const poste = r['Poste / Métier'] || '';
       if (poste) postes.add(poste);
@@ -3992,7 +4017,13 @@
             td.appendChild(vehBloc);
           }
           // Collaborateurs
-          const affCollab = affs.filter(p => (p['Collaborateurs']||p['Collaborateur']||[]).length > 0);
+          const affCollab = affs.filter(p => {
+            const linked = (p['Collaborateurs']||p['Collaborateur']||[]);
+            if (!linked.length) return false;
+            const cId = linked[0]?.id;
+            if (cId && inactifsCollabIdsCollectif.has(String(cId))) return false;
+            return true;
+          });
           affCollab.forEach(aff => {
             const collabNom = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.value || '—';
             const isSaisie = aff.isSaisie === true;
@@ -4947,18 +4978,24 @@
 
   async function loadPlanningAdmin() {
     if (!collabsAdminLoaded) {
-      const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const [resC, resUsersActifAdmin] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
       const dataC = await resC.json();
+      const usersDataActifAdmin = (await resUsersActifAdmin.json()).results || [];
+      const inactifsIdsAdmin = getInactifsCollabIds(usersDataActifAdmin, dataC.results || []);
+      const collabsActifs = (dataC.results || []).filter(r => !inactifsIdsAdmin.has(String(r.id)));
       // Reconstruire COLLABORATEURS_ADMIN si vide
       if (!COLLABORATEURS_ADMIN.length) {
-        COLLABORATEURS_ADMIN = (dataC.results || []).map(r => {
+        COLLABORATEURS_ADMIN = collabsActifs.map(r => {
           const nom = r['Nom Complet'] || '';
           const parts = nom.trim().split(' ');
           const initiales = parts.map(p => p[0]).join('').toUpperCase().slice(0, 2);
           return { nom, initiales, collabId: r.id, poste: r['Poste / Métier'] || '' };
         });
       } else {
-        (dataC.results || []).forEach(r => {
+        collabsActifs.forEach(r => {
           const c = COLLABORATEURS_ADMIN.find(c => c.nom === r['Nom Complet']);
           if (c) c.collabId = r.id;
         });
