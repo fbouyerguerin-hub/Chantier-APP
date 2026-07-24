@@ -3264,10 +3264,12 @@
           const heures = parseFloat(a[p.field]) || 0;
           if (!heures || !per.jours) return;
           const dateA = per.debut, finAStr = per.fin;
-          // Répartir les heures sur les jours ouvrés couverts (dans le mois affiché)
+          // Répartir les heures sur la durée RÉELLE de la phase (per.jours), même si elle déborde
+          // sur un autre mois : on n'affiche que la portion visible dans le mois courant, mais chaque
+          // jour reçoit heures/per.jours, pas heures/(jours visibles seulement).
           const joursCouverts = jourColonnes.filter(jc => jc.dateStr >= dateA && jc.dateStr <= finAStr);
           if (!joursCouverts.length) return;
-          const hParJour = heures / Math.max(joursCouverts.length, 1);
+          const hParJour = heures / per.jours;
           joursCouverts.forEach(jc => {
             if (consJour[p.key][jc.dateStr] !== undefined)
               consJour[p.key][jc.dateStr] += hParJour;
@@ -3557,7 +3559,7 @@
           const per = periodes[p.key];
           const heures = parseFloat(a[p.field]) || 0;
           const joursCouverts = jourColonnesExp.filter(jc => jc.dateStr >= per.debut && jc.dateStr <= per.fin);
-          const hParJour = heures / Math.max(joursCouverts.length, 1);
+          const hParJour = heures / per.jours;
           const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
 
           ws.getRow(row).height = 16;
@@ -3613,8 +3615,8 @@
           affairesPoste.forEach(a => {
             const per = calculerPeriodesAffaire(a, collabs)[p.key];
             const heures = parseFloat(a[p.field]) || 0;
-            const joursCouverts = jourColonnesExp.filter(j => j.dateStr >= per.debut && j.dateStr <= per.fin);
-            if (jc.dateStr >= per.debut && jc.dateStr <= per.fin) cons += heures / Math.max(joursCouverts.length, 1);
+            if (!per.jours) return;
+            if (jc.dateStr >= per.debut && jc.dateStr <= per.fin) cons += heures / per.jours;
           });
           consJourExp[jc.dateStr] = Math.round(cons);
         });
