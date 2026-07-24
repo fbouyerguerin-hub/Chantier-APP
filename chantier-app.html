@@ -3016,7 +3016,7 @@
       while (restant > 0) {
         d.setDate(d.getDate() - 1);
         const dow = d.getDay();
-        if (dow !== 0 && dow !== 6) restant--;
+        if (dow !== 0 && dow !== 6 && !estJourFerie(dateYMD(d))) restant--;
       }
       return dateYMD(d);
     };
@@ -3185,6 +3185,8 @@
             if (!d) return;
             joursOuvres.forEach(j => { if (j >= d && j <= f) joursAbsSet.add(j); });
           });
+          // Jours fériés : décomptés de la capacité comme une absence, pour tout le monde
+          joursOuvres.forEach(j => { if (estJourFerie(j)) joursAbsSet.add(j); });
           const joursAbsC = joursAbsSet.size;
           joursAbsentTotal += joursAbsC;
           return {
@@ -3232,16 +3234,20 @@
         const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
         jourColonnes.forEach(jc => {
           let joursAbs = 0;
-          collabsPoste.forEach(c => {
-            const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
-              (() => {
-                const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
-                const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
-                return d && jc.dateStr >= d && jc.dateStr <= f;
-              })()
-            );
-            if (absentCeJour) joursAbs++;
-          });
+          if (estJourFerie(jc.dateStr)) {
+            joursAbs = collabsPoste.length; // jour férié : personne ne travaille, capacité à 0
+          } else {
+            collabsPoste.forEach(c => {
+              const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && jc.dateStr >= d && jc.dateStr <= f;
+                })()
+              );
+              if (absentCeJour) joursAbs++;
+            });
+          }
           capJour[p.key][jc.dateStr] = Math.round((collabsPoste.length - joursAbs) * 8);
         });
       });
@@ -3588,16 +3594,20 @@
         const capJourExp = {}, consJourExp = {};
         jourColonnesExp.forEach(jc => {
           let joursAbs = 0;
-          collabsPoste.forEach(c => {
-            const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
-              (() => {
-                const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
-                const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
-                return d && jc.dateStr >= d && jc.dateStr <= f;
-              })()
-            );
-            if (absentCeJour) joursAbs++;
-          });
+          if (estJourFerie(jc.dateStr)) {
+            joursAbs = collabsPoste.length;
+          } else {
+            collabsPoste.forEach(c => {
+              const absentCeJour = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && jc.dateStr >= d && jc.dateStr <= f;
+                })()
+              );
+              if (absentCeJour) joursAbs++;
+            });
+          }
           capJourExp[jc.dateStr] = Math.round((collabsPoste.length - joursAbs) * 8);
           let cons = 0;
           affairesPoste.forEach(a => {
