@@ -667,7 +667,7 @@
       }
 
       errEl.style.display = 'none';
-      seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '');
+      seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '', user['Accès Plan de charge'] === true);
 
     } catch(e) {
       errEl.textContent = '❌ Erreur de connexion. Réessayez.';
@@ -688,11 +688,13 @@
   let connectedCollab = null;
   let connectedViewId = null;
   let connectedDroit = '';
+  let connectedAccesCharge = false; // accès dédié "Plan de charge" pour un simple Utilisateur, sans le passer Gestionnaire
 
-  function seConnecter(nom, viewId, droit) {
+  function seConnecter(nom, viewId, droit, accesChargeSupp) {
     connectedCollab = nom;
     connectedViewId = viewId;
     connectedDroit = droit || '';
+    connectedAccesCharge = !!accesChargeSupp;
     // Chercher dans les données déjà chargées (case-insensitive)
     const collabData = tableData['Collaborateur'] || [];
     const nomLower = nom.trim().toLowerCase();
@@ -713,7 +715,7 @@
     const navGestion = document.getElementById('nav-gestion');
     if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navCharge = document.getElementById('nav-charge');
-    if (navCharge) navCharge.style.display = (droit === 'Administrateur' || droit === 'Gestionnaire') ? '' : 'none';
+    if (navCharge) navCharge.style.display = (droit === 'Administrateur' || droit === 'Gestionnaire' || connectedAccesCharge) ? '' : 'none';
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
     const tabRttAdmin = document.getElementById('tab-rtt-admin');
