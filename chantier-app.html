@@ -1152,6 +1152,10 @@
       todayMonday.setDate(todayD.getDate() - ((todayD.getDay() + 6) % 7));
       const lundiSemaineEnCours = dateYMD(todayMonday);
 
+      // Le bouton "Signer" ne doit apparaître que si la semaine en cours n'est pas déjà signée
+      const btnSigner = document.getElementById('btn-signer-semaine');
+      if (btnSigner) btnSigner.style.display = semainesSignees.has(lundiSemaineEnCours) ? 'none' : '';
+
       if (!rows.length) {
         document.getElementById('feuille-content').innerHTML = `<div class="feuille-empty"><div class="feuille-empty-icon">📭</div><p>Aucune saisie pour ${feuilleCollab.value} ce mois-ci.</p></div>`;
         return;
@@ -1432,6 +1436,9 @@
 
       if (!res.ok) { const err = await res.json(); throw new Error(JSON.stringify(err)); }
 
+      // Avertir les administrateurs de la nouvelle demande d'absence
+      notifierAdminsNouvelleDemande(payload['Type de demande'], payload['Date de début'], payload['Date de fin journée (inclus)'], feuilleCollab ? feuilleCollab.value : connectedCollab);
+
       // Reset formulaire
       typeCongesSelected = null;
       document.getElementById('val-type-conges').textContent = 'Sélectionner…';
@@ -1451,6 +1458,44 @@
       alert('Erreur : ' + e.message);
     } finally {
       btn.disabled = false; btn.textContent = '📤 Envoyer la demande';
+    }
+  }
+
+  // Envoie un message d'avertissement à tous les administrateurs actifs
+  // lorsqu'un collaborateur soumet une nouvelle demande d'absence.
+  async function notifierAdminsNouvelleDemande(typeDemande, debut, fin, collabNom) {
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
+      if (!res.ok) return;
+      const data = await res.json();
+      const admins = (data.results || []).filter(u => {
+        const droit = u['Droit']?.value || u['Droit'] || '';
+        return droit === 'Administrateur'
+          && u['Actif'] !== false
+          && u['Vue ID']
+          && String(u['Vue ID']).trim() !== String(connectedViewId || '').trim();
+      });
+      if (!admins.length) return;
+
+      const fmtDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+      const periode = (fin && fin !== debut) ? `du ${fmtDate(debut)} au ${fmtDate(fin)}` : `le ${fmtDate(debut)}`;
+      const texte = `⚠️ Nouvelle demande d'absence de ${collabNom || 'un collaborateur'} : ${typeDemande} ${periode}. À valider dans Gestion > Demandes de congés.`;
+
+      await Promise.all(admins.map(a =>
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
+          method: 'POST',
+          headers: HEADERS,
+          body: JSON.stringify({
+            'Messages': texte,
+            'Lu': false,
+            'Destinataire': String(a['Vue ID']),
+            'Expediteur': String(connectedViewId || ''),
+            'Date envoi': dateYMD(new Date())
+          })
+        })
+      ));
+    } catch(e) {
+      console.error('Erreur notification administrateurs :', e);
     }
   }
 
@@ -4793,6 +4838,8 @@
       document.getElementById('modal-signature').style.display = 'none';
       const bandeau = document.getElementById('bandeau-signature');
       if (bandeau) bandeau.remove();
+      const btnSigner = document.getElementById('btn-signer-semaine');
+      if (btnSigner) btnSigner.style.display = 'none';
       showPage('page-form');
       alert('✅ Signature enregistrée. Bonne journée !');
     } catch(e) {
@@ -9602,7 +9649,7 @@
     <span class="mois-label" id="mois-label">—</span>
     <button class="mois-btn" onclick="changerMois(1)">›</button>
     <button class="btn-print" onclick="imprimerPage('feuille')">🖨️</button>
-    <button onclick="ouvrirSignatureSemaineEnCours()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-left:6px">✍️ Signer</button>
+    <button id="btn-signer-semaine" onclick="ouvrirSignatureSemaineEnCours()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-left:6px">✍️ Signer</button>
   </div>
 
   <div class="print-title" id="print-title-feuille"></div>
