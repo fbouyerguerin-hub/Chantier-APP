@@ -976,6 +976,13 @@
   }
 
   async function submitForm() {
+    // Blocage tant que la semaine précédente n'est pas signée
+    const lundiBloquant = await semaineRequiseNonSignee();
+    if (lundiBloquant) {
+      afficherModalSignature(lundiBloquant);
+      return;
+    }
+
     // Vérification des champs obligatoires
     if (!document.getElementById('field-date').value) { alert('⚠️ Veuillez sélectionner une date.'); return; }
     if (!globalSelected.Vehicules) { alert('⚠️ Veuillez sélectionner un véhicule.'); return; }
@@ -1051,7 +1058,13 @@
     const navBtn = document.getElementById('nav-' + nav);
     if (navBtn) navBtn.classList.add('active');
     if (nav === 'saisie') {
-      showPage('page-form');
+      semaineRequiseNonSignee().then(lundiBloquant => {
+        if (lundiBloquant) {
+          afficherModalSignature(lundiBloquant);
+        } else {
+          showPage('page-form');
+        }
+      });
     } else if (nav === 'feuille') {
       showPage('page-feuille');
       renderFeuilleContent();
@@ -4707,8 +4720,35 @@
     return dateYMD(d);
   }
 
+  // Retourne le lundi de la semaine précédente si celle-ci n'est pas encore signée
+  // (et donc que la saisie doit être bloquée), sinon null. Exclut les Administrateurs.
+  async function semaineRequiseNonSignee() {
+    if (connectedDroit === 'Administrateur') return null;
+    if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
+    if (!feuilleCollab || !feuilleCollab.id) return null;
+
+    const aujourd = new Date();
+    const lundiPrecedent = new Date(aujourd);
+    lundiPrecedent.setDate(aujourd.getDate() - 7);
+    const lundiAVerifier = getLundiSemaine(lundiPrecedent);
+
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, {
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      });
+      const data = await res.json();
+      const signatureExistante = (data.results || []).find(r => {
+        const collabId = (r['Collaborateur'] || [])[0]?.id;
+        return String(r['Semaine'] || '') === lundiAVerifier && collabId && collabId === feuilleCollab.id;
+      });
+      return signatureExistante ? null : lundiAVerifier;
+    } catch(e) {
+      return null;
+    }
+  }
+
   async function verifierSignatureVendredi() {
-    if (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') return false;
+    if (connectedDroit === 'Administrateur') return false;
     const aujourd = new Date();
     const jourSemaine = aujourd.getDay(); // 1=lundi, 5=vendredi
 
