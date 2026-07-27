@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v11';
+  const APP_VERSION = 'v12';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7532,12 +7532,18 @@
         return debutStr <= dateFin && finStr >= dateDebut;
       });
 
-      let collabs = COLLABORATEURS_ADMIN;
-      if (!collabs.length) {
-        const rc = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-        const dc = await rc.json();
-        collabs = (dc.results || []).map(r => ({ nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '' }));
-      }
+      // Charger les collaborateurs en excluant ceux dont l'utilisateur lié est inactif
+      const [rc, resUsersPlanning] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const dc = await rc.json();
+      const usersDataPlanning = (await resUsersPlanning.json()).results || [];
+      const allCollabsPlanning = dc.results || [];
+      const inactifsIdsPlanning = getInactifsCollabIds(usersDataPlanning, allCollabsPlanning);
+      let collabs = allCollabsPlanning
+        .filter(r => !inactifsIdsPlanning.has(String(r.id)))
+        .map(r => ({ nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '' }));
 
       // Construire la liste des jours
       const allJours = [];
