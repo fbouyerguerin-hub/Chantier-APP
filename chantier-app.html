@@ -577,6 +577,7 @@
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
+  const TABLE_SIGNATURES = '1099211';
 
   // ── Jours fériés français ────────────────────────────────────────────────
   const _joursFeriesCache = {};
@@ -723,9 +724,12 @@
     // Masquer la section bulles si collaborateur simple
     const sectionBulles = document.getElementById('section-bulles-collectif');
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
-    showPage('page-form');
     chargerMessage();
     updateBadgeMessages();
+    // Vérifier signature vendredi
+    verifierSignatureVendredi().then(bloquer => {
+      if (!bloquer) showPage('page-form');
+    });
   }
 
   const TABLES = {
@@ -4622,6 +4626,156 @@
     });
     suivi += '</tbody></table></div></div>';
     container.innerHTML = suivi;
+  }
+
+  // ── SIGNATURE HEBDOMADAIRE ──
+  let _signatureCanvas = null;
+  let _signatureDrawing = false;
+
+  function getLundiSemaine(date) {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    return dateYMD(d);
+  }
+
+  async function verifierSignatureVendredi() {
+    if (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') return false;
+    const aujourd = new Date();
+    const jourSemaine = aujourd.getDay(); // 1=lundi, 5=vendredi
+
+    let lundiAVerifier;
+    let modeTest = false; // Mettre true pour tester
+
+    if (jourSemaine === 1) {
+      // Lundi : vérifier semaine précédente → blocage si non signée
+      const lundiPrecedent = new Date(aujourd);
+      lundiPrecedent.setDate(aujourd.getDate() - 7);
+      lundiAVerifier = getLundiSemaine(lundiPrecedent);
+    } else if (jourSemaine === 5 || modeTest) {
+      // Vendredi : avertissement non bloquant
+      lundiAVerifier = getLundiSemaine(aujourd);
+    } else {
+      return false;
+    }
+
+    // Vérifier si signature existe
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, {
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      });
+      const data = await res.json();
+      const signatureExistante = (data.results || []).find(r => {
+        const collabId = (r['Collaborateur'] || [])[0]?.id;
+        return String(r['Semaine'] || '') === lundiAVerifier && collabId && feuilleCollab && collabId === feuilleCollab.id;
+      });
+      if (signatureExistante) return false;
+    } catch(e) {}
+
+    if (jourSemaine === 5 || modeTest) {
+      // Vendredi : bandeau avertissement non bloquant
+      afficherAvertissementSignature(lundiAVerifier);
+      return false;
+    } else {
+      // Lundi : modal bloquant
+      afficherModalSignature(lundiAVerifier);
+      return true;
+    }
+  }
+
+  function afficherAvertissementSignature(lundiStr) {
+    let bandeau = document.getElementById('bandeau-signature');
+    if (!bandeau) {
+      bandeau = document.createElement('div');
+      bandeau.id = 'bandeau-signature';
+      bandeau.style.cssText = 'position:fixed;top:56px;left:0;right:0;background:#e65100;color:#fff;z-index:99;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,0.2)';
+      document.body.appendChild(bandeau);
+    }
+    bandeau.innerHTML = `
+      <span>⚠️ N'oubliez pas de valider votre semaine avant de partir !</span>
+      <button onclick="afficherModalSignature('${lundiStr}')" style="background:#fff;color:#e65100;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-left:8px;white-space:nowrap">
+        ✍️ Signer
+      </button>
+    `;
+  }
+
+  function afficherModalSignature(lundiStr) {
+    document.getElementById('modal-signature').style.display = 'flex';
+    const el = document.getElementById('signature-semaine-label');
+    el.textContent = 'Semaine du ' + new Date(lundiStr + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    el.dataset.lundi = lundiStr;
+    initSignaturePad();
+  }
+
+  function initSignaturePad() {
+    const canvas = document.getElementById('signature-canvas');
+    if (!canvas) return;
+    _signatureCanvas = canvas;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#0B3C1E';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches ? e.touches[0] : e;
+      return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+    }
+
+    canvas.onmousedown = canvas.ontouchstart = (e) => {
+      e.preventDefault();
+      _signatureDrawing = true;
+      const pos = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(pos.x, pos.y);
+    };
+    canvas.onmousemove = canvas.ontouchmove = (e) => {
+      e.preventDefault();
+      if (!_signatureDrawing) return;
+      const pos = getPos(e);
+      ctx.lineTo(pos.x, pos.y);
+      ctx.stroke();
+    };
+    canvas.onmouseup = canvas.ontouchend = () => { _signatureDrawing = false; };
+  }
+
+  function effacerSignature() {
+    if (!_signatureCanvas) return;
+    const ctx = _signatureCanvas.getContext('2d');
+    ctx.clearRect(0, 0, _signatureCanvas.width, _signatureCanvas.height);
+  }
+
+  async function validerSignature(lundiStr) {
+    if (!_signatureCanvas) return;
+    const ctx = _signatureCanvas.getContext('2d');
+    const pixels = ctx.getImageData(0, 0, _signatureCanvas.width, _signatureCanvas.height).data;
+    const vide = !pixels.some((p, i) => i % 4 === 3 && p > 0);
+    if (vide) { alert('⚠️ Veuillez signer avant de valider.'); return; }
+
+    const signatureBase64 = _signatureCanvas.toDataURL('image/png');
+    const today = new Date().toISOString().split('T')[0];
+
+    try {
+      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          'Collaborateur': feuilleCollab?.id ? [feuilleCollab.id] : [],
+          'Semaine': lundiStr,
+          'Signature': signatureBase64,
+          'Date signature': today
+        })
+      });
+      document.getElementById('modal-signature').style.display = 'none';
+      const bandeau = document.getElementById('bandeau-signature');
+      if (bandeau) bandeau.remove();
+      showPage('page-form');
+      alert('✅ Signature enregistrée. Bonne journée !');
+    } catch(e) {
+      alert("❌ Erreur lors de l'enregistrement de la signature.");
+    }
   }
 
   function toggleSemaine(id) {
@@ -8950,6 +9104,48 @@
 </div>
 
 <!-- NAVIGATION BAS -->
+<!-- MODAL SIGNATURE OBLIGATOIRE -->
+<div id="modal-signature" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:20px;width:100%;max-width:480px;padding:24px;max-height:90vh;overflow-y:auto">
+    <!-- En-tête -->
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:32px;margin-bottom:8px">✍️</div>
+      <div style="font-size:17px;font-weight:800;color:var(--gris)">Validation de la semaine</div>
+      <div id="signature-semaine-label" style="font-size:13px;color:#888;margin-top:4px"></div>
+    </div>
+
+    <!-- Message légal -->
+    <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:#e65100;margin-bottom:6px">⚠️ Information importante</div>
+      <div style="font-size:12px;color:#5d4037;line-height:1.6">
+        La saisie des heures de la semaine vaut acceptation des temps saisis pour paiement.
+        En signant ci-dessous, vous confirmez l'exactitude de vos heures déclarées cette semaine.
+      </div>
+    </div>
+
+    <!-- Pad de signature -->
+    <div style="margin-bottom:12px">
+      <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">Votre signature :</div>
+      <canvas id="signature-canvas" width="420" height="150"
+        style="width:100%;border:2px solid #ddd;border-radius:10px;touch-action:none;cursor:crosshair;background:#f9f9f9"></canvas>
+    </div>
+
+    <!-- Boutons -->
+    <div style="display:flex;gap:10px">
+      <button onclick="effacerSignature()" style="flex:0 0 auto;background:#f0f0f0;border:none;border-radius:10px;padding:12px 16px;font-size:13px;cursor:pointer">
+        🗑️ Effacer
+      </button>
+      <button onclick="validerSignature(document.getElementById('signature-semaine-label').dataset.lundi)"
+        style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">
+        ✅ Valider et signer
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:12px;font-size:10px;color:#aaa">
+      Ce document est conservé à titre de preuve de validation
+    </div>
+  </div>
+</div>
+
 <!-- PAGE PLAN DE CHARGE -->
 <div id="page-charge" class="page" style="display:none">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
