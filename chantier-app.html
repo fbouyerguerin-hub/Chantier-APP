@@ -3081,6 +3081,7 @@
     // Afficher/masquer le bouton + Affaire
     const btnNew = document.getElementById('btn-nouvelle-affaire');
     if (btnNew) btnNew.style.display = tab === 'affaires' ? '' : 'none';
+    if (tab === 'affaires') chargerListeAffaires();
     if (tab === 'capacite') loadPlanCharge();
     if (tab === 'suivi') chargerSuiviAffairesOnglet();
   }
