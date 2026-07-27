@@ -1166,12 +1166,6 @@
         byWeek[weekKey].push(date);
       });
 
-      // Lundi de la semaine en cours pour activer l'édition
-      const today = new Date();
-      const todayMonday = new Date(today);
-      todayMonday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
-      const lundiSemaineEnCours = dateYMD(todayMonday);
-
       const weekKeys = Object.keys(byWeek).sort().reverse();
 
       weekKeys.forEach((weekKey, wi) => {
@@ -1192,13 +1186,11 @@
             const sousTache = (r['Sous Taches'] || [])[0]?.value || '';
             const notes = r['Notes'] || '';
             const tacheStr = [tache, sousTache].filter(Boolean).join(' › ');
-            const estSemaineEnCours = weekKey === lundiSemaineEnCours;
-            lignesHTML += `<div class="saisie-ligne" style="position:relative">
+            lignesHTML += `<div class="saisie-ligne">
               <div class="saisie-chantier">🏗 ${chantier}</div>
               <div class="saisie-detail">
                 <span class="saisie-tache">${tacheStr || 'Sans tâche'}</span>
                 <span class="saisie-heures">${h}h</span>
-                ${estSemaineEnCours ? `<button onclick="modifierSaisie(${r.id})" style="background:#f0f7ef;border:1px solid var(--vert);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--vert);cursor:pointer;margin-left:6px">✏️</button>` : ''}
               </div>
               ${notes ? `<div class="saisie-notes">📝 ${notes}</div>` : ''}
             </div>`;
@@ -4635,6 +4627,9 @@
     });
     suivi += '</tbody></table></div></div>';
     container.innerHTML = suivi;
+    // Stocker pour filtrerSuivi
+    container._affaires = affaires;
+    container._collabs = collabs;
   }
 
   // ── SIGNATURE HEBDOMADAIRE ──
@@ -4787,127 +4782,14 @@
     }
   }
 
-  let _editChantiersCache = [];
-
-  function filtrerChantiersEdit(q) {
-    const liste = document.getElementById('edit-saisie-chantier-liste');
+  function filtrerSuivi(q) {
+    const container = document.getElementById('charge-suivi-content');
+    if (!container || !container._affaires) return;
     const ql = q.trim().toLowerCase();
-    const filtres = ql ? _editChantiersCache.filter(c => c.nom.toLowerCase().includes(ql)) : _editChantiersCache;
-    if (!filtres.length) { liste.style.display = 'none'; return; }
-    liste.style.display = 'block';
-    liste.innerHTML = filtres.slice(0, 20).map(c =>
-      `<div onclick="selectionnerChantierEdit(${c.id},'${c.nom.replace(/'/g,'')}')"
-        style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0"
-        onmouseover="this.style.background='#f0f7ef'" onmouseout="this.style.background='#fff'">
-        ${c.nom}
-      </div>`
-    ).join('');
-  }
-
-  function selectionnerChantierEdit(id, nom) {
-    document.getElementById('edit-saisie-chantier-id').value = id;
-    document.getElementById('edit-saisie-chantier-search').value = nom;
-    document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
-  }
-
-  async function chargerSousTachesEdit(tacheId) {
-    const sel = document.getElementById('edit-saisie-sous-tache');
-    sel.innerHTML = '<option value="">— Choisir —</option>';
-    if (!tacheId) return;
-    try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS });
-      const data = await res.json();
-      (data.results || []).sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s['Libellé'] || '#' + s.id;
-        sel.appendChild(opt);
-      });
-    } catch(e) {}
-  }
-
-  async function modifierSaisie(rowId) {
-    try {
-      // Charger la saisie + chantiers + tâches en parallèle
-      const [resSaisie, resChantiers, resTaches] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
-      ]);
-      const r = await resSaisie.json();
-      const chantiers = (await resChantiers.json()).results || [];
-      const taches = (await resTaches.json()).results || [];
-
-      // Remplir champs de base
-      document.getElementById('edit-saisie-id').value = rowId;
-      document.getElementById('edit-saisie-date').value = r['Date'] ? String(r['Date']).split('T')[0] : '';
-      document.getElementById('edit-saisie-heures').value = r['Heures Normales'] || '';
-      document.getElementById('edit-saisie-notes').value = r['Notes'] || '';
-
-      // Chantier
-      _editChantiersCache = chantiers.map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id })).sort((a,b) => a.nom.localeCompare(b.nom));
-      const chantierId = (r['Chantiers'] || [])[0]?.id;
-      const chantierNom = (r['Chantiers'] || [])[0]?.value || '';
-      document.getElementById('edit-saisie-chantier-id').value = chantierId || '';
-      document.getElementById('edit-saisie-chantier-search').value = chantierNom;
-      document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
-
-      // Tâches
-      const selTache = document.getElementById('edit-saisie-tache');
-      selTache.innerHTML = '<option value="">— Choisir —</option>';
-      taches.sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(t => {
-        const opt = document.createElement('option');
-        opt.value = t.id;
-        opt.textContent = t['Libellé'] || '#' + t.id;
-        selTache.appendChild(opt);
-      });
-      const tacheId = (r['Type de taches'] || [])[0]?.id;
-      if (tacheId) selTache.value = tacheId;
-
-      // Sous-tâches
-      await chargerSousTachesEdit(tacheId);
-      const sousTacheId = (r['Sous Taches'] || [])[0]?.id;
-      if (sousTacheId) document.getElementById('edit-saisie-sous-tache').value = sousTacheId;
-
-      document.getElementById('modal-edit-saisie').style.display = 'flex';
-    } catch(e) {
-      alert('Erreur lors du chargement de la saisie');
-      console.error(e);
-    }
-  }
-
-  async function sauvegarderModifSaisie() {
-    const rowId = document.getElementById('edit-saisie-id').value;
-    const heures = parseFloat(document.getElementById('edit-saisie-heures').value);
-    const notes = document.getElementById('edit-saisie-notes').value;
-    const date = document.getElementById('edit-saisie-date').value;
-    const chantierId = document.getElementById('edit-saisie-chantier-id').value;
-    const tacheId = document.getElementById('edit-saisie-tache').value;
-    const sousTacheId = document.getElementById('edit-saisie-sous-tache').value;
-
-    if (!heures || heures <= 0) { alert("⚠️ Veuillez saisir un nombre d'heures valide."); return; }
-    if (!chantierId) { alert('⚠️ Veuillez sélectionner un chantier.'); return; }
-
-    try {
-      const payload = {
-        'Heures Normales': heures,
-        'Notes': notes,
-        'Date': date,
-        'Chantiers': chantierId ? [parseInt(chantierId)] : [],
-        'Type de taches': tacheId ? [parseInt(tacheId)] : [],
-        'Sous Taches': sousTacheId ? [parseInt(sousTacheId)] : [],
-      };
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, {
-        method: 'PATCH',
-        headers: HEADERS,
-        body: JSON.stringify(payload)
-      });
-      document.getElementById('modal-edit-saisie').style.display = 'none';
-      loadFeuille();
-      alert('✅ Saisie modifiée avec succès.');
-    } catch(e) {
-      alert('Erreur lors de la modification');
-    }
+    const affairesFiltrees = ql
+      ? container._affaires.filter(a => ((a['Chantier']||[])[0]?.value || '').toLowerCase().includes(ql))
+      : container._affaires;
+    chargerSuiviAffairesAvecContainer(affairesFiltrees, container._collabs, container);
   }
 
   function toggleSemaine(id) {
@@ -9298,50 +9180,6 @@
 </div>
 
 <!-- NAVIGATION BAS -->
-<!-- MODAL MODIFICATION SAISIE -->
-<div id="modal-edit-saisie" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:flex-end;justify-content:center">
-  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px 30px;max-height:90vh;overflow-y:auto">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div style="font-size:15px;font-weight:800;color:var(--gris)">✏️ Modifier la saisie</div>
-      <button onclick="document.getElementById('modal-edit-saisie').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
-    </div>
-    <input type="hidden" id="edit-saisie-id">
-
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Date</label>
-      <input type="date" id="edit-saisie-date" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
-    </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Chantier</label>
-      <input type="text" id="edit-saisie-chantier-search" placeholder="🔍 Rechercher…" oninput="filtrerChantiersEdit(this.value)"
-        style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px 8px 0 0;font-size:13px;outline:none">
-      <div id="edit-saisie-chantier-liste" style="display:none;max-height:140px;overflow-y:auto;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px;background:#fff"></div>
-      <input type="hidden" id="edit-saisie-chantier-id">
-    </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Type de tâche</label>
-      <select id="edit-saisie-tache" onchange="chargerSousTachesEdit(this.value)" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
-        <option value="">— Choisir —</option>
-      </select>
-    </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Sous-tâche</label>
-      <select id="edit-saisie-sous-tache" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
-        <option value="">— Choisir —</option>
-      </select>
-    </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Heures</label>
-      <input type="number" id="edit-saisie-heures" min="0" max="24" step="0.5" placeholder="0" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
-    </div>
-    <div style="margin-bottom:16px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Notes</label>
-      <textarea id="edit-saisie-notes" placeholder="Notes…" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;resize:vertical;min-height:60px"></textarea>
-    </div>
-    <button onclick="sauvegarderModifSaisie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">💾 Enregistrer la modification</button>
-  </div>
-</div>
-
 <!-- MODAL SIGNATURE OBLIGATOIRE -->
 <div id="modal-signature" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;align-items:center;justify-content:center;padding:16px">
   <div style="background:#fff;border-radius:20px;width:100%;max-width:480px;padding:24px;max-height:90vh;overflow-y:auto">
@@ -9437,6 +9275,10 @@
 
   <!-- Sous-onglet Suivi -->
   <div id="charge-tab-suivi" style="display:none;padding:0 0 100px">
+    <div style="padding:8px 16px 4px">
+      <input id="suivi-search" type="text" placeholder="🔍 Rechercher un chantier…" oninput="filtrerSuivi(this.value)"
+        style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
+    </div>
     <div id="charge-suivi-content" style="padding:8px 0">
       <div class="feuille-loading">⏳ Chargement…</div>
     </div>
