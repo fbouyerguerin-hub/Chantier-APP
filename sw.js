@@ -1,10 +1,17 @@
-const CACHE_NAME = 'chantier-app-v89';
+const CACHE_NAME = 'chantier-app-v88';
 const ASSETS = [
   '/Chantier-APP/chantier-app.html',
   '/Chantier-APP/manifest.json',
 ];
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(cache =>
+      Promise.all(ASSETS.map(url =>
+        fetch(url + '?v=' + CACHE_NAME, { cache: 'reload' })
+          .then(response => cache.put(url, response))
+      ))
+    )
+  );
   self.skipWaiting();
 });
 self.addEventListener('activate', e => {
