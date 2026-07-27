@@ -3080,16 +3080,17 @@
   let chargeTabActif = 'affaires';
 
   // Calcule, pour une affaire donnée, les périodes [début, fin] de chaque phase
-  // en remontant depuis la Date livraison (fin de chantier) :
-  //   Pose se termine à la livraison → Fab Acier + Fab Bois se terminent la veille ouvrée du début de la Pose (en parallèle)
-  //   → Étude se termine la veille ouvrée du début de la plus longue des deux Fab.
+  // à partir de la Date de pose (= début de la phase Pose du chantier) :
+  //   La Pose commence à cette date et avance en jours ouvrés → Fab Acier + Fab Bois se terminent
+  //   la veille ouvrée du début de la Pose (en parallèle, en remontant depuis cette date)
+  //   → Étude se termine la veille ouvrée du début de la plus longue des deux Fab (en remontant).
   // La durée de chaque phase est calculée en JOURS OUVRÉS (et non en semaines entières), pour que le
   // délai soit le plus court possible compte tenu des heures prévues et du nombre de personnes affectées
   // à l'affaire sur ce poste (champ "Personnes ..."), avec repli sur l'effectif total du poste si ce champ
   // n'est pas renseigné. Capacité retenue : 7,8h/jour/personne (39h/semaine ÷ 5 jours).
   function calculerPeriodesAffaire(a, collabs) {
-    const dateLivraison = a['Date livraison'] ? String(a['Date livraison']).split('T')[0] : null;
-    if (!dateLivraison) return null;
+    const datePose = a['Date livraison'] ? String(a['Date livraison']).split('T')[0] : null;
+    if (!datePose) return null;
     const capJour = (posteKey) => {
       const p = POSTES_CHARGE.find(pp => pp.key === posteKey);
       const personnes = parseFloat(a[p.personnesField]) || 0;
@@ -3114,15 +3115,30 @@
       }
       return dateYMD(d);
     };
+    // Avance de nbJours jours OUVRÉS (lun-ven) par rapport à dateStr (dateStr exclue du décompte)
+    const avancerJoursOuvres = (dateStr, jours) => {
+      const d = new Date(dateStr + 'T12:00:00');
+      let restant = jours;
+      while (restant > 0) {
+        d.setDate(d.getDate() + 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6 && !estJourFerie(dateYMD(d))) restant--;
+      }
+      return dateYMD(d);
+    };
     // Point de départ d'une phase de durée `jours` se terminant (dernier jour inclus) à `finStr`
     const debutDe = (finStr, jours) => jours > 0 ? reculerJoursOuvres(finStr, jours - 1) : finStr;
+    // Point de fin d'une phase de durée `jours` commençant (premier jour inclus) à `debutStr`
+    const finDe = (debutStr, jours) => jours > 0 ? avancerJoursOuvres(debutStr, jours - 1) : debutStr;
     // Veille ouvrée de dateStr (pour enchaîner une phase juste avant une autre, sans chevauchement)
     const veilleOuvree = (dateStr) => reculerJoursOuvres(dateStr, 1);
 
+    // La Pose commence à la date de pose et se poursuit en avançant
     const joursPose = nbJours('Pose');
-    const finPose = dateLivraison;
-    const debutPose = debutDe(finPose, joursPose);
+    const debutPose = datePose;
+    const finPose = finDe(debutPose, joursPose);
 
+    // Le reste (Fab Acier / Fab Bois puis Étude) se planifie AVANT la date de pose, comme auparavant
     const finFab = veilleOuvree(debutPose);
     const joursFabAcier = nbJours('Fab Acier');
     const joursFabBois = nbJours('Fab Bois');
@@ -3494,7 +3510,8 @@
         if (!d) return false;
         const periodes = calculerPeriodesAffaire(a, collabs);
         const debutEtude = periodes ? periodes['Étude'].debut : d;
-        if (debutEtude > dateFin || d < dateDebut) return false;
+        const finPose = periodes ? periodes['Pose'].fin : d;
+        if (debutEtude > dateFin || finPose < dateDebut) return false;
         // Si filtre poste actif, n'afficher que les affaires avec des heures sur ce poste
         if (chargePosteActif !== 'tous') {
           const poste = POSTES_CHARGE.find(p => p.key === chargePosteActif);
@@ -3513,7 +3530,7 @@
           html += `<div style="background:#fff;border-radius:10px;margin-bottom:8px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center">
             <div>
               <div style="font-size:13px;font-weight:700;color:var(--gris)">${nom}</div>
-              <div style="font-size:10px;color:#aaa">${livraison ? '🚚 Livraison ' + livraison : ''}</div>
+              <div style="font-size:10px;color:#aaa">${livraison ? '🔨 Pose ' + livraison : ''}</div>
               <div style="font-size:11px;color:#666;margin-top:3px">${postes}</div>
             </div>
             <div style="display:flex;gap:6px">
@@ -4170,7 +4187,7 @@
 
         ws.getRow(row).height = 16;
         const cNom = ws.getCell(row, 1);
-        cNom.value = nom + (a['Date livraison'] ? '  (livr. ' + a['Date livraison'] + ')' : '');
+        cNom.value = nom + (a['Date livraison'] ? '  (pose ' + a['Date livraison'] + ')' : '');
         cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
         cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
         cNom.alignment = { vertical: 'middle' };
@@ -4460,7 +4477,7 @@
     const el = document.getElementById('charge-apercu-periodes');
     if (!el) return;
     const dateLivraison = document.getElementById('charge-date-livraison').value;
-    if (!dateLivraison) { el.innerHTML = '<span style="color:#aaa">Renseignez la date de livraison pour voir l\'échéancier des phases</span>'; return; }
+    if (!dateLivraison) { el.innerHTML = '<span style="color:#aaa">Renseignez la date de pose pour voir l\'échéancier des phases</span>'; return; }
     const aFictif = {
       'Date livraison': dateLivraison,
       'Heures études': document.getElementById('charge-h-etude').value,
@@ -4488,7 +4505,7 @@
     const chantierId = document.getElementById('charge-chantier').value;
     const dateLivraison = document.getElementById('charge-date-livraison').value;
     if (!chantierId) { alert('Veuillez choisir un chantier'); return; }
-    if (!dateLivraison) { alert('Veuillez saisir une date de livraison'); return; }
+    if (!dateLivraison) { alert('Veuillez saisir une date de pose'); return; }
     const payload = {
       'Chantier': chantierId ? [parseInt(chantierId)] : [],
       'Date livraison': dateLivraison || null,
@@ -4552,7 +4569,7 @@
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">${nom}</div>
-            ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🚚 Livraison ${livraison}</div>` : ''}
+            ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🔨 Pose ${livraison}</div>` : ''}
             <div>${postes}</div>
           </div>
           <div style="display:flex;gap:6px;margin-left:8px">
@@ -4651,7 +4668,7 @@
 
     let suivi = '<div style="padding:8px 16px 0"><div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:12px">📈 Réel vs Prévu par affaire</div>';
     suivi += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
-    suivi += '<thead><tr style="background:#f8f8f8"><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd;min-width:140px">Affaire</th><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd">Livraison</th>';
+    suivi += '<thead><tr style="background:#f8f8f8"><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd;min-width:140px">Affaire</th><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd">Pose</th>';
     POSTES_CHARGE.forEach(p => { suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${p.color};border-left:2px solid #eee">${p.key}</th>`; });
     suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:var(--gris);border-left:2px solid #ccc;background:#f0ede8">TOTAL CHANTIER</th>`;
     suivi += '</tr><tr style="background:#fafafa"><th style="padding:4px 8px;border-bottom:1px solid #eee"></th><th style="padding:4px 8px;border-bottom:1px solid #eee"></th>';
@@ -6599,9 +6616,12 @@
 
   function switchChantierTab(tab) {
     document.getElementById('chantier-tab-info').style.display = tab === 'info' ? 'block' : 'none';
+    document.getElementById('chantier-tab-charge').style.display = tab === 'charge' ? 'block' : 'none';
     document.getElementById('chantier-tab-fichiers').style.display = tab === 'fichiers' ? 'block' : 'none';
     document.getElementById('tab-chantier-info').style.background = tab === 'info' ? 'var(--vert)' : 'none';
     document.getElementById('tab-chantier-info').style.color = tab === 'info' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-chantier-charge').style.background = tab === 'charge' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-chantier-charge').style.color = tab === 'charge' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-chantier-fichiers').style.background = tab === 'fichiers' ? 'var(--vert)' : 'none';
     document.getElementById('tab-chantier-fichiers').style.color = tab === 'fichiers' ? '#fff' : 'var(--gris-moyen)';
   }
@@ -6707,6 +6727,34 @@
     }
   }
 
+  // Identique à mettreAJourApercuCharge() mais pour l'onglet Plan de charge du modal "Nouveau chantier"
+  function mettreAJourApercuChargeChantier() {
+    const el = document.getElementById('chantier-charge-apercu-periodes');
+    if (!el) return;
+    const dateLivraison = document.getElementById('chantier-charge-date-livraison').value;
+    if (!dateLivraison) { el.innerHTML = '<span style="color:#aaa">Renseignez la date de pose pour voir l\'échéancier des phases</span>'; return; }
+    const aFictif = {
+      'Date livraison': dateLivraison,
+      'Heures études': document.getElementById('chantier-charge-h-etude').value,
+      'Heures Fab Bois': document.getElementById('chantier-charge-h-fab-bois').value,
+      'Heures Fab Acier': document.getElementById('chantier-charge-h-fab-acier').value,
+      'Heures Pose': document.getElementById('chantier-charge-h-pose').value,
+      'Personnes Étude': document.getElementById('chantier-charge-p-etude').value,
+      'Personnes Fab Bois': document.getElementById('chantier-charge-p-fab-bois').value,
+      'Personnes Fab Acier': document.getElementById('chantier-charge-p-fab-acier').value,
+      'Personnes Pose': document.getElementById('chantier-charge-p-pose').value,
+    };
+    const periodes = calculerPeriodesAffaire(aFictif, _collabsChargeCache || []);
+    if (!periodes) { el.innerHTML = ''; return; }
+    const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
+    el.innerHTML = ['Étude','Fab Bois','Fab Acier','Pose'].map(k => {
+      const p = periodes[k];
+      const poste = POSTES_CHARGE.find(pp => pp.key === k);
+      if (!p.jours) return `<div style="color:#ccc">${k} : —</div>`;
+      return `<div><span style="color:${poste.color};font-weight:700">${k}</span> : ${fmt(p.debut)} → ${fmt(p.fin)} <span style="color:#aaa">(${p.jours} j. ouvré${p.jours>1?'s':''})</span></div>`;
+    }).join('');
+  }
+
   async function ouvrirFormChantier(rowId) {
     document.getElementById('chantier-row-id').value = rowId || '';
     document.getElementById('modal-chantier-titre').textContent = rowId ? 'Modifier chantier' : 'Nouveau chantier';
@@ -6714,6 +6762,18 @@
     document.getElementById('chantier-date-debut').value = '';
     document.getElementById('chantier-date-fin').value = '';
     document.getElementById('chantier-statue').value = 'En cours';
+    // Réinitialiser l'onglet Plan de charge
+    document.getElementById('chantier-charge-row-id').value = '';
+    document.getElementById('chantier-charge-date-livraison').value = '';
+    ['chantier-charge-h-etude','chantier-charge-h-fab-bois','chantier-charge-h-fab-acier','chantier-charge-h-pose',
+     'chantier-charge-p-etude','chantier-charge-p-fab-bois','chantier-charge-p-fab-acier','chantier-charge-p-pose'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('chantier-charge-apercu-periodes').innerHTML = '';
+    if (!_collabsChargeCache || !_collabsChargeCache.length) {
+      try {
+        const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        _collabsChargeCache = (await resC.json()).results || [];
+      } catch(e) { _collabsChargeCache = _collabsChargeCache || []; }
+    }
     if (rowId) {
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
@@ -6728,6 +6788,25 @@
         // En modification, on peut uploader
         document.getElementById('chantier-fichiers-liste').previousElementSibling && null;
       } catch(e) {}
+      // Charger un éventuel plan de charge déjà existant pour ce chantier
+      try {
+        const resPC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200&filter__Chantier__link_row_has=' + rowId, { headers: HEADERS });
+        const dataPC = await resPC.json();
+        const pc = (dataPC.results || [])[0];
+        if (pc) {
+          document.getElementById('chantier-charge-row-id').value = pc.id;
+          document.getElementById('chantier-charge-date-livraison').value = pc['Date livraison'] || '';
+          document.getElementById('chantier-charge-h-etude').value = pc['Heures études'] || '';
+          document.getElementById('chantier-charge-h-fab-bois').value = pc['Heures Fab Bois'] || '';
+          document.getElementById('chantier-charge-h-fab-acier').value = pc['Heures Fab Acier'] || '';
+          document.getElementById('chantier-charge-h-pose').value = pc['Heures Pose'] || '';
+          document.getElementById('chantier-charge-p-etude').value = pc['Personnes Étude'] || '';
+          document.getElementById('chantier-charge-p-fab-bois').value = pc['Personnes Fab Bois'] || '';
+          document.getElementById('chantier-charge-p-fab-acier').value = pc['Personnes Fab Acier'] || '';
+          document.getElementById('chantier-charge-p-pose').value = pc['Personnes Pose'] || '';
+          mettreAJourApercuChargeChantier();
+        }
+      } catch(e) {}
     }
     // Nouveau chantier : désactiver l'upload tant que pas sauvegardé
     const lblUpload = document.querySelector('#chantier-tab-fichiers label');
@@ -6741,6 +6820,38 @@
 
   function fermerFormChantier() {
     document.getElementById('modal-chantier').style.display = 'none';
+  }
+
+  // Crée ou met à jour l'entrée Plan de charge liée au chantier, à partir de l'onglet "📊 Charge"
+  // du modal de création/édition de chantier. Ne fait rien si aucun champ n'a été renseigné.
+  async function sauvegarderPlanChargeChantier(chantierId) {
+    const chargeRowId = document.getElementById('chantier-charge-row-id').value;
+    const dateLivraison = document.getElementById('chantier-charge-date-livraison').value;
+    const champsHeures = ['chantier-charge-h-etude','chantier-charge-h-fab-bois','chantier-charge-h-fab-acier','chantier-charge-h-pose']
+      .map(id => parseFloat(document.getElementById(id).value) || 0);
+    const auMoinsUnChamp = !!dateLivraison || champsHeures.some(h => h > 0);
+    if (!auMoinsUnChamp) return; // Onglet Plan de charge laissé vide : on ne crée rien
+
+    const payload = {
+      'Chantier': [parseInt(chantierId)],
+      'Date livraison': dateLivraison || null,
+      'Heures études': parseFloat(document.getElementById('chantier-charge-h-etude').value) || 0,
+      'Heures Fab Bois': parseFloat(document.getElementById('chantier-charge-h-fab-bois').value) || 0,
+      'Heures Fab Acier': parseFloat(document.getElementById('chantier-charge-h-fab-acier').value) || 0,
+      'Heures Pose': parseFloat(document.getElementById('chantier-charge-h-pose').value) || 0,
+      'Personnes Étude': parseFloat(document.getElementById('chantier-charge-p-etude').value) || 0,
+      'Personnes Fab Bois': parseFloat(document.getElementById('chantier-charge-p-fab-bois').value) || 0,
+      'Personnes Fab Acier': parseFloat(document.getElementById('chantier-charge-p-fab-acier').value) || 0,
+      'Personnes Pose': parseFloat(document.getElementById('chantier-charge-p-pose').value) || 0,
+    };
+    try {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + (chargeRowId ? chargeRowId + '/' : '') + '?user_field_names=true';
+      const res = await fetch(url, { method: chargeRowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (res.ok && !chargeRowId) {
+        const savedPC = await res.json();
+        document.getElementById('chantier-charge-row-id').value = savedPC.id;
+      }
+    } catch(e) { /* la création du chantier reste valide même si le plan de charge échoue */ }
   }
 
   async function sauvegarderChantier() {
@@ -6761,6 +6872,8 @@
       const res = await fetch(url, { method, headers: HEADERS, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(await res.text());
       const saved = await res.json();
+      const chantierId = rowId || saved.id;
+      await sauvegarderPlanChargeChantier(chantierId);
       if (!rowId) {
         // Nouveau chantier créé - proposer d'ajouter des fichiers
         document.getElementById('chantier-row-id').value = saved.id;
@@ -9403,6 +9516,7 @@
       <!-- Onglets -->
       <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;margin-bottom:16px">
         <button id="tab-chantier-info" onclick="switchChantierTab('info')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Infos</button>
+        <button id="tab-chantier-charge" onclick="switchChantierTab('charge')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📊 Charge</button>
         <button id="tab-chantier-fichiers" onclick="switchChantierTab('fichiers')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📎 Fichiers</button>
       </div>
     </div>
@@ -9422,6 +9536,52 @@
           <option value="Terminé">⚫ Terminé</option>
         </select>
       </div>
+    </div>
+
+    <!-- Onglet Plan de charge -->
+    <div id="chantier-tab-charge" style="padding:0 20px;overflow-y:auto;flex:1;display:none">
+      <input type="hidden" id="chantier-charge-row-id" value="">
+      <div class="field">
+        <label>🔨 Date de pose (début de la phase Pose)</label>
+        <input type="date" id="chantier-charge-date-livraison" oninput="mettreAJourApercuChargeChantier()" />
+        <div style="font-size:10px;color:#aaa;margin-top:4px">La Pose démarre à cette date et avance ; Fab Acier / Fab Bois (en parallèle) puis Étude sont calculés en remontant avant cette date</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Étude</label>
+          <input type="number" id="chantier-charge-h-etude" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Pers. Étude</label>
+          <input type="number" id="chantier-charge-p-etude" min="0" step="0.5" placeholder="effectif poste" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Fab Bois</label>
+          <input type="number" id="chantier-charge-h-fab-bois" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Pers. Fab Bois</label>
+          <input type="number" id="chantier-charge-p-fab-bois" min="0" step="0.5" placeholder="effectif poste" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Fab Acier</label>
+          <input type="number" id="chantier-charge-h-fab-acier" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Pers. Fab Acier</label>
+          <input type="number" id="chantier-charge-p-fab-acier" min="0" step="0.5" placeholder="effectif poste" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">H. Pose</label>
+          <input type="number" id="chantier-charge-h-pose" min="0" placeholder="0" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Pers. Pose</label>
+          <input type="number" id="chantier-charge-p-pose" min="0" step="0.5" placeholder="effectif poste" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuChargeChantier()">
+        </div>
+      </div>
+      <div id="chantier-charge-apercu-periodes" style="font-size:11px;color:#666;background:#f8f8f8;border-radius:8px;padding:10px 12px;margin-bottom:16px"></div>
+      <div style="font-size:10px;color:#aaa">Facultatif — laissez vide si ce chantier n'a pas encore de plan de charge à planifier.</div>
     </div>
 
     <!-- Onglet Fichiers -->
@@ -9637,9 +9797,9 @@
       <input type="hidden" id="charge-chantier" value="">
     </div>
     <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">🚚 Date de livraison (fin de chantier)</label>
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">🔨 Date de pose (début de la phase Pose)</label>
       <input type="date" id="charge-date-livraison" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuCharge()">
-      <div style="font-size:10px;color:#aaa;margin-top:4px">Les phases sont calculées en remontant depuis cette date : Pose → Fab Acier / Fab Bois (en parallèle) → Étude</div>
+      <div style="font-size:10px;color:#aaa;margin-top:4px">La Pose démarre à cette date et avance ; Fab Acier / Fab Bois (en parallèle) puis Étude sont calculés en remontant avant cette date</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
       <div>
