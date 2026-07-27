@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v9';
+  const APP_VERSION = 'v10';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8233,7 +8233,12 @@
       const hn = parseFloat(ligne.heures) || 0;
 
       let fillA, fillB, txtColor;
-      if (totalSem > FH_SEUIL) {
+      if (ligne.chantier === '🏖️ Absence') {
+        // Style distinct pour les lignes d'absence, indépendant du seuil d'heures de la semaine
+        fillA = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE3E0F5'} };
+        fillB = { type:'pattern', pattern:'solid', fgColor:{argb:'FFD6D1EF'} };
+        txtColor = 'FF5B4E9E';
+      } else if (totalSem > FH_SEUIL) {
         fillA = { type:'pattern', pattern:'solid', fgColor:{argb:FH_ROUGE_FOND} };
         fillB = { type:'pattern', pattern:'solid', fgColor:{argb:'FFFFB3B3'} };
         txtColor = FH_ROUGE_TXT;
@@ -8564,8 +8569,29 @@
         page++;
       }
 
-      if (!allRows.length) {
-        alert('Aucune saisie pour cette période.');
+      // Charger les absences (congés, RTT, maladie…) qui chevauchent la période
+      let allCongesRows = [], pageC = 1, hasMoreC = true;
+      while (hasMoreC) {
+        let urlC = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN +
+          '/?user_field_names=true&size=200&page=' + pageC;
+        if (!tousLesCollabs) urlC += '&filter__Collaborateurs__link_row_has=' + collabId;
+        const resC = await fetch(urlC, { headers: HEADERS });
+        const dataC = await resC.json();
+        allCongesRows = allCongesRows.concat(dataC.results || []);
+        hasMoreC = !!dataC.next;
+        pageC++;
+      }
+      // Filtrage côté client : on exclut les demandes refusées, on ne garde que celles qui chevauchent la période
+      const congesPeriode = allCongesRows.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+        if (!debutStr) return false;
+        return debutStr <= dateFin && finStr >= dateDebut;
+      });
+
+      if (!allRows.length && !congesPeriode.length) {
+        alert('Aucune saisie ni absence pour cette période.');
         return;
       }
 
@@ -8592,6 +8618,53 @@
         const collabId2 = collabInfo2?.collabId || (r['Collaborateur']||[])[0]?.id || null;
         if (!dataParCollab[rCollab]) dataParCollab[rCollab] = { lignes: [], poste: poste2, collabId: collabId2 };
         dataParCollab[rCollab].lignes.push({ date, chantier, tache, sousTache, heures, notes, vehicule, zone });
+      });
+
+      // Ajouter les absences directement dans la feuille de chaque collaborateur concerné
+      // (heures = 0 pour ne pas fausser les totaux/couleurs de dépassement d'heures)
+      congesPeriode.forEach(r => {
+        const typeDemande = r['Type de demande']?.value || r['Type de demande'] || 'Absence';
+        const notesConge = (r['Notes'] || '').split('\n').join(' ');
+        const debutStr = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        if (!debutStr) return;
+        const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : debutStr;
+        const debutClip = debutStr < dateDebut ? dateDebut : debutStr;
+        const finClip = finStr > dateFin ? dateFin : finStr;
+
+        (r['Collaborateurs'] || []).forEach(cc => {
+          if (!tousLesCollabs && cc.id !== collabId) return;
+          const rCollab = cc.value || '';
+          if (!rCollab) return;
+          const rCollabNorm = rCollab.trim().toLowerCase();
+          const collabInfo3 = COLLABORATEURS_ADMIN.find(c => c.nom.trim().toLowerCase() === rCollabNorm);
+          const poste3 = collabInfo3?.poste || '';
+          const collabId3 = collabInfo3?.collabId || cc.id || null;
+          if (!dataParCollab[rCollab]) dataParCollab[rCollab] = { lignes: [], poste: poste3, collabId: collabId3 };
+
+          let d = new Date(debutClip + 'T12:00:00');
+          const fin = new Date(finClip + 'T12:00:00');
+          while (d <= fin) {
+            const dw = d.getDay();
+            if (dw !== 0 && dw !== 6) { // on ignore les week-ends
+              dataParCollab[rCollab].lignes.push({
+                date: dateYMD(d),
+                chantier: '🏖️ Absence',
+                tache: typeDemande,
+                sousTache: '',
+                heures: 0,
+                notes: notesConge,
+                vehicule: '',
+                zone: ''
+              });
+            }
+            d.setDate(d.getDate() + 1);
+          }
+        });
+      });
+
+      // Retrier chaque feuille par date après ajout des absences
+      Object.values(dataParCollab).forEach(c => {
+        c.lignes.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
       });
 
       const wb = await genererClasseurFichesHeures(dataParCollab, { label: labelPeriode, dateDebut, dateFin });
