@@ -303,6 +303,7 @@
     <div style="text-align:right">
       <div class="header-title">Saisie de chantier</div>
       <div id="header-collab-name" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600"></div>
+      <div id="app-version-tag" style="font-size:9px;color:var(--beige);opacity:.65;margin-top:2px"></div>
     </div>
   </div>
   <div class="header-bar"></div>
@@ -574,6 +575,9 @@
 
 <script>
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
+  // Version affichée dans l'application — à incrémenter à chaque déploiement,
+  // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
+  const APP_VERSION = 'v89';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -796,6 +800,8 @@
   }
 
   async function init() {
+    const versionTag = document.getElementById('app-version-tag');
+    if (versionTag) versionTag.textContent = 'Version ' + APP_VERSION;
     const todayLocal = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
     document.getElementById('field-date').value = todayLocal;
     await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
@@ -9704,7 +9710,25 @@
 
 <script>
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      // Vérifie activement s'il existe une nouvelle version toutes les 60 secondes
+      // (au lieu d'attendre le cycle de vérification par défaut du navigateur, ~24h)
+      setInterval(() => reg.update(), 60 * 1000);
+      // Vérifie aussi dès que l'utilisateur revient sur l'onglet
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update();
+      });
+    }).catch(() => {});
+
+    // Dès qu'une nouvelle version du service worker prend le contrôle
+    // (grâce à skipWaiting/clients.claim dans sw.js), on recharge la page
+    // automatiquement pour que l'utilisateur récupère la dernière version.
+    let swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      window.location.reload();
+    });
   }
 </script>
 <!-- Modal vue RTT d'un collaborateur (accès admin) -->
