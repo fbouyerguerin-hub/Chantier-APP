@@ -1134,9 +1134,23 @@
 
       // Filtrer directement par collaborateur + période (sans view_id pour éviter conflits de filtres)
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Collaborateur__link_row_has=${feuilleCollab.id}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
-      const res = await fetch(url, { headers: HEADERS });
+      const [res, resSig] = await Promise.all([
+        fetch(url, { headers: HEADERS }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } })
+      ]);
       const data = await res.json();
       const rows = data.results || [];
+      const sigData = await resSig.json();
+      const semainesSignees = new Set(
+        (sigData.results || [])
+          .filter(s => (s['Collaborateur'] || [])[0]?.id === feuilleCollab.id)
+          .map(s => String(s['Semaine'] || '').trim())
+      );
+      // Lundi semaine en cours
+      const todayD = new Date();
+      const todayMonday = new Date(todayD);
+      todayMonday.setDate(todayD.getDate() - ((todayD.getDay() + 6) % 7));
+      const lundiSemaineEnCours = dateYMD(todayMonday);
 
       if (!rows.length) {
         document.getElementById('feuille-content').innerHTML = `<div class="feuille-empty"><div class="feuille-empty-icon">📭</div><p>Aucune saisie pour ${feuilleCollab.value} ce mois-ci.</p></div>`;
@@ -1186,11 +1200,14 @@
             const sousTache = (r['Sous Taches'] || [])[0]?.value || '';
             const notes = r['Notes'] || '';
             const tacheStr = [tache, sousTache].filter(Boolean).join(' › ');
+            const estSignee = semainesSignees.has(weekKey);
+            const peutModifier = weekKey === lundiSemaineEnCours && !estSignee;
             lignesHTML += `<div class="saisie-ligne">
               <div class="saisie-chantier">🏗 ${chantier}</div>
               <div class="saisie-detail">
                 <span class="saisie-tache">${tacheStr || 'Sans tâche'}</span>
                 <span class="saisie-heures">${h}h</span>
+                ${peutModifier ? `<button onclick="modifierSaisie(${r.id})" style="background:#f0f7ef;border:1px solid var(--vert);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--vert);cursor:pointer;margin-left:6px">✏️</button>` : ''}
               </div>
               ${notes ? `<div class="saisie-notes">📝 ${notes}</div>` : ''}
             </div>`;
@@ -1216,9 +1233,10 @@
         const mondayStr = monday.toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
         const sundayStr = sunday.toLocaleDateString('fr-FR', { day:'numeric', month:'short' });
 
+        const semaineEstSignee = semainesSignees.has(weekKey);
         html += `<div class="semaine-block" style="margin-bottom:12px">
           <div class="semaine-header" onclick="toggleSemaine('s${wi}')">
-            <span class="semaine-label">📅 Semaine du ${mondayStr} au ${sundayStr}</span>
+            <span class="semaine-label">📅 Semaine du ${mondayStr} au ${sundayStr}${semaineEstSignee ? ' <span style=\"font-size:10px;background:#2D8A4E;color:#fff;border-radius:4px;padding:1px 5px;margin-left:4px\">✅ Signée</span>' : ''}</span>
             <span class="semaine-total">${totalSemaine}h</span>
           </div>
           <div id="s${wi}" class="semaine-body" style="display:${wi === 0 ? 'block' : 'none'}">${joursHTML}</div>
@@ -4790,6 +4808,115 @@
       ? container._affaires.filter(a => ((a['Chantier']||[])[0]?.value || '').toLowerCase().includes(ql))
       : container._affaires;
     chargerSuiviAffairesAvecContainer(affairesFiltrees, container._collabs, container);
+  }
+
+  function ouvrirSignatureSemaineEnCours() {
+    const lundiStr = getLundiSemaine(new Date());
+    afficherModalSignature(lundiStr);
+  }
+
+  let _editChantiersCache = [];
+
+  function filtrerChantiersEdit(q) {
+    const liste = document.getElementById('edit-saisie-chantier-liste');
+    const ql = q.trim().toLowerCase();
+    const filtres = ql ? _editChantiersCache.filter(c => c.nom.toLowerCase().includes(ql)) : _editChantiersCache;
+    if (!filtres.length) { liste.style.display = 'none'; return; }
+    liste.style.display = 'block';
+    liste.innerHTML = filtres.slice(0, 20).map(c =>
+      `<div onclick="selectionnerChantierEdit(${c.id},'${c.nom.replace(/'/g,'')}')"
+        style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid #f0f0f0"
+        onmouseover="this.style.background='#f0f7ef'" onmouseout="this.style.background='#fff'">
+        ${c.nom}
+      </div>`
+    ).join('');
+  }
+
+  function selectionnerChantierEdit(id, nom) {
+    document.getElementById('edit-saisie-chantier-id').value = id;
+    document.getElementById('edit-saisie-chantier-search').value = nom;
+    document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
+  }
+
+  async function chargerSousTachesEdit(tacheId) {
+    const sel = document.getElementById('edit-saisie-sous-tache');
+    sel.innerHTML = '<option value="">— Choisir —</option>';
+    if (!tacheId) return;
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS });
+      const data = await res.json();
+      (data.results || []).sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s['Libellé'] || '#' + s.id;
+        sel.appendChild(opt);
+      });
+    } catch(e) {}
+  }
+
+  async function modifierSaisie(rowId) {
+    try {
+      const [resSaisie, resChantiers, resTaches] = await Promise.all([
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, { headers: HEADERS }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+      ]);
+      const r = await resSaisie.json();
+      const chantiers = (await resChantiers.json()).results || [];
+      const taches = (await resTaches.json()).results || [];
+
+      document.getElementById('edit-saisie-id').value = rowId;
+      document.getElementById('edit-saisie-date').value = r['Date'] ? String(r['Date']).split('T')[0] : '';
+      document.getElementById('edit-saisie-heures').value = r['Heures Normales'] || '';
+      document.getElementById('edit-saisie-notes').value = r['Notes'] || '';
+
+      _editChantiersCache = chantiers.map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id })).sort((a,b) => a.nom.localeCompare(b.nom));
+      const chantierId = (r['Chantiers'] || [])[0]?.id;
+      const chantierNom = (r['Chantiers'] || [])[0]?.value || '';
+      document.getElementById('edit-saisie-chantier-id').value = chantierId || '';
+      document.getElementById('edit-saisie-chantier-search').value = chantierNom;
+      document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
+
+      const selTache = document.getElementById('edit-saisie-tache');
+      selTache.innerHTML = '<option value="">— Choisir —</option>';
+      taches.sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(t => {
+        const opt = document.createElement('option'); opt.value = t.id; opt.textContent = t['Libellé'] || '#' + t.id; selTache.appendChild(opt);
+      });
+      const tacheId = (r['Type de taches'] || [])[0]?.id;
+      if (tacheId) selTache.value = tacheId;
+
+      await chargerSousTachesEdit(tacheId);
+      const sousTacheId = (r['Sous Taches'] || [])[0]?.id;
+      if (sousTacheId) document.getElementById('edit-saisie-sous-tache').value = sousTacheId;
+
+      document.getElementById('modal-edit-saisie').style.display = 'flex';
+    } catch(e) { alert('Erreur lors du chargement de la saisie'); }
+  }
+
+  async function sauvegarderModifSaisie() {
+    const rowId = document.getElementById('edit-saisie-id').value;
+    const heures = parseFloat(document.getElementById('edit-saisie-heures').value);
+    const notes = document.getElementById('edit-saisie-notes').value;
+    const date = document.getElementById('edit-saisie-date').value;
+    const chantierId = document.getElementById('edit-saisie-chantier-id').value;
+    const tacheId = document.getElementById('edit-saisie-tache').value;
+    const sousTacheId = document.getElementById('edit-saisie-sous-tache').value;
+    if (!heures || heures <= 0) { alert("⚠️ Veuillez saisir un nombre d'heures valide."); return; }
+    if (!chantierId) { alert('⚠️ Veuillez sélectionner un chantier.'); return; }
+    try {
+      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS,
+        body: JSON.stringify({
+          'Heures Normales': heures, 'Notes': notes, 'Date': date,
+          'Chantiers': chantierId ? [parseInt(chantierId)] : [],
+          'Type de taches': tacheId ? [parseInt(tacheId)] : [],
+          'Sous Taches': sousTacheId ? [parseInt(sousTacheId)] : [],
+        })
+      });
+      document.getElementById('modal-edit-saisie').style.display = 'none';
+      loadFeuille();
+      alert('✅ Saisie modifiée avec succès.');
+    } catch(e) { alert('Erreur lors de la modification'); }
   }
 
   function toggleSemaine(id) {
@@ -9180,6 +9307,49 @@
 </div>
 
 <!-- NAVIGATION BAS -->
+<!-- MODAL MODIFICATION SAISIE -->
+<div id="modal-edit-saisie" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:flex-end;justify-content:center">
+  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px 30px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">✏️ Modifier la saisie</div>
+      <button onclick="document.getElementById('modal-edit-saisie').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+    </div>
+    <input type="hidden" id="edit-saisie-id">
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Date</label>
+      <input type="date" id="edit-saisie-date" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Chantier</label>
+      <input type="text" id="edit-saisie-chantier-search" placeholder="🔍 Rechercher…" oninput="filtrerChantiersEdit(this.value)"
+        style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px 8px 0 0;font-size:13px;outline:none">
+      <div id="edit-saisie-chantier-liste" style="display:none;max-height:140px;overflow-y:auto;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px;background:#fff"></div>
+      <input type="hidden" id="edit-saisie-chantier-id">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Type de tâche</label>
+      <select id="edit-saisie-tache" onchange="chargerSousTachesEdit(this.value)" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+        <option value="">— Choisir —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Sous-tâche</label>
+      <select id="edit-saisie-sous-tache" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+        <option value="">— Choisir —</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Heures</label>
+      <input type="number" id="edit-saisie-heures" min="0" max="24" step="0.5" placeholder="0" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Notes</label>
+      <textarea id="edit-saisie-notes" placeholder="Notes…" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;resize:vertical;min-height:60px"></textarea>
+    </div>
+    <button onclick="sauvegarderModifSaisie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">💾 Enregistrer la modification</button>
+  </div>
+</div>
+
 <!-- MODAL SIGNATURE OBLIGATOIRE -->
 <div id="modal-signature" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:500;align-items:center;justify-content:center;padding:16px">
   <div style="background:#fff;border-radius:20px;width:100%;max-width:480px;padding:24px;max-height:90vh;overflow-y:auto">
@@ -9432,6 +9602,7 @@
     <span class="mois-label" id="mois-label">—</span>
     <button class="mois-btn" onclick="changerMois(1)">›</button>
     <button class="btn-print" onclick="imprimerPage('feuille')">🖨️</button>
+    <button onclick="ouvrirSignatureSemaineEnCours()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-left:6px">✍️ Signer</button>
   </div>
 
   <div class="print-title" id="print-title-feuille"></div>
