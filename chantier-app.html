@@ -1609,24 +1609,38 @@
   const HEURES_PREVISIONNEL_ANNUEL_RTT = 208; // cumul RTT prévisionnel indicatif sur l'année civile
 
   // Renvoie le nombre de jours calendaires restants jusqu'au 31/12 de l'année en cours (inclus), et
-  // le nombre de semaines ouvrées (lun-ven) restantes à venir.
-  function decompteAnneeRtt() {
+  // le nombre de semaines ouvrées (lun-ven) restantes à venir. Si des absences bloquantes sont fournies
+  // (congés payés, maladie, sans solde, accident, déjà validées), semainesRestantesNonBloquees exclut
+  // les semaines déjà couvertes par l'une d'elles (même logique que le graphique de solde).
+  function decompteAnneeRtt(absencesBloquantes) {
     const aujourdHui = new Date();
     const finAnnee = new Date(aujourdHui.getFullYear(), 11, 31);
     const joursRestants = Math.max(0, Math.round((finAnnee - aujourdHui) / 86400000));
+    const plagesAbsences = (absencesBloquantes || []).map(r => ({
+      debut: r['Date de début'] ? String(r['Date de début']).split('T')[0] : null,
+      fin: r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null),
+    })).filter(p => p.debut && p.fin);
     let semainesRestantes = 0;
+    let semainesRestantesNonBloquees = 0;
     let d = new Date(aujourdHui);
     while (d <= finAnnee) {
-      if (d.getDay() === 1) semainesRestantes++; // chaque lundi compte une semaine
+      if (d.getDay() === 1) { // chaque lundi compte une semaine
+        semainesRestantes++;
+        const lundiStr = dateYMD(d);
+        const vendredi = new Date(d); vendredi.setDate(vendredi.getDate() + 4);
+        const vendrediStr = dateYMD(vendredi);
+        const semaineBloquee = plagesAbsences.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
+        if (!semaineBloquee) semainesRestantesNonBloquees++;
+      }
       d.setDate(d.getDate() + 1);
     }
-    return { joursRestants, semainesRestantes };
+    return { joursRestants, semainesRestantes, semainesRestantesNonBloquees };
   }
 
 
   let rttChartInstance = null;
 
-  function drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel, prisHeuresPassees) {
+  function drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel, prisHeuresPassees, reliquatAnneePrecedente) {
     const container = document.getElementById('rtt-graph-container');
     if (!container) return;
     if (rttChartInstance) { rttChartInstance.destroy(); rttChartInstance = null; }
@@ -1634,8 +1648,10 @@
     const moisLabels = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
     const aujourdHuiStr = dateYMD(new Date());
 
-    // Solde actuel brut = point de départ (valeur d'aujourd'hui)
-    // Point de départ = solde actuel brut (acquis - RTT déjà pris passées - solde de base)
+    // Solde actuel brut = point de départ (valeur d'aujourd'hui, identique à l'onglet "Solde actuel").
+    // Le reliquat N-1 n'est pas inclus : la trajectoire n'est qu'une projection à 4h/semaine moins les
+    // absences RTT déjà validées à venir, sans mélanger le reliquat (affiché séparément, à titre
+    // informatif, dans le tableau prévisionnel).
     const soldeDepart = acquis - (prisHeuresPassees || 0) - soldeDeBasePrevisionnel;
 
     // RTT futurs par semaine (heures + jours pour tooltip) — une demande peut s'étaler sur plusieurs
@@ -2196,17 +2212,18 @@
         </div>
       ` : '';
 
-      const { joursRestants, semainesRestantes } = decompteAnneeRtt();
+      const { joursRestants, semainesRestantes, semainesRestantesNonBloquees } = decompteAnneeRtt(absencesBloquantes);
       const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
       syncDejaPrisPrevisionnel(feuilleCollab.id, totalConsommePrevisionnel);
       const heuresSupCumul = parseFloat(collabRow['Heures supplémentaires (cumul)']) || 0;
       // Le prévisionnel part du solde actuel réellement acquis (acquis, déjà à jour des heures
       // effectivement travaillées) puis reprend la logique forfaitaire de 208h/an (4h/semaine) pour
-      // projeter les semaines restantes jusqu'au 31/12.
-      const previsionnelTotalDisponible = acquis + reliquatAnneePrecedente + (HEURES_RTT_PAR_SEMAINE * semainesRestantes);
+      // projeter les semaines restantes non couvertes par une absence bloquante déjà validée (congé,
+      // maladie, sans solde, accident) jusqu'au 31/12 — cohérent avec le graphique de solde.
+      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees);
       const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
       const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
-      const rythmeIndicatif = semainesRestantes > 0 && restePrevisionnel > 0 ? restePrevisionnel / semainesRestantes : 0;
+      const rythmeIndicatif = semainesRestantesNonBloquees > 0 && restePrevisionnel > 0 ? restePrevisionnel / semainesRestantesNonBloquees : 0;
 
       const pctPris = Math.min(100, (prisHeures / previsionnelTotalDisponible) * 100);
       const pctSoldeBase = Math.min(100 - pctPris, (soldeDeBasePrevisionnel / previsionnelTotalDisponible) * 100);
@@ -2215,13 +2232,13 @@
 
       const decompteurHtml = `
         <div class="rtt-table-title">⏳ Décompte de l'année ${anneeEnCours}</div>
-        <div class="rtt-legende" style="margin-top:0">ℹ️ Prévisionnel basé sur le solde actuel réellement acquis, projeté sur les ${semainesRestantes} semaine(s) restante(s) à raison de ${HEURES_RTT_PAR_SEMAINE}h/semaine (soit l'équivalent du cumul indicatif de ${HEURES_PREVISIONNEL_ANNUEL_RTT}h/an)</div>
+        <div class="rtt-legende" style="margin-top:0">ℹ️ Prévisionnel = solde actuel réellement acquis, projeté sur les ${semainesRestantesNonBloquees} semaine(s) restante(s) non couvertes par une absence à raison de ${HEURES_RTT_PAR_SEMAINE}h/semaine (soit l'équivalent du cumul indicatif de ${HEURES_PREVISIONNEL_ANNUEL_RTT}h/an), moins les RTT déjà validées à venir. Le solde de l'année précédente est indiqué à titre informatif et n'est pas inclus dans ce total.${semainesRestantes > semainesRestantesNonBloquees ? ` — ${semainesRestantes - semainesRestantesNonBloquees} semaine(s) exclue(s) car couvertes par un congé/absence déjà validé(e)` : ''}</div>
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <tbody>
               <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
-              ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente</th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
-              <tr><th>Projection restante (${semainesRestantes} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantes)} h</td></tr>
+              ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
+              <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
               <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)} h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>` : ''}</td></tr>
               <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
             </tbody>
@@ -2298,7 +2315,7 @@
         </div>
       `;
       // Dessiner le graphique après injection HTML
-      setTimeout(() => drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel, prisHeuresPassees), 50);
+      setTimeout(() => drawRttGraph(donneesGraph, previsionnelTotalDisponible, acquis, validees, saisiesCollab, feuilleCollab, heuresSupResult, soldeDeBasePrevisionnel, prisHeures, heuresSupCumul, rttSoldeInitial, absencesBloquantes, restePrevisionnel, prisHeuresPassees, reliquatAnneePrecedente), 50);
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
     }
@@ -2351,8 +2368,8 @@
           syncDejaPrisPrevisionnel(c.id, prisHeures + soldeDeBasePrevisionnel);
 
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
-          const { semainesRestantes: semainesRestantesAdmin } = decompteAnneeRtt();
-          const previsionnelTotalDisponible = acquis + reliquatAnneePrecedente + (HEURES_RTT_PAR_SEMAINE * semainesRestantesAdmin);
+          const { semainesRestantesNonBloquees: semainesRestantesAdmin } = decompteAnneeRtt(absencesBloquantes);
+          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesAdmin);
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
 
           return { collab: c, congesCollab, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente };
@@ -2482,8 +2499,8 @@
         </table></div>` : '';
 
       const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
-      const { semainesRestantes } = decompteAnneeRtt();
-      const previsionnelTotalDisponible = acquis + reliquatAnneePrecedente + (HEURES_RTT_PAR_SEMAINE * semainesRestantes);
+      const { semainesRestantes, semainesRestantesNonBloquees } = decompteAnneeRtt(absencesBloquantes);
+      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees);
       const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
       const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
       const pctPris = Math.min(100, (prisHeures / previsionnelTotalDisponible) * 100);
@@ -2503,8 +2520,9 @@
         </tbody></table></div>
         <div class="rtt-table-title">📊 Prévisionnel ${anneeEnCours}</div>
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
-          <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${reliquatAnneePrecedente !== 0 ? ` <span class="rtt-sub">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1</span>` : ''}</td></tr>
-          <tr><th>Projection restante (${semainesRestantes} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantes)} h</td></tr>
+          <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h</td></tr>
+          ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
+          <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
           <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)}h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)}h solde de base</span>` : ''}</td></tr>
           <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
         </tbody></table></div>
@@ -2541,7 +2559,7 @@
           <td><button onclick="ouvrirModalRTTCollab(${c.id}, '${(c['Nom Complet']||'').replace(/'/g,"\\'")}', this)" style="background:none;border:none;padding:0;font-size:inherit;font-weight:600;color:var(--vert);cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-align:left">${c['Nom Complet']}</button></td>
           <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}</td>
           <td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${(acquis - prisHeures) < 0 ? `<span class="rtt-sub" style="color:#c0392b">⚠️ ${formatJoursRtt(acquis - prisHeures)}h vs acquis</span>` : ''}</td>
-          <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 || reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${soldeDeBasePrevisionnel > 0 ? `dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base` : ''}${soldeDeBasePrevisionnel > 0 && reliquatAnneePrecedente !== 0 ? ', ' : ''}${reliquatAnneePrecedente !== 0 ? `${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1` : ''}</span>` : ''}</td>
+          <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base</span>` : ''}${reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1 (info, hors total)</span>` : ''}</td>
           <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
         </tr>`;
       }).join('');
@@ -8697,8 +8715,8 @@
           const reliquatAnneePrecedente = parseFloat(c['Reliquat année précédente (h)']) || 0;
           const heuresSup = rttEtSup.heuresSup.total + heuresSupSoldeInitial;
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
-          const { semainesRestantes: semainesRestantesExport } = decompteAnneeRtt();
-          const previsionnelTotalDisponible = acquis + reliquatAnneePrecedente + (HEURES_RTT_PAR_SEMAINE * semainesRestantesExport);
+          const { semainesRestantesNonBloquees: semainesRestantesExport } = decompteAnneeRtt(absencesBloquantes);
+          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesExport);
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisRttH) - soldeDeBasePrevisionnel;
 
           rowsRecap.push([
