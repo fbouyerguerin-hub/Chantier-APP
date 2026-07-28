@@ -1604,8 +1604,8 @@
   // ── COMPTEUR RTT ──
   const TYPES_ABSENCE_BLOQUANTS_RTT = ['Congés payés', 'Maladie', 'Sans solde', 'Accident'];
   const HEURES_RTT_PAR_SEMAINE = 4;
-  const HEURES_PAR_JOUR_RTT = 8; // 1 journée prise = 8h déduites
-  const HEURES_PAR_JOUR_RTT_VENDREDI = 7; // sauf le vendredi = 7h déduites
+  const HEURES_PAR_JOUR_RTT = 7; // 1 journée prise = 7h déduites
+  const HEURES_PAR_JOUR_RTT_VENDREDI = 7; // vendredi = 7h déduites aussi
   const HEURES_PREVISIONNEL_ANNUEL_RTT = 208; // cumul RTT prévisionnel indicatif sur l'année civile
 
   // Renvoie le nombre de jours calendaires restants jusqu'au 31/12 de l'année en cours (inclus), et
@@ -2277,7 +2277,7 @@
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
-          <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile</div>
+          <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile</div>
           ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
 
@@ -2529,7 +2529,7 @@
         </tr>`;
       }).join('');
 
-    area.innerHTML = `<div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 8h déduites, 7h si vendredi — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+    area.innerHTML = `<div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
       <div class="rtt-note-annuelle">📌 Calcul basé sur l'hypothèse d'un cumul de ${HEURES_PREVISIONNEL_ANNUEL_RTT} h de RTT dans l'année (cas type, à titre indicatif). Il est demandé à chacun de prévoir ses absences RTT sur l'année à hauteur de ce montant.</div>` +
       (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
         <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
