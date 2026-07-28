@@ -4309,6 +4309,260 @@
     }
   }
 
+  // ── EXPORT EXCEL ANNUEL — VUE GANTT PAR POSTE (un onglet par poste : Étude, Fab Bois, Fab Acier, Pose) ──
+  async function exportPlanChargeGanttParPoste() {
+    const btn = document.getElementById('btn-export-charge-gantt-poste');
+    const btnLabelOrig = btn ? btn.textContent : null;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Export…'; }
+    try {
+      const annee = chargeDateRef.getFullYear();
+      const pad2 = n => String(n).padStart(2, '0');
+      const moisLabelsCourt = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+      const dateDebutAn = annee + '-01-01';
+      const dateFinAn = annee + '-12-31';
+
+      const [resCollabsAll, resCharge, resUsers] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabsGp = (await resCollabsAll.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+      const usersDataGp = (await resUsers.json()).results || [];
+      const inactifsIdsGp = getInactifsCollabIds(usersDataGp, allCollabsGp);
+      const collabs = allCollabsGp.filter(c => !inactifsIdsGp.has(String(c.id)));
+
+      let allCongesGp = [];
+      let congesUrlGp = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrlGp) {
+        const resC = await fetch(congesUrlGp, { headers: HEADERS });
+        const dataC = await resC.json();
+        allCongesGp = allCongesGp.concat(dataC.results || []);
+        congesUrlGp = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+      const congesValidesGp = allCongesGp.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFinAn && f >= dateDebutAn;
+      });
+
+      // Semaines de l'année
+      const semainesAnnee = [];
+      let lundiCur = new Date(annee, 0, 1);
+      while (lundiCur.getDay() !== 1) lundiCur.setDate(lundiCur.getDate() - 1);
+      let semNum = 0;
+      while (true) {
+        const lundi = new Date(lundiCur);
+        const vendredi = new Date(lundiCur); vendredi.setDate(lundiCur.getDate() + 4);
+        const lundiStr = dateYMD(lundi);
+        if (lundiStr > dateFinAn) break;
+        const jours = [];
+        for (let i = 0; i < 5; i++) {
+          const j = new Date(lundi); j.setDate(lundi.getDate() + i);
+          const js = dateYMD(j);
+          if (js >= dateDebutAn && js <= dateFinAn) jours.push(js);
+        }
+        if (jours.length > 0) {
+          semNum++;
+          semainesAnnee.push({ lundiStr, vendrediStr: dateYMD(vendredi), jours, mois: lundi.getMonth(),
+            label: 'S' + semNum + '\n' + lundi.getDate() + '/' + pad2(lundi.getMonth() + 1) });
+        }
+        lundiCur.setDate(lundiCur.getDate() + 7);
+      }
+
+      const wb = new ExcelJS.Workbook();
+      const logoImageId = wb.addImage({ base64: 'data:image/png;base64,' + LOGO_CHANTIER_B64, extension: 'png' });
+
+      const GRIS = 'FF494949', BLANC = 'FFFFFFFF';
+      const MOIS_BG = ['FFF5F2EE', 'FFEDEAE4'];
+
+      POSTES_CHARGE.forEach(p => {
+        const ws = wb.addWorksheet(p.key);
+        const NB_COLS = 1 + semainesAnnee.length;
+        const posteArgb = 'FF' + p.color.replace('#', '');
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+
+        ws.getColumn(1).width = 32;
+        semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 6.5; });
+
+        // ── Logo + titre ──
+        ws.getRow(1).height = 8;
+        ws.getRow(2).height = 40;
+        ws.getRow(3).height = 6;
+        ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 170, height: 39 } });
+        for (let c = 1; c <= NB_COLS; c++) {
+          ws.getCell(1, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BLANC } };
+          ws.getCell(3, c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+        }
+        ws.mergeCells(2, 3, 2, NB_COLS);
+        const titreCell = ws.getCell(2, 3);
+        titreCell.value = 'PLAN DE CHARGE ANNUEL — GANTT ' + p.key.toUpperCase() + ' — ' + annee;
+        titreCell.font = { name: 'Arial', size: 12, bold: true, color: { argb: posteArgb } };
+        titreCell.alignment = { horizontal: 'right', vertical: 'middle' };
+
+        // ── Ligne mois ──
+        const ROW_MOIS = 4;
+        ws.getRow(ROW_MOIS).height = 14;
+        let iCol = 2;
+        for (let m = 0; m < 12; m++) {
+          const nbSemMois = semainesAnnee.filter(s => s.mois === m).length;
+          if (!nbSemMois) continue;
+          if (nbSemMois > 1) ws.mergeCells(ROW_MOIS, iCol, ROW_MOIS, iCol + nbSemMois - 1);
+          const c = ws.getCell(ROW_MOIS, iCol);
+          c.value = moisLabelsCourt[m];
+          c.font = { name: 'Arial', size: 8, bold: true, color: { argb: GRIS } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          for (let k = 0; k < nbSemMois; k++) {
+            ws.getCell(ROW_MOIS, iCol + k).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: MOIS_BG[m % 2] } };
+          }
+          iCol += nbSemMois;
+        }
+
+        // ── En-têtes semaines ──
+        const ROW_HDR = 5;
+        ws.getRow(ROW_HDR).height = 24;
+        const hChantier = ws.getCell(ROW_HDR, 1);
+        hChantier.value = 'Affaire';
+        hChantier.font = { name: 'Arial', size: 10, bold: true, color: { argb: BLANC } };
+        hChantier.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+        hChantier.alignment = { horizontal: 'left', vertical: 'middle' };
+        semainesAnnee.forEach((s, i) => {
+          const c = ws.getCell(ROW_HDR, 2 + i);
+          c.value = s.label;
+          c.font = { name: 'Arial', size: 7, bold: true, color: { argb: BLANC } };
+          c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+          c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        });
+
+        // ── Affaires actives cette année sur ce poste ──
+        const affairesPoste = affaires.filter(a => {
+          if (!(parseFloat(a[p.field]) > 0)) return false;
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          if (!periodes) return false;
+          const per = periodes[p.key];
+          return per.jours > 0 && per.debut <= dateFinAn && per.fin >= dateDebutAn;
+        }).sort((a, b) => {
+          const perA = calculerPeriodesAffaire(a, collabs)[p.key].debut;
+          const perB = calculerPeriodesAffaire(b, collabs)[p.key].debut;
+          return perA.localeCompare(perB);
+        });
+
+        let row = ROW_HDR + 1;
+        affairesPoste.forEach((a, idx) => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const per = calculerPeriodesAffaire(a, collabs)[p.key];
+          const heures = parseFloat(a[p.field]) || 0;
+          const hParJour = heures / per.jours;
+          const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
+
+          ws.getRow(row).height = 15;
+          const cNom = ws.getCell(row, 1);
+          cNom.value = nom;
+          cNom.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+          cNom.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+          cNom.alignment = { vertical: 'middle' };
+          cNom.border = { left: { style: 'medium', color: { argb: posteArgb } } };
+
+          semainesAnnee.forEach((s, i) => {
+            const hSemaine = s.jours.reduce((sum, dateStr) => dateStr >= per.debut && dateStr <= per.fin ? sum + hParJour : sum, 0);
+            const c = ws.getCell(row, 2 + i);
+            if (hSemaine > 0) {
+              c.value = Math.round(hSemaine * 10) / 10;
+              c.font = { name: 'Arial', size: 7, bold: true, color: { argb: BLANC } };
+              c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: posteArgb } };
+            } else {
+              c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: bgRow } };
+            }
+            c.alignment = { horizontal: 'center', vertical: 'middle' };
+          });
+          row++;
+        });
+
+        if (!affairesPoste.length) {
+          ws.mergeCells(row, 1, row, NB_COLS);
+          const c = ws.getCell(row, 1);
+          c.value = 'Aucune affaire sur ce poste cette année.';
+          c.font = { name: 'Arial', size: 9, italic: true, color: { argb: GRIS } };
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+          row++;
+        }
+
+        // ── Ligne "Disponible" (capacité restante réelle, en rouge si déjà en surcharge) ──
+        row++;
+        ws.mergeCells(row, 1, row, NB_COLS);
+        const cSepTitre = ws.getCell(row, 1);
+        cSepTitre.value = 'DISPONIBLE (h restantes pour prévoir de nouveaux chantiers — rouge = déjà en surcharge)';
+        cSepTitre.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
+        cSepTitre.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
+        row++;
+
+        ws.getRow(row).height = 15;
+        const c0 = ws.getCell(row, 1);
+        c0.value = 'Disponible';
+        c0.font = { name: 'Arial', size: 9, bold: true, color: { argb: posteArgb } };
+        c0.border = { left: { style: 'medium', color: { argb: posteArgb } } };
+
+        semainesAnnee.forEach((s, i) => {
+          let capSem = 0;
+          s.jours.forEach(dateStr => {
+            if (estJourFerie(dateStr)) return;
+            let joursAbs = 0;
+            collabsPoste.forEach(c => {
+              const absent = congesValidesGp.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && dateStr >= d && dateStr <= f;
+                })()
+              );
+              if (absent) joursAbs++;
+            });
+            capSem += (collabsPoste.length - joursAbs) * 8;
+          });
+          capSem = Math.round(capSem);
+
+          let consSem = 0;
+          affairesPoste.forEach(a => {
+            const per = calculerPeriodesAffaire(a, collabs)[p.key];
+            const heures = parseFloat(a[p.field]) || 0;
+            if (!per.jours || !heures) return;
+            const hParJour = heures / per.jours;
+            s.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+          });
+          consSem = Math.round(consSem);
+          const dispo = capSem - consSem;
+
+          const c = ws.getCell(row, 2 + i);
+          if (capSem === 0 && consSem === 0) {
+            c.value = '';
+          } else {
+            c.value = (dispo > 0 ? '+' : '') + dispo + 'h';
+            c.font = { name: 'Arial', size: 7, bold: true, color: { argb: dispo < 0 ? 'FFC0392B' : 'FF2D8A4E' } };
+            if (dispo < 0) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE0DE' } };
+          }
+          c.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        ws.views = [{ state: 'frozen', xSplit: 1, ySplit: ROW_HDR }];
+      });
+
+      const buffer = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const aLink = document.createElement('a');
+      aLink.href = url;
+      aLink.download = 'Plan_de_charge_Gantt_par_poste_' + annee + '.xlsx';
+      aLink.click();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      console.error(e);
+      alert('❌ Erreur lors de l\'export Gantt par poste');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = btnLabelOrig; }
+    }
+  }
+
   async function chargerSuiviAffaires(affaires, collabs) {
     // Dans le nouvel onglet, on n'affiche plus le suivi dans charge-content
     return;
@@ -4446,6 +4700,22 @@
       const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       _collabsChargeCache = (await resC.json()).results || [];
     } catch(e) { _collabsChargeCache = _collabsChargeCache || []; }
+    // Pour la détection de conflit de capacité : les autres affaires déjà planifiées + les congés
+    try {
+      const resA = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
+      _affairesChargeCache = (await resA.json()).results || [];
+    } catch(e) { _affairesChargeCache = _affairesChargeCache || []; }
+    try {
+      let allConges = [];
+      let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrl) {
+        const resCg = await fetch(congesUrl, { headers: HEADERS });
+        const dataCg = await resCg.json();
+        allConges = allConges.concat(dataCg.results || []);
+        congesUrl = dataCg.next ? dataCg.next.replace('http://', 'https://') : null;
+      }
+      _congesChargeCache = allConges.filter(r => r['Statut']?.value !== 'Refusé');
+    } catch(e) { _congesChargeCache = _congesChargeCache || []; }
     if (rowId) {
       try {
         const r = await (await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + rowId + '/?user_field_names=true', { headers: HEADERS })).json();
@@ -4475,13 +4745,17 @@
   }
 
   let _collabsChargeCache = [];
+  let _affairesChargeCache = [];
+  let _congesChargeCache = [];
 
-  // Recalcule et affiche un aperçu des périodes de chaque phase à partir des valeurs saisies dans le modal
+  // Recalcule et affiche un aperçu des périodes de chaque phase à partir des valeurs saisies dans le modal,
+  // ainsi qu'une alerte si la nouvelle affaire crée un conflit de capacité (surcharge) sur un poste/jour donné.
   function mettreAJourApercuCharge() {
     const el = document.getElementById('charge-apercu-periodes');
     if (!el) return;
     const dateLivraison = document.getElementById('charge-date-livraison').value;
     if (!dateLivraison) { el.innerHTML = '<span style="color:#aaa">Renseignez la date de pose pour voir l\'échéancier des phases</span>'; return; }
+    const rowIdActuel = document.getElementById('charge-row-id').value;
     const aFictif = {
       'Date livraison': dateLivraison,
       'Heures études': document.getElementById('charge-h-etude').value,
@@ -4493,15 +4767,72 @@
       'Personnes Fab Acier': document.getElementById('charge-p-fab-acier').value,
       'Personnes Pose': document.getElementById('charge-p-pose').value,
     };
-    const periodes = calculerPeriodesAffaire(aFictif, _collabsChargeCache || []);
+    const collabs = _collabsChargeCache || [];
+    const periodes = calculerPeriodesAffaire(aFictif, collabs);
     if (!periodes) { el.innerHTML = ''; return; }
     const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
-    el.innerHTML = ['Étude','Fab Bois','Fab Acier','Pose'].map(k => {
+
+    // Autres affaires déjà planifiées (on exclut celle en cours de modification, le cas échéant)
+    const autresAffaires = (_affairesChargeCache || []).filter(a => String(a.id) !== String(rowIdActuel));
+    const conflits = [];
+
+    const periodesHtml = ['Étude','Fab Bois','Fab Acier','Pose'].map(k => {
       const p = periodes[k];
       const poste = POSTES_CHARGE.find(pp => pp.key === k);
       if (!p.jours) return `<div style="color:#ccc">${k} : —</div>`;
-      return `<div><span style="color:${poste.color};font-weight:700">${k}</span> : ${fmt(p.debut)} → ${fmt(p.fin)} <span style="color:#aaa">(${p.jours} j. ouvré${p.jours>1?'s':''})</span></div>`;
+
+      // Détection de conflit de capacité pour ce poste sur sa période
+      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === poste.posteCollab);
+      const heuresNouvelleAffaire = parseFloat(aFictif[poste.field]) || 0;
+      const hParJourNouvelle = heuresNouvelleAffaire / p.jours;
+      let joursEnConflit = [];
+      let d = new Date(p.debut + 'T12:00:00');
+      const finD = new Date(p.fin + 'T12:00:00');
+      while (d <= finD) {
+        const dow = d.getDay();
+        const dateStr = dateYMD(d);
+        if (dow !== 0 && dow !== 6) {
+          if (estJourFerie(dateStr)) {
+            joursEnConflit.push(dateStr); // jour férié : capacité nulle, toute charge est en conflit
+          } else {
+            let joursAbs = 0;
+            collabsPoste.forEach(c => {
+              const absent = (_congesChargeCache || []).some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const dd = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const ff = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : dd;
+                  return dd && dateStr >= dd && dateStr <= ff;
+                })()
+              );
+              if (absent) joursAbs++;
+            });
+            const capaciteJour = (collabsPoste.length - joursAbs) * 8;
+            let chargeExistante = 0;
+            autresAffaires.forEach(a => {
+              const perAutre = calculerPeriodesAffaire(a, collabs)?.[k];
+              const heuresAutre = parseFloat(a[poste.field]) || 0;
+              if (!perAutre || !perAutre.jours || !heuresAutre) return;
+              if (dateStr >= perAutre.debut && dateStr <= perAutre.fin) chargeExistante += heuresAutre / perAutre.jours;
+            });
+            if (chargeExistante + hParJourNouvelle > capaciteJour) joursEnConflit.push(dateStr);
+          }
+        }
+        d.setDate(d.getDate() + 1);
+      }
+      if (joursEnConflit.length) {
+        conflits.push({ poste: k, couleur: poste.color, jours: joursEnConflit });
+      }
+
+      return `<div><span style="color:${poste.color};font-weight:700">${k}</span> : ${fmt(p.debut)} → ${fmt(p.fin)} <span style="color:#aaa">(${p.jours} j. ouvré${p.jours>1?'s':''})</span>${joursEnConflit.length ? ' <span style="color:#c0392b;font-weight:700">⚠️ surcharge</span>' : ''}</div>`;
     }).join('');
+
+    const conflitHtml = conflits.length ? `
+      <div style="margin-top:8px;padding:8px 10px;background:#fdecea;border:1px solid #f5c6c0;border-radius:8px;font-size:11px;color:#c0392b">
+        <div style="font-weight:700;margin-bottom:3px">⚠️ Conflit de capacité détecté</div>
+        ${conflits.map(c => `<div>${c.poste} : plus de capacité disponible le${c.jours.length > 1 ? 's' : ''} ${c.jours.map(fmt).join(', ')}</div>`).join('')}
+      </div>` : '';
+
+    el.innerHTML = periodesHtml + conflitHtml;
   }
 
   async function sauvegarderCharge() {
@@ -9766,13 +10097,14 @@
       <button id="btn-poste-fabacier" onclick="filtrerPosteCharge('Fab Acier')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Acier</button>
       <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px">
+    <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px;flex-wrap:wrap">
       <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
-      <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris)"></div>
+      <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris);min-width:120px"></div>
       <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
       <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Mois</button>
       <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
       <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="background:#6B4EA8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt</button>
+      <button id="btn-export-charge-gantt-poste" onclick="exportPlanChargeGanttParPoste()" style="background:#8B6340;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt par poste</button>
     </div>
     <div id="charge-content" style="padding:0 16px 100px">
       <div class="feuille-loading">⏳ Chargement…</div>
