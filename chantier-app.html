@@ -4227,11 +4227,11 @@
         row++;
       }
 
-      // ── Lignes de charge par poste (rouge = charge > capacité cette semaine) ──
+      // ── Lignes de disponibilité par poste (temps réel restant = capacité − charge déjà prévue) ──
       row++;
       ws.mergeCells(row, 1, row, NB_COLS);
       const cSepTitre = ws.getCell(row, 1);
-      cSepTitre.value = 'CHARGE PAR POSTE (rouge = charge > capacité de la semaine)';
+      cSepTitre.value = 'DISPONIBLE PAR POSTE (h restantes pour prévoir de nouveaux chantiers — rouge = déjà en surcharge)';
       cSepTitre.font = { name: 'Arial', size: 9, bold: true, color: { argb: GRIS } };
       cSepTitre.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8E3DC' } };
       row++;
@@ -4266,7 +4266,7 @@
           });
           capSem = Math.round(capSem);
 
-          // Charge de la semaine (même logique que l'export "Année")
+          // Charge déjà prévue cette semaine (même logique que l'export "Année")
           let consSem = 0;
           affairesAnnee.forEach(a => {
             const per = calculerPeriodesAffaire(a, collabs)[p.key];
@@ -4276,12 +4276,16 @@
             s.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
           });
           consSem = Math.round(consSem);
+          const dispo = capSem - consSem;
 
-          const surcharge = consSem > capSem;
           const c = ws.getCell(row, 2 + i);
-          c.value = consSem > 0 ? consSem + 'h' : '';
-          c.font = { name: 'Arial', size: 7, bold: true, color: { argb: surcharge ? 'FFC0392B' : GRIS } };
-          if (surcharge) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE0DE' } };
+          if (capSem === 0 && consSem === 0) {
+            c.value = ''; // semaine sans aucune capacité (ex: tout le monde absent) : rien à afficher
+          } else {
+            c.value = (dispo > 0 ? '+' : '') + dispo + 'h';
+            c.font = { name: 'Arial', size: 7, bold: true, color: { argb: dispo < 0 ? 'FFC0392B' : 'FF2D8A4E' } };
+            if (dispo < 0) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE0DE' } };
+          }
           c.alignment = { horizontal: 'center', vertical: 'middle' };
         });
         row++;
