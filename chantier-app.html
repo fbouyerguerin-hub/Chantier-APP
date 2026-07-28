@@ -3078,6 +3078,19 @@
   ];
   let chargeDateRef = new Date();
   let chargeTabActif = 'affaires';
+  let chargeVueAnnuelle = true;
+
+  function toggleVueCapacite() {
+    chargeVueAnnuelle = !chargeVueAnnuelle;
+    const btn = document.getElementById('btn-toggle-vue-capacite');
+    if (btn) btn.textContent = chargeVueAnnuelle ? '🗓 Vue mensuelle' : '🗓 Vue annuelle';
+    if (chargeVueAnnuelle) chargerCapaciteAnnuelle(); else loadPlanCharge();
+  }
+
+  function changerAnneeCharge(delta) {
+    chargeDateRef = new Date(chargeDateRef.getFullYear() + delta, chargeDateRef.getMonth(), 1);
+    chargerCapaciteAnnuelle();
+  }
 
   // Calcule, pour une affaire donnée, les périodes [début, fin] de chaque phase
   // à partir de la Date de pose (= début de la phase Pose du chantier) :
@@ -3172,7 +3185,7 @@
     const btnNew = document.getElementById('btn-nouvelle-affaire');
     if (btnNew) btnNew.style.display = tab === 'affaires' ? '' : 'none';
     if (tab === 'affaires') chargerListeAffaires();
-    if (tab === 'capacite') loadPlanCharge();
+    if (tab === 'capacite') { chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge(); }
     if (tab === 'suivi') chargerSuiviAffairesOnglet();
   }
 
@@ -3219,7 +3232,7 @@
         btn.style.color = '#555';
       }
     });
-    loadPlanCharge();
+    chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge();
   }
 
   function changerMoisCharge(delta) {
@@ -3227,17 +3240,193 @@
     loadPlanCharge();
   }
 
-  // Met en évidence les chantiers correspondant à la recherche dans le calendrier de Capacité,
+  // Met en évidence la ligne du chantier correspondant à la recherche dans le calendrier de Capacité,
   // et estompe les autres — filtrage purement visuel (DOM), sans recalcul ni requête réseau.
   function filtrerCapaciteChantier(valeur) {
     const filtre = (valeur || '').toLowerCase().trim();
-    document.querySelectorAll('#charge-content .chip-chantier').forEach(el => {
-      if (!filtre) { el.style.opacity = '1'; el.style.outline = 'none'; el.style.boxShadow = 'none'; return; }
-      const match = el.textContent.toLowerCase().includes(filtre);
-      el.style.opacity = match ? '1' : '0.15';
-      el.style.outline = match ? '2px solid #0B3C1E' : 'none';
-      el.style.boxShadow = match ? '0 0 0 1px #0B3C1E' : 'none';
+    document.querySelectorAll('#charge-content .gantt-row-chantier').forEach(tr => {
+      if (!filtre) { tr.style.opacity = '1'; tr.style.outline = 'none'; return; }
+      const match = tr.textContent.toLowerCase().includes(filtre);
+      tr.style.opacity = match ? '1' : '0.2';
+      tr.style.outline = match ? '2px solid #0B3C1E' : 'none';
     });
+  }
+
+  // Vue Capacité annuelle : mêmes cartes Gantt-par-affaire que la vue mensuelle, mais avec des colonnes-semaine
+  // sur toute l'année (défilement horizontal) au lieu de colonnes-jour sur un seul mois.
+  async function chargerCapaciteAnnuelle() {
+    const container = document.getElementById('charge-content');
+    if (!container) return;
+    container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const annee = chargeDateRef.getFullYear();
+      document.getElementById('charge-mois-label').textContent = 'Année ' + annee;
+      const pad2 = n => String(n).padStart(2, '0');
+      const dateDebut = annee + '-01-01';
+      const dateFin = annee + '-12-31';
+      const todayStrCharge = dateYMD(new Date());
+
+      const [resCollabs, resCharge, resUsers] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabs = (await resCollabs.json()).results || [];
+      const affaires = (await resCharge.json()).results || [];
+      const usersData = (await resUsers.json()).results || [];
+      const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
+      const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
+
+      let allConges = [];
+      let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
+      while (congesUrl) {
+        const resC = await fetch(congesUrl, { headers: HEADERS });
+        const dataC = await resC.json();
+        allConges = allConges.concat(dataC.results || []);
+        congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
+      }
+      const congesValides = allConges.filter(r => {
+        if (r['Statut']?.value === 'Refusé') return false;
+        const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return d && d <= dateFin && f >= dateDebut;
+      });
+
+      // Jours ouvrés de l'année entière
+      const moisLabelsCourt = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sep','Oct','Nov','Déc'];
+      const joursNomsCourt = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+      const joursOuvresAnnee = [];
+      const curJ = new Date(annee, 0, 1);
+      while (curJ.getFullYear() === annee) {
+        const day = curJ.getDay();
+        if (day !== 0 && day !== 6) joursOuvresAnnee.push(dateYMD(curJ));
+        curJ.setDate(curJ.getDate() + 1);
+      }
+      const jourColonnes = joursOuvresAnnee.map(js => {
+        const d = new Date(js + 'T12:00:00');
+        return { dateStr: js, jours: [js], mois: d.getMonth(), estLundi: d.getDay() === 1, estActuelle: js === todayStrCharge,
+          label: joursNomsCourt[d.getDay()] + ' ' + d.getDate() + '/' + pad2(d.getMonth() + 1) };
+      });
+
+      // Capacité et charge par poste et par jour, sur toute l'année
+      const capJour = {}, consJour = {};
+      POSTES_CHARGE.forEach(p => {
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        capJour[p.key] = {}; consJour[p.key] = {};
+        jourColonnes.forEach(jc => {
+          let capSem = 0;
+          jc.jours.forEach(dateStr => {
+            if (estJourFerie(dateStr)) return;
+            let joursAbs = 0;
+            collabsPoste.forEach(c => {
+              const absent = congesValides.some(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id) &&
+                (() => {
+                  const d = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                  const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+                  return d && dateStr >= d && dateStr <= f;
+                })()
+              );
+              if (absent) joursAbs++;
+            });
+            capSem += (collabsPoste.length - joursAbs) * 8;
+          });
+          capJour[p.key][jc.dateStr] = Math.round(capSem);
+
+          let consSem = 0;
+          affaires.forEach(a => {
+            const periodes = calculerPeriodesAffaire(a, collabs);
+            if (!periodes) return;
+            const per = periodes[p.key];
+            const heures = parseFloat(a[p.field]) || 0;
+            if (!heures || !per.jours) return;
+            const hParJour = heures / per.jours;
+            jc.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+          });
+          consJour[p.key][jc.dateStr] = Math.round(consSem);
+        });
+      });
+
+      const bordureSemaine = jc => jc.estLundi ? 'border-left:2px solid #ddd' : 'border-left:1px solid #f0f0f0';
+      const postesAffiches = chargePosteActif === 'tous' ? POSTES_CHARGE : POSTES_CHARGE.filter(p => p.key === chargePosteActif);
+
+      let html = '';
+      postesAffiches.forEach(p => {
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+
+        const affairesPosteAnnee = affaires.filter(a => {
+          if (!(parseFloat(a[p.field]) > 0)) return false;
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          if (!periodes) return false;
+          const per = periodes[p.key];
+          return per.jours > 0 && per.debut <= dateFin && per.fin >= dateDebut;
+        }).sort((a, b) => {
+          const perA = calculerPeriodesAffaire(a, collabs)[p.key].debut;
+          const perB = calculerPeriodesAffaire(b, collabs)[p.key].debut;
+          return perA.localeCompare(perB);
+        });
+
+        const ganttRowsHtml = affairesPosteAnnee.length ? affairesPosteAnnee.map((a, idx) => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const per = calculerPeriodesAffaire(a, collabs)[p.key];
+          const heures = parseFloat(a[p.field]) || 0;
+          const hParJour = heures / per.jours;
+          const bgRow = idx % 2 === 0 ? '#fff' : '#fafafa';
+          return `<tr class="gantt-row-chantier" style="background:${bgRow}">
+            <td onclick="ouvrirFormCharge(${a.id})" title="${nom} — cliquer pour modifier" style="padding:4px 8px;font-size:10px;font-weight:600;color:var(--gris);position:sticky;left:0;background:${bgRow};z-index:1;cursor:pointer;white-space:normal;word-break:break-word;min-width:180px">🏗 ${nom}</td>
+            ${jourColonnes.map(jc => {
+              const heuresSemaine = jc.jours.reduce((s, dateStr) => dateStr >= per.debut && dateStr <= per.fin ? s + hParJour : s, 0);
+              const actif = heuresSemaine > 0;
+              return `<td onclick="${actif ? `ouvrirFormCharge(${a.id})` : ''}" title="${actif ? nom + ' — cliquer pour modifier' : ''}" style="padding:2px 3px;text-align:center;font-size:8px;font-weight:700;${bordureSemaine(jc)};${actif ? `background:${p.color};color:#fff;cursor:pointer` : ''}">${actif ? Math.round(heuresSemaine * 10) / 10 + 'h' : ''}</td>`;
+            }).join('')}
+          </tr>`;
+        }).join('') : `<tr><td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucune affaire cette année sur ce poste</td></tr>`;
+
+        html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.06);overflow:hidden">
+          <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
+            <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${collabsPoste.length} pers.)</span></span>
+          </div>
+          <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead>
+              <tr style="background:#f8f8f8">
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;background:#f8f8f8;z-index:2">Chantiers</th>
+                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : 'transparent'};font-weight:700;white-space:nowrap;min-width:44px;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${ganttRowsHtml}
+              <tr style="background:#f0f0f0;border-top:2px solid #e0e0e0">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris);position:sticky;left:0;background:#f0f0f0;z-index:1">Capacité (h)</td>
+                ${jourColonnes.map(jc => `<td style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:var(--gris);${bordureSemaine(jc)}">${capJour[p.key][jc.dateStr] || 0}h</td>`).join('')}
+              </tr>
+              <tr style="background:#fff3e0;border-top:1px solid #ffe0b2">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#e65100;position:sticky;left:0;background:#fff3e0;z-index:1">Charge (h)</td>
+                ${jourColonnes.map(jc => {
+                  const cap = capJour[p.key][jc.dateStr] || 0, cons = consJour[p.key][jc.dateStr] || 0;
+                  const surcharge = cons > cap;
+                  return `<td style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:${surcharge ? '#c0392b' : '#e65100'};${bordureSemaine(jc)}">${cons}h${surcharge ? ' ⚠️' : ''}</td>`;
+                }).join('')}
+              </tr>
+              <tr style="border-top:1px solid #e0f2e9">
+                <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#2D8A4E;position:sticky;left:0;background:#fff;z-index:1">Disponible (h)</td>
+                ${jourColonnes.map(jc => {
+                  const cap = capJour[p.key][jc.dateStr] || 0, cons = consJour[p.key][jc.dateStr] || 0;
+                  const dispo = cap - cons;
+                  return `<td style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'};${bordureSemaine(jc)}">${dispo}h</td>`;
+                }).join('')}
+              </tr>
+            </tbody>
+          </table>
+          </div>
+        </div>`;
+      });
+
+      container.innerHTML = html;
+      filtrerCapaciteChantier(document.getElementById('charge-capacite-recherche')?.value || '');
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
+      console.error(e);
+    }
   }
 
   async function loadPlanCharge() {
@@ -3412,20 +3601,6 @@
       let html = '';
       postesAffiches.forEach(p => {
         const detail = detailsCollabs[p.key] || [];
-        // Chantiers par jour pour ce poste
-        const chantiersParJour = {};
-        jourColonnes.forEach(jc => {
-          chantiersParJour[jc.dateStr] = affaires
-            .filter(a => {
-              if (!parseFloat(a[p.field])) return false;
-              const periodes = calculerPeriodesAffaire(a, collabs);
-              if (!periodes) return false;
-              const per = periodes[p.key];
-              if (!per.jours) return false;
-              return jc.dateStr >= per.debut && jc.dateStr <= per.fin;
-            })
-            .map(a => ({ nom: (a['Chantier'] || [])[0]?.value || 'Sans nom', id: a.id }));
-        });
 
         // Absences par collaborateur : regroupées en dropdown
         const absencesParCollab = {};
@@ -3444,17 +3619,17 @@
 
         const bordureSemaine = jc => jc.estLundi ? 'border-left:2px solid #ddd' : 'border-left:1px solid #f0f0f0';
 
-        const detailHtml = detail.length ? `
+        const ressourcesRow = detail.length ? `
           <tr>
-            <td style="padding:6px 8px;font-size:11px;color:#555;vertical-align:top;position:sticky;left:0;background:#fff;z-index:1">
+            <td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:11px;color:#555;background:#fafafa">
               <details>
                 <summary style="cursor:pointer;font-weight:600;color:var(--gris);font-size:11px;list-style:none;display:flex;align-items:center;gap:4px">
                   <span>▶</span> Ressources (${detail.length})
                 </summary>
-                <div style="margin-top:6px">
+                <div style="margin-top:6px;columns:2;column-gap:16px">
                 ${detail.map(c => {
                   const abs = absencesParCollab[c.nom] || [];
-                  return `<div style="padding:3px 0;border-top:1px solid #f0f0f0;font-size:10px;color:#555">
+                  return `<div style="padding:3px 0;border-top:1px solid #f0f0f0;font-size:10px;color:#555;break-inside:avoid">
                     👤 ${c.nom}
                     ${abs.length ? `<span style="color:#c0392b;margin-left:4px">(${abs.map(a => a.type + ' ' + a.debut + (a.fin !== a.debut ? '→' + a.fin : '')).join(', ')})</span>` : ''}
                   </div>`;
@@ -3462,13 +3637,36 @@
                 </div>
               </details>
             </td>
-            ${jourColonnes.map(jc => {
-              const chantiers = chantiersParJour[jc.dateStr] || [];
-              return `<td style="padding:4px 5px;vertical-align:top;font-size:9px;${bordureSemaine(jc)}">
-                ${chantiers.length ? chantiers.map(ch => `<div class="chip-chantier" onclick="ouvrirFormCharge(${ch.id})" title="Cliquer pour modifier cette affaire" style="cursor:pointer;background:#e8f0e7;border-radius:4px;padding:2px 4px;margin-bottom:2px;color:#0B3C1E;font-weight:600;font-size:9px;word-break:break-word;white-space:normal;min-width:52px;transition:opacity .15s">${ch.nom}</div>`).join('') : '<span style="color:#ddd">—</span>'}
-              </td>`;
-            }).join('')}
           </tr>` : `<tr><td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucun collaborateur affecté</td></tr>`;
+
+        // Vue Gantt : une ligne par affaire active ce mois-ci sur ce poste, avec une barre colorée
+        // sur ses jours actifs — bien plus lisible que d'empiler tous les noms dans chaque case-jour.
+        const affairesPosteMois = affaires.filter(a => {
+          if (!(parseFloat(a[p.field]) > 0)) return false;
+          const periodes = calculerPeriodesAffaire(a, collabs);
+          if (!periodes) return false;
+          const per = periodes[p.key];
+          return per.jours > 0 && per.debut <= dateFin && per.fin >= dateDebut;
+        }).sort((a, b) => {
+          const perA = calculerPeriodesAffaire(a, collabs)[p.key].debut;
+          const perB = calculerPeriodesAffaire(b, collabs)[p.key].debut;
+          return perA.localeCompare(perB);
+        });
+
+        const ganttRowsHtml = affairesPosteMois.length ? affairesPosteMois.map((a, idx) => {
+          const nom = (a['Chantier'] || [])[0]?.value || 'Sans nom';
+          const per = calculerPeriodesAffaire(a, collabs)[p.key];
+          const heures = parseFloat(a[p.field]) || 0;
+          const hParJour = heures / per.jours;
+          const bgRow = idx % 2 === 0 ? '#fff' : '#fafafa';
+          return `<tr class="gantt-row-chantier" style="background:${bgRow}">
+            <td onclick="ouvrirFormCharge(${a.id})" title="${nom} — cliquer pour modifier" style="padding:4px 8px;font-size:10px;font-weight:600;color:var(--gris);position:sticky;left:0;background:${bgRow};z-index:1;cursor:pointer;white-space:normal;word-break:break-word;min-width:180px">🏗 ${nom}</td>
+            ${jourColonnes.map(jc => {
+              const actif = jc.dateStr >= per.debut && jc.dateStr <= per.fin;
+              return `<td onclick="${actif ? `ouvrirFormCharge(${a.id})` : ''}" title="${actif ? nom + ' — cliquer pour modifier' : ''}" style="padding:2px 3px;text-align:center;font-size:8px;font-weight:700;${bordureSemaine(jc)};${actif ? `background:${p.color};color:#fff;cursor:pointer` : ''}">${actif ? Math.round(hParJour * 10) / 10 + 'h' : ''}</td>`;
+            }).join('')}
+          </tr>`;
+        }).join('') : `<tr><td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucune affaire ce mois-ci sur ce poste</td></tr>`;
 
         html += `<div style="background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.06);overflow:hidden">
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
@@ -3478,12 +3676,13 @@
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:140px;position:sticky;left:0;background:#f8f8f8;z-index:2">Ressources / Chantiers</th>
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;background:#f8f8f8;z-index:2">Ressources / Chantiers</th>
                 ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : 'transparent'};font-weight:700;white-space:nowrap;min-width:52px;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
-              ${detailHtml}
+              ${ressourcesRow}
+              ${ganttRowsHtml}
               <tr style="background:#f0f0f0;border-top:2px solid #e0e0e0">
                 <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris);position:sticky;left:0;background:#f0f0f0;z-index:1">Capacité (h)</td>
                 ${jourColonnes.map(jc => {
@@ -4871,14 +5070,14 @@
       const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
       await fetch(url, { method: rowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
       fermerFormCharge();
-      loadPlanCharge();
+      chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge();
     } catch(e) { alert('Erreur lors de la sauvegarde'); }
   }
 
   async function supprimerCharge(rowId) {
     if (!confirm('Supprimer cette affaire du plan de charge ?')) return;
     await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + rowId + '/', { method: 'DELETE', headers: HEADERS });
-    loadPlanCharge();
+    chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge();
   }
 
   let _affairesListeCache = [];
@@ -10112,9 +10311,10 @@
       <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px;flex-wrap:wrap">
-      <button onclick="changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
+      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(-1) : changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
       <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris);min-width:120px"></div>
-      <button onclick="changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(1) : changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+      <button id="btn-toggle-vue-capacite" onclick="toggleVueCapacite()" style="background:#494949;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🗓 Vue mensuelle</button>
       <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Mois</button>
       <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
       <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="background:#6B4EA8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt</button>
