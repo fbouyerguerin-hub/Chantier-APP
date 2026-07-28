@@ -3309,12 +3309,13 @@
       });
 
       // Capacité et charge par poste et par jour, sur toute l'année
-      const capJour = {}, consJour = {};
+      const capJour = {}, consJour = {}, presentsJour = {};
       POSTES_CHARGE.forEach(p => {
         const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
-        capJour[p.key] = {}; consJour[p.key] = {};
+        capJour[p.key] = {}; consJour[p.key] = {}; presentsJour[p.key] = {};
         jourColonnes.forEach(jc => {
           let capSem = 0;
+          const presentsSet = new Set();
           jc.jours.forEach(dateStr => {
             if (estJourFerie(dateStr)) return;
             let joursAbs = 0;
@@ -3327,10 +3328,12 @@
                 })()
               );
               if (absent) joursAbs++;
+              else presentsSet.add(c['Nom Complet'] || c['Nom complet'] || '?');
             });
             capSem += (collabsPoste.length - joursAbs) * 8;
           });
           capJour[p.key][jc.dateStr] = Math.round(capSem);
+          presentsJour[p.key][jc.dateStr] = [...presentsSet].sort();
 
           let consSem = 0;
           affaires.forEach(a => {
@@ -3397,7 +3400,11 @@
               ${ganttRowsHtml}
               <tr style="background:#f0f0f0;border-top:2px solid #e0e0e0">
                 <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris);position:sticky;left:0;background:#f0f0f0;z-index:1">Capacité (h)</td>
-                ${jourColonnes.map(jc => `<td style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:var(--gris);${bordureSemaine(jc)}">${capJour[p.key][jc.dateStr] || 0}h</td>`).join('')}
+                ${jourColonnes.map(jc => {
+                  const presents = presentsJour[p.key][jc.dateStr] || [];
+                  const titre = (presents.length ? '👥 Présents : ' + presents.join(', ') : 'Personne de présent ce jour').replace(/"/g, '&quot;');
+                  return `<td title="${titre}" style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:var(--gris);cursor:help;${bordureSemaine(jc)}">${capJour[p.key][jc.dateStr] || 0}h</td>`;
+                }).join('')}
               </tr>
               <tr style="background:#fff3e0;border-top:1px solid #ffe0b2">
                 <td style="padding:6px 8px;font-size:11px;font-weight:700;color:#e65100;position:sticky;left:0;background:#fff3e0;z-index:1">Charge (h)</td>
@@ -3415,6 +3422,10 @@
                   return `<td style="padding:4px 3px;text-align:center;font-size:9px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'};${bordureSemaine(jc)}">${dispo}h</td>`;
                 }).join('')}
               </tr>
+              <tr style="border-top:2px solid #ddd">
+                <td style="padding:6px 8px;font-size:11px;font-weight:800;color:var(--gris);position:sticky;left:0;background:#fff;z-index:1">Cumul restant (semaine)</td>
+                ${ligneCumulSemaine(jourColonnes, capJour, consJour, p.key, bordureSemaine)}
+              </tr>
             </tbody>
           </table>
           </div>
@@ -3427,6 +3438,21 @@
       container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
       console.error(e);
     }
+  }
+
+  // Construit la ligne "Cumul restant (semaine)" : une cellule fusionnée par semaine (colspan),
+  // avec la somme du Disponible (h) de tous les jours de cette semaine pour ce poste.
+  function ligneCumulSemaine(jourColonnes, capJour, consJour, posteKey, bordureFn) {
+    const groupes = [];
+    jourColonnes.forEach(jc => {
+      if (jc.estLundi || !groupes.length) groupes.push([]);
+      groupes[groupes.length - 1].push(jc);
+    });
+    return groupes.map(groupe => {
+      const cumul = groupe.reduce((s, jc) => s + ((capJour[posteKey][jc.dateStr] || 0) - (consJour[posteKey][jc.dateStr] || 0)), 0);
+      const cumulArrondi = Math.round(cumul);
+      return `<td colspan="${groupe.length}" style="padding:4px 3px;text-align:center;font-size:9px;font-weight:800;color:${cumulArrondi < 0 ? '#c0392b' : '#2D8A4E'};background:${cumulArrondi < 0 ? '#fdecea' : '#f0f7f2'};${bordureFn(groupe[0])}">${cumulArrondi > 0 ? '+' : ''}${cumulArrondi}h</td>`;
+    }).join('');
   }
 
   async function loadPlanCharge() {
@@ -3541,12 +3567,13 @@
       });
 
       // Capacité par poste par jour
-      const capJour = {}; // capJour[posteKey][dateStr]
+      const capJour = {}, presentsJour = {}; // capJour[posteKey][dateStr]
       POSTES_CHARGE.forEach(p => {
-        capJour[p.key] = {};
+        capJour[p.key] = {}; presentsJour[p.key] = {};
         const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
         jourColonnes.forEach(jc => {
           let joursAbs = 0;
+          const presentsSet = new Set();
           if (estJourFerie(jc.dateStr)) {
             joursAbs = collabsPoste.length; // jour férié : personne ne travaille, capacité à 0
           } else {
@@ -3559,9 +3586,11 @@
                 })()
               );
               if (absentCeJour) joursAbs++;
+              else presentsSet.add(c['Nom Complet'] || c['Nom complet'] || '?');
             });
           }
           capJour[p.key][jc.dateStr] = Math.round((collabsPoste.length - joursAbs) * 8);
+          presentsJour[p.key][jc.dateStr] = [...presentsSet].sort();
         });
       });
 
@@ -3687,7 +3716,9 @@
                 <td style="padding:6px 8px;font-size:11px;font-weight:700;color:var(--gris);position:sticky;left:0;background:#f0f0f0;z-index:1">Capacité (h)</td>
                 ${jourColonnes.map(jc => {
                   const cap = capJour[p.key][jc.dateStr] || 0;
-                  return `<td style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:var(--gris);${bordureSemaine(jc)}">${cap}h</td>`;
+                  const presents = presentsJour[p.key][jc.dateStr] || [];
+                  const titre = (presents.length ? '👥 Présents : ' + presents.join(', ') : 'Personne de présent ce jour').replace(/"/g, '&quot;');
+                  return `<td title="${titre}" style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:var(--gris);cursor:help;${bordureSemaine(jc)}">${cap}h</td>`;
                 }).join('')}
               </tr>
               <tr style="background:#fff3e0;border-top:1px solid #ffe0b2">
@@ -3707,6 +3738,10 @@
                   const dispo = cap - cons;
                   return `<td style="padding:4px 3px;text-align:center;font-size:10px;font-weight:700;color:${dispo < 0 ? '#c0392b' : '#2D8A4E'};${bordureSemaine(jc)}">${dispo}h</td>`;
                 }).join('')}
+              </tr>
+              <tr style="border-top:2px solid #ddd">
+                <td style="padding:6px 8px;font-size:11px;font-weight:800;color:var(--gris);position:sticky;left:0;background:#fff;z-index:1">Cumul restant (semaine)</td>
+                ${ligneCumulSemaine(jourColonnes, capJour, consJour, p.key, bordureSemaine)}
               </tr>
             </tbody>
           </table>
