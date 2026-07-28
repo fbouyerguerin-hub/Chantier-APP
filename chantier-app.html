@@ -3227,6 +3227,19 @@
     loadPlanCharge();
   }
 
+  // Met en évidence les chantiers correspondant à la recherche dans le calendrier de Capacité,
+  // et estompe les autres — filtrage purement visuel (DOM), sans recalcul ni requête réseau.
+  function filtrerCapaciteChantier(valeur) {
+    const filtre = (valeur || '').toLowerCase().trim();
+    document.querySelectorAll('#charge-content .chip-chantier').forEach(el => {
+      if (!filtre) { el.style.opacity = '1'; el.style.outline = 'none'; el.style.boxShadow = 'none'; return; }
+      const match = el.textContent.toLowerCase().includes(filtre);
+      el.style.opacity = match ? '1' : '0.15';
+      el.style.outline = match ? '2px solid #0B3C1E' : 'none';
+      el.style.boxShadow = match ? '0 0 0 1px #0B3C1E' : 'none';
+    });
+  }
+
   async function loadPlanCharge() {
     // Charger aussi la liste des affaires dans l'onglet Affaires
     chargerListeAffaires();
@@ -3411,7 +3424,7 @@
               if (!per.jours) return false;
               return jc.dateStr >= per.debut && jc.dateStr <= per.fin;
             })
-            .map(a => (a['Chantier'] || [])[0]?.value || 'Sans nom');
+            .map(a => ({ nom: (a['Chantier'] || [])[0]?.value || 'Sans nom', id: a.id }));
         });
 
         // Absences par collaborateur : regroupées en dropdown
@@ -3452,7 +3465,7 @@
             ${jourColonnes.map(jc => {
               const chantiers = chantiersParJour[jc.dateStr] || [];
               return `<td style="padding:4px 5px;vertical-align:top;font-size:9px;${bordureSemaine(jc)}">
-                ${chantiers.length ? chantiers.map(ch => `<div style="background:#e8f0e7;border-radius:4px;padding:2px 4px;margin-bottom:2px;color:#0B3C1E;font-weight:600;font-size:9px;word-break:break-word;white-space:normal;min-width:52px">${ch}</div>`).join('') : '<span style="color:#ddd">—</span>'}
+                ${chantiers.length ? chantiers.map(ch => `<div class="chip-chantier" onclick="ouvrirFormCharge(${ch.id})" title="Cliquer pour modifier cette affaire" style="cursor:pointer;background:#e8f0e7;border-radius:4px;padding:2px 4px;margin-bottom:2px;color:#0B3C1E;font-weight:600;font-size:9px;word-break:break-word;white-space:normal;min-width:52px;transition:opacity .15s">${ch.nom}</div>`).join('') : '<span style="color:#ddd">—</span>'}
               </td>`;
             }).join('')}
           </tr>` : `<tr><td colspan="${jourColonnes.length + 1}" style="padding:6px 8px;font-size:10px;color:#aaa">Aucun collaborateur affecté</td></tr>`;
@@ -3541,6 +3554,7 @@
         });
       }
       container.innerHTML = html;
+      filtrerCapaciteChantier(document.getElementById('charge-capacite-recherche')?.value || '');
 
       // Charger le suivi global des affaires après le rendu
       chargerSuiviAffaires(affaires, collabs);
@@ -10105,6 +10119,10 @@
       <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
       <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="background:#6B4EA8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt</button>
       <button id="btn-export-charge-gantt-poste" onclick="exportPlanChargeGanttParPoste()" style="background:#8B6340;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt par poste</button>
+    </div>
+    <div style="margin:0 16px 12px">
+      <input type="text" id="charge-capacite-recherche" placeholder="🔍 Rechercher un chantier dans le calendrier…" oninput="filtrerCapaciteChantier(this.value)"
+        style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
     </div>
     <div id="charge-content" style="padding:0 16px 100px">
       <div class="feuille-loading">⏳ Chargement…</div>
