@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v12';
+  const APP_VERSION = 'v13';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -5757,6 +5757,19 @@
     updateInputSemaineCollectif();
   }
 
+  // Rafraîchissement léger : ne recharge QUE les affectations (TABLE_PLANNING_ADMIN)
+  // de la semaine affichée, sans re-fetcher collaborateurs/chantiers/congés/véhicules
+  // (qui ne changent pas suite à un simple ajout/déplacement/suppression d'affectation).
+  // Beaucoup plus rapide que loadPlanningCollectif() pour ces actions courantes.
+  async function rafraichirPlanningLeger() {
+    if (isPasseCollectif) { await loadPlanningCollectif(); return; }
+    const dateDebut = dateYMD(joursCollectif[0]);
+    const dateFin = dateYMD(joursCollectif[4]);
+    const resP = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
+    planningCollectifData = (await resP.json()).results || [];
+    renderPlanningCollectifGrid();
+  }
+
   function renderPlanningCollectifGrid() {
     const jours = joursCollectif;
     const today = todayCollectif;
@@ -5951,6 +5964,21 @@
             td.appendChild(div);
           });
 
+          // Bouton de duplication de l'équipe sur les jours suivants (même chantier)
+          if (isGestAdmin && !isPasseCollectif && affCollab.length > 0) {
+            const idxJour = jours.findIndex(jj => dateYMD(jj) === dateStr);
+            const aDesJoursSuivants = idxJour >= 0 && idxJour < jours.length - 1;
+            if (aDesJoursSuivants) {
+              td.style.position = 'relative';
+              const btnDup = document.createElement('button');
+              btnDup.innerHTML = '⧉';
+              btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
+              btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;z-index:2;font-weight:700';
+              btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
+              td.appendChild(btnDup);
+            }
+          }
+
           if (isGestAdmin && !isPasseCollectif) {
             let touchMoved = false;
             td.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
@@ -6036,14 +6064,37 @@
   async function deplacerCollab(collab, newChantier, newDateStr) {
     if (collab.chantier.id === newChantier.id && collab.dateStr === newDateStr) { annulerDeplacement(); return; }
     annulerDeplacement();
+
+    const idxOld = planningCollectifData.findIndex(p => p.id === collab.affId);
+    const backup = idxOld !== -1 ? planningCollectifData[idxOld] : null;
+    if (idxOld !== -1) planningCollectifData.splice(idxOld, 1);
+
+    const collabObj = COLLABORATEURS_ADMIN.find(c => c.nom === collab.collabNom);
+    const tempRow = {
+      id: 'temp-' + Date.now(),
+      Date: newDateStr,
+      Chantier: [{ id: newChantier.id, value: newChantier.nom }],
+      Collaborateurs: [{ id: collabObj?.collabId, value: collab.collabNom }],
+      Notes: ''
+    };
+    planningCollectifData.push(tempRow);
+    renderPlanningCollectifGrid();
+
     try {
       await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + collab.affId + '/', { method: 'DELETE', headers: HEADERS });
-      const collabObj = COLLABORATEURS_ADMIN.find(c => c.nom === collab.collabNom);
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
         { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs: [collabObj?.collabId], Chantier: [parseInt(newChantier.id)], Date: newDateStr, Notes: '' }) });
       if (!res.ok) throw new Error(await res.text());
-      await loadPlanningCollectif();
-    } catch(e) { alert('Erreur : ' + e.message); await loadPlanningCollectif(); }
+      const real = await res.json();
+      const idxTemp = planningCollectifData.indexOf(tempRow);
+      if (idxTemp !== -1) planningCollectifData[idxTemp] = real;
+      renderPlanningCollectifGrid();
+    } catch(e) {
+      planningCollectifData = planningCollectifData.filter(p => p !== tempRow);
+      if (backup) planningCollectifData.push(backup);
+      renderPlanningCollectifGrid();
+      alert('Erreur lors du déplacement : ' + e.message);
+    }
   }
 
   function ouvrirModalCollabCase(chantier, dateStr) {
@@ -6119,13 +6170,48 @@
     const sel = collabsSelectionnesParJour[dateStr] || new Set();
     if (!sel.size) { modal.classList.remove('open'); return; }
     modal.classList.remove('open');
-    await Promise.all([...sel].map(collabId => {
-      const payload = { Collaborateurs:[collabId], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'' };
-      return fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-    }));
     collabsSelectionnesParJour[dateStr] = new Set();
-    await loadPlanningCollectif();
+
+    const collabIds = [...sel];
+    // Affichage instantané : on ajoute des lignes temporaires avant même la réponse réseau
+    const tempRows = collabIds.map(collabId => {
+      const collabObj = COLLABORATEURS_ADMIN.find(c => c.collabId === collabId);
+      return {
+        id: 'temp-' + Date.now() + '-' + collabId,
+        Date: dateStr,
+        Chantier: [{ id: chantier.id, value: chantier.nom }],
+        Collaborateurs: [{ id: collabId, value: collabObj?.nom || '' }],
+        Notes: ''
+      };
+    });
+    planningCollectifData.push(...tempRows);
+    renderPlanningCollectifGrid();
+
+    try {
+      const results = await Promise.allSettled(collabIds.map(collabId => {
+        const payload = { Collaborateurs:[collabId], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'' };
+        return fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+          { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) })
+          .then(r => { if (!r.ok) throw new Error('Erreur serveur'); return r.json(); });
+      }));
+      let nbEchecs = 0;
+      tempRows.forEach((t, i) => {
+        const idx = planningCollectifData.indexOf(t);
+        if (idx === -1) return;
+        if (results[i].status === 'fulfilled') {
+          planningCollectifData[idx] = results[i].value;
+        } else {
+          planningCollectifData.splice(idx, 1);
+          nbEchecs++;
+        }
+      });
+      renderPlanningCollectifGrid();
+      if (nbEchecs > 0) alert(nbEchecs + ' affectation(s) n\'ont pas pu être enregistrées (erreur réseau).');
+    } catch (e) {
+      planningCollectifData = planningCollectifData.filter(p => !tempRows.includes(p));
+      renderPlanningCollectifGrid();
+      alert('Erreur lors de l\'affectation : ' + e.message);
+    }
   }
 
   let currentDateCollab = null;
@@ -6190,10 +6276,21 @@
     ouvrirFiltrePoste();
   }
 
+  // Recalcule collaborateursFiltre selon postesSelectionnes SANS requête API
+  // (COLLABORATEURS_ADMIN est déjà en mémoire), puis ré-affiche la grille.
+  function rafraichirFiltrePosteLeger() {
+    collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
+      if (!c.collabId) return false;
+      if (postesSelectionnes.size === 0) return true;
+      return postesSelectionnes.has(c.poste);
+    });
+    renderPlanningCollectifGrid();
+  }
+
   function fermerFiltrePoste(e) {
     if (!e || e.target === document.getElementById('modal-filtre-poste')) {
       document.getElementById('modal-filtre-poste').classList.remove('open');
-      loadPlanningCollectif();
+      rafraichirFiltrePosteLeger();
     }
   }
 
@@ -6313,7 +6410,7 @@
     fermerModalChangerChantier();
     if (!affsAncien.length) {
       // Pas d'affectations, juste recharger pour afficher le nouveau chantier
-      await loadPlanningCollectif();
+      await rafraichirPlanningLeger();
       return;
     }
     // Mettre à jour chaque affectation vers le nouveau chantier
@@ -6324,7 +6421,7 @@
     try {
       await Promise.all(promises);
     } catch(e) { alert('Erreur : ' + e.message); }
-    await loadPlanningCollectif();
+    await rafraichirPlanningLeger();
   }
 
   function fermerModalChangerChantier(e) {
@@ -6355,7 +6452,7 @@
     return iconeAbsence(type) + ' ' + (type || 'Absence');
   }
 
-  function filtrerCollaborateurs() { loadPlanningCollectif(); }
+  function filtrerCollaborateurs() { rafraichirFiltrePosteLeger(); }
 
   function filtrerChantiersCollectif() {
     filtreChantierCollectif = (document.getElementById('search-chantier-collectif')?.value || '').toLowerCase().trim();
@@ -6524,7 +6621,7 @@
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(await res.text());
       document.getElementById('modal-aff-collectif').classList.remove('open');
-      await loadPlanningCollectif();
+      await rafraichirPlanningLeger();
     } catch(e) { alert('Erreur : ' + e.message); }
     finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
   }
@@ -6576,7 +6673,7 @@
         await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
           { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs:[], Chantier:[parseInt(chantier.id)], Date:dateStr, Notes:'', 'Véhicule': selIds }) });
       }
-      await loadPlanningCollectif();
+      await rafraichirPlanningLeger();
     } catch(e) { alert('Erreur véhicule : ' + e.message); }
   }
 
@@ -6587,8 +6684,122 @@
 
   async function supprimerAffCollectif(id) {
     if (!confirm('Supprimer cette affectation ?')) return;
-    await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
-    await loadPlanningCollectif();
+    const idx = planningCollectifData.findIndex(p => p.id === id);
+    const backup = idx !== -1 ? planningCollectifData[idx] : null;
+    if (idx !== -1) planningCollectifData.splice(idx, 1);
+    renderPlanningCollectifGrid();
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
+      if (!res.ok) throw new Error('Erreur serveur');
+    } catch (e) {
+      if (backup) planningCollectifData.push(backup);
+      renderPlanningCollectifGrid();
+      alert('Erreur lors de la suppression : ' + e.message);
+    }
+  }
+
+  // Duplique l'équipe d'une case (chantier + jour) sur les N jours suivants
+  // de la semaine affichée, pour le même chantier. Ignore automatiquement
+  // les collaborateurs déjà affectés ce jour-là ou en congé.
+  async function dupliquerEquipeJours(chantier, dateStrDepart, affsCollab) {
+    const idxDepart = joursCollectif.findIndex(j => dateYMD(j) === dateStrDepart);
+    const joursSuivants = idxDepart >= 0 ? joursCollectif.slice(idxDepart + 1) : [];
+    if (!joursSuivants.length) return;
+
+    const maxJours = joursSuivants.length;
+    const collabIdsADupliquer = affsCollab
+      .filter(a => a.isSaisie !== true)
+      .map(a => (a['Collaborateurs'] || a['Collaborateur'] || [])[0]?.id)
+      .filter(Boolean);
+
+    if (!collabIdsADupliquer.length) {
+      alert('Aucun collaborateur à dupliquer sur cette case.');
+      return;
+    }
+
+    const noms = affsCollab
+      .filter(a => a.isSaisie !== true)
+      .map(a => ((a['Collaborateurs'] || a['Collaborateur'] || [])[0]?.value || '').split(' ')[0])
+      .filter(Boolean)
+      .join(', ');
+
+    const saisie = prompt(
+      '👷 ' + noms + '\nDupliquer sur combien de jours suivants ? (1 à ' + maxJours + ')',
+      String(maxJours)
+    );
+    if (saisie === null) return;
+    const nbJours = parseInt(saisie, 10);
+    if (!nbJours || nbJours < 1 || nbJours > maxJours) {
+      alert('Nombre de jours invalide (doit être entre 1 et ' + maxJours + ').');
+      return;
+    }
+
+    const joursCibles = joursSuivants.slice(0, nbJours).map(dateYMD);
+    const payloads = [];
+    let nbIgnores = 0;
+
+    joursCibles.forEach(dCible => {
+      collabIdsADupliquer.forEach(collabId => {
+        const dejaPresent = planningCollectifData.some(p =>
+          p['Date'] === dCible &&
+          (p['Chantier'] || p['Chantiers'] || []).some(c => c.id === chantier.id) &&
+          (p['Collaborateurs'] || p['Collaborateur'] || []).some(c => c.id === collabId)
+        );
+        const estAbsent = congesCollectifData.some(cc =>
+          (cc['Collaborateurs'] || []).some(ccc => ccc.id === collabId) &&
+          dCible >= cc['Date de début'] && dCible <= finConge(cc)
+        );
+        if (dejaPresent || estAbsent) { nbIgnores++; return; }
+        payloads.push({ Collaborateurs: [collabId], Chantier: [parseInt(chantier.id)], Date: dCible, Notes: '' });
+      });
+    });
+
+    if (!payloads.length) {
+      alert('Rien à dupliquer : toutes les personnes sont déjà affectées ou absentes sur les jours ciblés.');
+      return;
+    }
+
+    // Affichage instantané : lignes temporaires avant la réponse réseau
+    const tempRows = payloads.map(p => {
+      const collabObj = COLLABORATEURS_ADMIN.find(c => c.collabId === p.Collaborateurs[0]);
+      return {
+        id: 'temp-' + Date.now() + '-' + p.Collaborateurs[0] + '-' + p.Date,
+        Date: p.Date,
+        Chantier: [{ id: chantier.id, value: chantier.nom }],
+        Collaborateurs: [{ id: p.Collaborateurs[0], value: collabObj?.nom || '' }],
+        Notes: ''
+      };
+    });
+    planningCollectifData.push(...tempRows);
+    renderPlanningCollectifGrid();
+    if (nbIgnores > 0) {
+      alert('Équipe dupliquée sur ' + joursCibles.length + ' jour(s). ' + nbIgnores + ' affectation(s) ignorée(s) (déjà présent ou absent).');
+    }
+
+    try {
+      const results = await Promise.allSettled(payloads.map(payload =>
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
+          { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) })
+          .then(r => { if (!r.ok) throw new Error('Erreur serveur'); return r.json(); })
+      ));
+      let nbEchecs = 0;
+      tempRows.forEach((t, i) => {
+        const idx = planningCollectifData.indexOf(t);
+        if (idx === -1) return;
+        if (results[i].status === 'fulfilled') {
+          planningCollectifData[idx] = results[i].value;
+        } else {
+          planningCollectifData.splice(idx, 1);
+          nbEchecs++;
+        }
+      });
+      renderPlanningCollectifGrid();
+      if (nbEchecs > 0) alert(nbEchecs + ' affectation(s) n\'ont pas pu être enregistrées (erreur réseau).');
+    } catch (e) {
+      planningCollectifData = planningCollectifData.filter(p => !tempRows.includes(p));
+      renderPlanningCollectifGrid();
+      alert('Erreur lors de la duplication : ' + e.message);
+    }
   }
 
   function openOptionsChantierCollectif() {
