@@ -7498,12 +7498,15 @@
     document.getElementById('chantier-tab-info').style.display = tab === 'info' ? 'block' : 'none';
     document.getElementById('chantier-tab-charge').style.display = tab === 'charge' ? 'block' : 'none';
     document.getElementById('chantier-tab-fichiers').style.display = tab === 'fichiers' ? 'block' : 'none';
+    document.getElementById('chantier-tab-taches').style.display = tab === 'taches' ? 'block' : 'none';
     document.getElementById('tab-chantier-info').style.background = tab === 'info' ? 'var(--vert)' : 'none';
     document.getElementById('tab-chantier-info').style.color = tab === 'info' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-chantier-charge').style.background = tab === 'charge' ? 'var(--vert)' : 'none';
     document.getElementById('tab-chantier-charge').style.color = tab === 'charge' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-chantier-fichiers').style.background = tab === 'fichiers' ? 'var(--vert)' : 'none';
     document.getElementById('tab-chantier-fichiers').style.color = tab === 'fichiers' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-chantier-taches').style.background = tab === 'taches' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-chantier-taches').style.color = tab === 'taches' ? '#fff' : 'var(--gris-moyen)';
   }
 
   function previewChantierFichiers(input) {
@@ -7607,6 +7610,462 @@
     }
   }
 
+  // ── Tâches / sous-tâches spécifiques à un chantier ──
+  // Réutilise les champs Baserow existants "lien vers chantier" (Type de tâche / Sous-tâche)
+  // déjà exploités par openModal() pour filtrer les tâches proposées lors de la saisie.
+  let _chantierTachesCache = null;
+
+  function creerLigneTacheChantier(label, onDelete, couleur) {
+    const c = couleur || { fond: 'var(--vert-clair)', texte: 'var(--vert)' };
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:' + c.fond + ';border-radius:20px;padding:5px 5px 5px 12px;font-size:12px;color:' + c.texte + ';font-weight:600;white-space:nowrap';
+    const span = document.createElement('span');
+    span.textContent = label;
+    chip.appendChild(span);
+    const btn = document.createElement('button');
+    btn.textContent = '✕';
+    btn.title = 'Supprimer';
+    btn.style.cssText = 'background:rgba(192,57,43,0.15);border:none;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;cursor:pointer;font-size:10px;color:#c0392b;flex-shrink:0;padding:0';
+    btn.onclick = onDelete;
+    chip.appendChild(btn);
+    return chip;
+  }
+
+  async function chargerTachesChantier(chantierId) {
+    document.getElementById('chantier-taches-placeholder').style.display = 'none';
+    document.getElementById('chantier-taches-contenu').style.display = 'block';
+    const chipsContainer = document.getElementById('chantier-types-taches-chips');
+    chipsContainer.innerHTML = '<div style="color:#aaa;font-size:12px;padding:4px 0">⏳ Chargement…</div>';
+    try {
+      const [resTypes, resSousTaches] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
+      ]);
+      const allTypes = (await resTypes.json()).results || [];
+      const allSousTaches = (await resSousTaches.json()).results || [];
+      const chId = parseInt(chantierId);
+      _chantierTachesCache = { allTypes, allSousTaches, chantierId: chId };
+      renderTachesTableChantier(chId);
+    } catch(e) {
+      chipsContainer.innerHTML = '<div style="color:#c0392b;font-size:12px;padding:8px 0">Erreur de chargement</div>';
+    }
+  }
+
+  // Id du type de tâche actuellement sélectionné (puce active) dans l'onglet Tâches du chantier ouvert
+  let _typeTacheSelectionneId = null;
+  // Empêche de re-sélectionner automatiquement la première tâche après une désélection volontaire
+  let _typeTacheSelectionInitialisee = false;
+
+  // Reconstruit tout l'onglet Tâches à partir du cache local (_chantierTachesCache), sans re-fetch :
+  // Chantier (contexte du formulaire) → puces de Tâches → panneau de Sous-tâches de la tâche sélectionnée.
+  // Chaque tâche conserve ses propres affectations de sous-tâches, indépendantes des autres tâches.
+  function renderTachesTableChantier(chId) {
+    const { allTypes, allSousTaches } = _chantierTachesCache;
+
+    const chipsContainer = document.getElementById('chantier-types-taches-chips');
+    chipsContainer.innerHTML = '';
+    const typesSpecifiques = allTypes
+      .filter(t => (t['lien vers chantier'] || []).some(c => c.id === chId))
+      .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+    const typesDisponibles = allTypes
+      .filter(t => !(t['lien vers chantier'] || []).some(c => c.id === chId))
+      .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+
+    if (!_typeTacheSelectionInitialisee) {
+      // Premier affichage pour ce chantier : on présélectionne la première tâche par confort
+      _typeTacheSelectionneId = typesSpecifiques.length ? typesSpecifiques[0].id : null;
+      _typeTacheSelectionInitialisee = true;
+    } else if (_typeTacheSelectionneId && !typesSpecifiques.some(t => t.id === _typeTacheSelectionneId)) {
+      // La tâche sélectionnée a été retirée entre-temps (suppression) : on retombe sur la première, sinon rien
+      _typeTacheSelectionneId = typesSpecifiques.length ? typesSpecifiques[0].id : null;
+    }
+    // Sinon (désélection volontaire = null, ou sélection toujours valide) : on ne touche à rien
+
+    // Affectées en premier (sélectionnables, ✕ pour retirer), puis disponibles (clic = affecter directement)
+    typesSpecifiques.forEach(type => {
+      chipsContainer.appendChild(creerChipTypeSelectionnable(type, chId, type.id === _typeTacheSelectionneId));
+    });
+    typesDisponibles.forEach(type => {
+      chipsContainer.appendChild(creerChipTypeDisponible(type, chId));
+    });
+    if (!typesSpecifiques.length && !typesDisponibles.length) {
+      chipsContainer.innerHTML = '<div style="color:#aaa;font-size:12px;padding:4px 0 8px">Aucune tâche disponible. Créez-en une ci-dessous.</div>';
+    }
+
+    renderDetailTypeSelectionne(chId, typesSpecifiques);
+
+    // Sous-tâches spécifiques à ce chantier mais sans aucun type associé
+    const listeSansType = document.getElementById('chantier-sous-taches-sans-type-liste');
+    const sousTachesSansType = allSousTaches.filter(st =>
+      (st['lien vers chantier'] || []).some(c => c.id === chId) && !(st['lien vers type de tache'] || []).length
+    ).sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+    listeSansType.innerHTML = '';
+    if (!sousTachesSansType.length) {
+      listeSansType.innerHTML = '<div style="color:#aaa;font-size:12px;padding:4px 0 8px">Aucune sous-tâche sans type pour ce chantier</div>';
+    } else {
+      sousTachesSansType.forEach(st => {
+        listeSansType.appendChild(creerLigneTacheChantier(st['Libellé'] || ('#' + st.id), () => supprimerTacheChantier('SousTaches', st.id, chId)));
+      });
+    }
+  }
+
+  // Puce d'une tâche déjà affectée à ce chantier : cliquer sur le texte la sélectionne (affiche ses
+  // sous-tâches dans le panneau de détail), cliquer sur ✕ la retire directement du chantier.
+  function creerChipTypeSelectionnable(type, chId, isSelected) {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;border-radius:20px;padding:6px 6px 6px 14px;font-size:12px;font-weight:700;white-space:nowrap;' +
+      (isSelected ? 'background:var(--vert);color:#fff' : 'background:var(--vert-clair);color:var(--vert)');
+    const span = document.createElement('span');
+    span.textContent = (isSelected ? '✓ ' : '') + (type['Libellé'] || ('#' + type.id));
+    span.style.cursor = 'pointer';
+    span.onclick = () => {
+      _typeTacheSelectionneId = type.id;
+      renderTachesTableChantier(chId);
+    };
+    chip.appendChild(span);
+    const btn = document.createElement('button');
+    btn.textContent = '✕';
+    btn.title = 'Retirer cette tâche du chantier';
+    btn.style.cssText = 'background:' + (isSelected ? 'rgba(255,255,255,0.25)' : 'rgba(192,57,43,0.15)') + ';border:none;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;cursor:pointer;font-size:10px;color:' + (isSelected ? '#fff' : '#c0392b') + ';flex-shrink:0;padding:0';
+    btn.onclick = e => { e.stopPropagation(); supprimerTacheChantier('TypeTaches', type.id, chId); };
+    chip.appendChild(btn);
+    return chip;
+  }
+
+  // Puce d'une tâche pas encore affectée à ce chantier : un simple clic l'affecte et la sélectionne
+  // directement, sans passer par une case à cocher séparée.
+  function creerChipTypeDisponible(type, chId) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = type['Libellé'] || ('#' + type.id);
+    chip.style.cssText = 'display:inline-flex;align-items:center;background:#f1ece3;border:1.5px solid #ddd5c5;border-radius:20px;padding:6px 14px;font-size:12px;color:var(--gris);font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s';
+    chip.title = 'Cliquer pour affecter cette tâche à ce chantier';
+    chip.onclick = async () => {
+      chip.disabled = true;
+      chip.style.opacity = '0.5';
+      try {
+        await lierTacheExistante('TypeTaches', type.id, chId);
+        _typeTacheSelectionneId = type.id;
+        renderTachesTableChantier(chId);
+      } catch(e) {
+        alert('Erreur lors de la liaison : ' + e.message);
+        chip.disabled = false;
+        chip.style.opacity = '1';
+      }
+    };
+    return chip;
+  }
+
+  // Panneau de détail : sous-tâches de la tâche actuellement sélectionnée (puce active), propres à CETTE
+  // tâche uniquement (chaque tâche a ses propres affectations). Liaison limitée aux sous-tâches compatibles
+  // (déjà associées à cette tâche ailleurs — colorées en bleu — ou libres/sans type — en beige) + création directe.
+  function renderDetailTypeSelectionne(chId, typesSpecifiques) {
+    const detail = document.getElementById('chantier-type-selectionne-detail');
+    detail.innerHTML = '';
+    if (!_typeTacheSelectionneId) return;
+    const type = typesSpecifiques.find(t => t.id === _typeTacheSelectionneId);
+    if (!type) return;
+    const { allSousTaches } = _chantierTachesCache;
+
+    const panel = document.createElement('div');
+    panel.style.cssText = 'border:1.5px solid #e3ded2;border-radius:12px;padding:12px;background:#fbfaf7';
+
+    const titre = document.createElement('div');
+    titre.style.cssText = 'font-size:12px;font-weight:700;color:var(--vert);margin-bottom:4px';
+    titre.textContent = '📌 Sous-tâches de « ' + (type['Libellé'] || ('#' + type.id)) + ' »';
+    panel.appendChild(titre);
+
+    const consigne = document.createElement('div');
+    consigne.style.cssText = 'font-size:10px;color:#999;margin-bottom:6px';
+    consigne.textContent = 'Cliquez sur une puce pour l\u2019affecter à cette tâche, ou pour la retirer si elle l\u2019est déjà.';
+    panel.appendChild(consigne);
+
+    const legende = document.createElement('div');
+    legende.style.cssText = 'font-size:10px;color:#999;margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:5px';
+    legende.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--vert)"></span> affectée à cette tâche'
+      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ddd5c5"></span> libre'
+      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2E75B6"></span> affectée à cette tâche (autre chantier)'
+      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#8e5aa6"></span> utilisée par une autre tâche de ce chantier';
+    panel.appendChild(legende);
+
+    // Sous-tâches déjà liées à la fois à ce type ET à ce chantier — affectées à CETTE tâche précisément
+    const sousTachesDuType = allSousTaches.filter(st =>
+      (st['lien vers chantier'] || []).some(c => c.id === chId) &&
+      (st['lien vers type de tache'] || []).some(t => t.id === type.id)
+    ).sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+    const idsAffectes = new Set(sousTachesDuType.map(st => st.id));
+    console.log('[DEBUG2 affichage] tâche affichée =', type['Libellé'], '(id ' + type.id + ') — sous-tâches reconnues affectées =', sousTachesDuType.map(st => st['Libellé'] + ' (id ' + st.id + ')'));
+
+    // Toutes les autres sous-tâches restent proposables (libres, affectées ailleurs, ou sur une autre tâche de ce chantier)
+    const autresSousTaches = allSousTaches
+      .filter(st => !idsAffectes.has(st.id))
+      .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+
+    // Affectées en premier, puis disponibles
+    const toutesAffichees = [...sousTachesDuType, ...autresSousTaches];
+
+    const liste = document.createElement('div');
+    liste.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px';
+    if (!toutesAffichees.length) {
+      liste.innerHTML = '<div style="color:#aaa;font-size:12px">Aucune sous-tâche disponible</div>';
+    } else {
+      toutesAffichees.forEach(st => {
+        const label = st['Libellé'] || ('#' + st.id);
+        if (idsAffectes.has(st.id)) {
+          liste.appendChild(creerPuceSousTacheToggle(label, true, 'affectee', async () => {
+            await retirerSousTacheDeTache(st.id, type.id);
+            afficherToastTache('➖ « ' + label + ' » retirée de « ' + (type['Libellé'] || 'cette tâche') + ' »');
+            renderTachesTableChantier(chId);
+          }));
+        } else {
+          const typesLies = (st['lien vers type de tache'] || []).map(t => t.id);
+          const dejaSurCeChantier = (st['lien vers chantier'] || []).some(c => c.id === chId);
+          let variant = 'defaut';
+          if (dejaSurCeChantier) variant = 'partagee';
+          else if (typesLies.includes(type.id)) variant = 'associee';
+          liste.appendChild(creerPuceSousTacheToggle(label, false, variant, async () => {
+            await lierSousTacheAuType(st.id, chId, type.id);
+            afficherToastTache('✓ « ' + label + ' » affectée à « ' + (type['Libellé'] || 'cette tâche') + ' »');
+            renderTachesTableChantier(chId);
+          }));
+        }
+      });
+    }
+    panel.appendChild(liste);
+
+    // Créer directement une nouvelle sous-tâche pour cette tâche
+    const rowCreate = document.createElement('div');
+    rowCreate.style.cssText = 'display:flex;gap:6px';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Nouvelle sous-tâche pour ' + (type['Libellé'] || 'cette tâche') + '…';
+    input.style.cssText = 'flex:1;min-width:0;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;box-sizing:border-box';
+    const btnCreate = document.createElement('button');
+    btnCreate.textContent = '+ Créer';
+    btnCreate.style.cssText = 'background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0';
+    const creerSousTache = async () => {
+      const nom = input.value.trim();
+      if (!nom) return;
+      input.disabled = true; btnCreate.disabled = true;
+      try {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true',
+          { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [chId], 'lien vers type de tache': [type.id] }) });
+        if (!res.ok) throw new Error(await res.text());
+        const saved = await res.json();
+        _chantierTachesCache.allSousTaches.push(saved);
+        renderTachesTableChantier(chId);
+      } catch(e) {
+        alert('Erreur lors de la création : ' + e.message);
+        input.disabled = false; btnCreate.disabled = false;
+      }
+    };
+    input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); creerSousTache(); } };
+    btnCreate.onclick = creerSousTache;
+    rowCreate.appendChild(input);
+    rowCreate.appendChild(btnCreate);
+    panel.appendChild(rowCreate);
+
+    detail.appendChild(panel);
+  }
+
+  // Puce à bascule : affiche l'état actuel (affectée ou non) et lance l'action au clic, sans étape intermédiaire.
+  // Petit message de confirmation temporaire (en bas de l'écran), pour rendre visible une action
+  // qui pourrait passer inaperçue à cause du réordonnancement de la liste (affectées en premier).
+  function afficherToastTache(message) {
+    let toast = document.getElementById('chantier-taches-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'chantier-taches-toast';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--vert);color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,0.3);z-index:99999;opacity:0;transition:opacity .2s ease;pointer-events:none;max-width:90vw;text-align:center';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.style.opacity = '1';
+    clearTimeout(toast._timeoutId);
+    toast._timeoutId = setTimeout(() => { toast.style.opacity = '0'; }, 1800);
+  }
+
+  function creerPuceSousTacheToggle(label, actif, variant, onToggle) {
+    // Mêmes couleurs que les points de la légende, pour un mapping direct et sans ambiguïté
+    const COULEURS_POINT = {
+      affectee: 'var(--vert)',
+      associee: '#2E75B6',
+      partagee: '#8e5aa6',
+      defaut:   '#ddd5c5'
+    };
+    const couleurPoint = actif ? COULEURS_POINT.affectee : (COULEURS_POINT[variant] || COULEURS_POINT.defaut);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:7px;background:#fff;border:1.5px solid ' + (actif ? 'var(--vert)' : '#e3ded2') + ';border-radius:20px;padding:5px 12px;font-size:12px;color:var(--gris);font-weight:' + (actif ? '700' : '600') + ';cursor:pointer;white-space:nowrap;user-select:none;transition:opacity .15s';
+    const point = document.createElement('span');
+    point.style.cssText = 'width:9px;height:9px;border-radius:50%;background:' + couleurPoint + ';flex-shrink:0';
+    chip.appendChild(point);
+    const span = document.createElement('span');
+    span.textContent = label;
+    chip.appendChild(span);
+    chip.onclick = async () => {
+      chip.disabled = true;
+      chip.style.opacity = '0.55';
+      try {
+        await onToggle();
+      } catch(e) {
+        alert('Erreur : ' + e.message);
+        chip.disabled = false;
+        chip.style.opacity = '1';
+      }
+    };
+    return chip;
+  }
+
+  // Retire une sous-tâche d'une tâche précise (retire uniquement le type, la sous-tâche n'est pas supprimée :
+  // elle redevient "sans type" sur ce chantier si elle n'a plus aucune autre tâche associée).
+  async function retirerSousTacheDeTache(sousTacheId, typeId) {
+    const resGet = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/' + sousTacheId + '/?user_field_names=true', { headers: HEADERS });
+    if (!resGet.ok) throw new Error('Impossible de lire la sous-tâche (' + resGet.status + ')');
+    const st = await resGet.json();
+    const typesActuels = (st['lien vers type de tache'] || []).map(t => t.id);
+    const nouveauxTypes = typesActuels.filter(t => t !== typeId);
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/' + sousTacheId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'lien vers type de tache': nouveauxTypes }) });
+    if (!res.ok) throw new Error(await res.text());
+    const updated = await res.json();
+    // Met à jour le cache local avec la ligne fraîche renvoyée par Baserow, au lieu de tout recharger
+    // (évite un léger décalage de propagation de l'endpoint liste juste après une écriture).
+    const idx = _chantierTachesCache.allSousTaches.findIndex(r => r.id === updated.id);
+    if (idx !== -1) _chantierTachesCache.allSousTaches[idx] = updated;
+  }
+
+  // variant 'defaut' = sous-tâche libre, 'associee' = déjà rattachée à cette tâche ailleurs (bleu),
+  // 'partagee' = déjà utilisée par une autre tâche de ce même chantier (violet)
+  function creerLigneCheckboxTache(id, label, variant) {
+    const PALETTE_VARIANTS = {
+      associee: { fond: '#e3edf7', bordure: '#a9c6e8', texte: '#2E75B6', fondCoche: '#2E75B6' },
+      partagee: { fond: '#f3e9f7', bordure: '#d3b8e0', texte: '#8e5aa6', fondCoche: '#8e5aa6' },
+      defaut: { fond: '#f1ece3', bordure: '#ddd5c5', texte: 'var(--gris)', fondCoche: 'var(--vert)' }
+    };
+    const couleurs = PALETTE_VARIANTS[variant] || PALETTE_VARIANTS.defaut;
+    const row = document.createElement('label');
+    row.style.cssText = 'display:inline-flex;align-items:center;background:' + couleurs.fond + ';border:1.5px solid ' + couleurs.bordure + ';border-radius:20px;padding:5px 12px;font-size:12px;color:' + couleurs.texte + ';font-weight:600;cursor:pointer;white-space:nowrap;user-select:none;transition:background .15s,border-color .15s,color .15s';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = id;
+    cb.style.cssText = 'position:absolute;opacity:0;width:0;height:0';
+    cb.onchange = () => {
+      if (cb.checked) { row.style.background = couleurs.fondCoche; row.style.borderColor = couleurs.fondCoche; row.style.color = '#fff'; }
+      else { row.style.background = couleurs.fond; row.style.borderColor = couleurs.bordure; row.style.color = couleurs.texte; }
+    };
+    const span = document.createElement('span');
+    span.textContent = label;
+    row.appendChild(cb);
+    row.appendChild(span);
+    return row;
+  }
+
+  async function ajouterTypeTacheChantier() {
+    const rowId = document.getElementById('chantier-row-id').value;
+    if (!rowId) return;
+    const input = document.getElementById('chantier-nouveau-type-tache');
+    const nom = input.value.trim();
+    if (!nom) return;
+    input.disabled = true;
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [parseInt(rowId)] }) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      input.value = '';
+      _typeTacheSelectionneId = saved.id;
+      _chantierTachesCache.allTypes.push(saved);
+      renderTachesTableChantier(parseInt(rowId));
+    } catch(e) { alert('Erreur lors de la création du type de tâche : ' + e.message); }
+    finally { input.disabled = false; }
+  }
+
+  async function ajouterSousTacheSansType() {
+    const rowId = document.getElementById('chantier-row-id').value;
+    if (!rowId) return;
+    const input = document.getElementById('chantier-nouvelle-sous-tache-sans-type');
+    const nom = input.value.trim();
+    if (!nom) return;
+    input.disabled = true;
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true',
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [parseInt(rowId)] }) });
+      if (!res.ok) throw new Error(await res.text());
+      const saved = await res.json();
+      input.value = '';
+      _chantierTachesCache.allSousTaches.push(saved);
+      renderTachesTableChantier(parseInt(rowId));
+    } catch(e) { alert('Erreur lors de la création de la sous-tâche : ' + e.message); }
+    finally { input.disabled = false; }
+  }
+
+  // Lie une tâche/sous-tâche déjà existante (globale ou déjà utilisée sur un autre chantier)
+  // à ce chantier, sans dupliquer la ligne : on ajoute simplement ce chantier à son lien.
+  // N'affecte pas le type associé (utilisée pour les types eux-mêmes et les sous-tâches sans type).
+  async function lierTacheExistante(key, id, chantierId) {
+    const cache = key === 'TypeTaches' ? _chantierTachesCache?.allTypes : _chantierTachesCache?.allSousTaches;
+    const row = (cache || []).find(r => r.id === parseInt(id));
+    const chantiersActuels = (row?.['lien vers chantier'] || []).map(c => c.id);
+    const nouveauxChantiers = [...new Set([...chantiersActuels, parseInt(chantierId)])];
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + id + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'lien vers chantier': nouveauxChantiers }) });
+    if (!res.ok) throw new Error(await res.text());
+    const updated = await res.json();
+    if (cache) {
+      const idx = cache.findIndex(r => r.id === updated.id);
+      if (idx !== -1) cache[idx] = updated;
+    }
+  }
+
+  // Lie une sous-tâche existante à ce chantier ET au type de tâche de la carte depuis laquelle on l'a liée
+  // (ajoute le type sans retirer ceux déjà présents, pour une sous-tâche pouvant appartenir à plusieurs types).
+  async function lierSousTacheAuType(sousTacheId, chantierId, typeId) {
+    const resGet = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/' + sousTacheId + '/?user_field_names=true', { headers: HEADERS });
+    if (!resGet.ok) throw new Error('Impossible de lire la sous-tâche (' + resGet.status + ')');
+    const st = await resGet.json();
+    const chantiersActuels = (st['lien vers chantier'] || []).map(c => c.id);
+    const typesActuels = (st['lien vers type de tache'] || []).map(t => t.id);
+    const nouveauxChantiers = [...new Set([...chantiersActuels, parseInt(chantierId)])];
+    const nouveauxTypes = typesActuels.includes(parseInt(typeId)) ? typesActuels : [...typesActuels, parseInt(typeId)];
+    const payload = { 'lien vers chantier': nouveauxChantiers, 'lien vers type de tache': nouveauxTypes };
+    console.log('[DEBUG2 lier] PAYLOAD ENVOYÉ =', JSON.stringify(payload));
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/' + sousTacheId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+    if (!res.ok) throw new Error(await res.text());
+    const updated = await res.json();
+    console.log('[DEBUG2 lier] REPONSE lien vers chantier =', JSON.stringify(updated['lien vers chantier']));
+    console.log('[DEBUG2 lier] REPONSE lien vers type de tache =', JSON.stringify(updated['lien vers type de tache']));
+    console.log('[DEBUG2 lier] typeId recherché ensuite pour affichage =', typeId, typeof typeId);
+    // Met à jour le cache local avec la ligne fraîche renvoyée par Baserow, au lieu de tout recharger
+    // (évite un léger décalage de propagation de l'endpoint liste juste après une écriture).
+    const idx = _chantierTachesCache.allSousTaches.findIndex(r => r.id === updated.id);
+    console.log('[DEBUG2 lier] index trouvé dans le cache =', idx, '/ total cache =', _chantierTachesCache.allSousTaches.length);
+    if (idx !== -1) _chantierTachesCache.allSousTaches[idx] = updated;
+  }
+
+  // Retire une tâche/sous-tâche de CE chantier uniquement : on déconnecte le lien vers ce chantier,
+  // la ligne elle-même n'est jamais supprimée (elle peut être utilisée ailleurs — chantiers, saisies,
+  // ou simplement être une tâche globale de l'entreprise comme Congés/RTT/Maladie).
+  async function supprimerTacheChantier(key, id, chantierId) {
+    const cache = key === 'TypeTaches' ? _chantierTachesCache?.allTypes : _chantierTachesCache?.allSousTaches;
+    const row = (cache || []).find(r => r.id === id);
+    const chantiersLies = (row?.['lien vers chantier'] || []).map(c => c.id);
+    const label = key === 'TypeTaches' ? 'cette tâche' : 'cette sous-tâche';
+    if (!confirm('Retirer ' + label + ' de ce chantier ?\nElle ne sera plus proposée ici, mais elle n\u2019est pas supprimée : elle reste disponible ailleurs (autres chantiers, tâche globale de l\u2019entreprise…).')) return;
+    try {
+      const nouveauxChantiers = chantiersLies.filter(cid => cid !== parseInt(chantierId));
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + id + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'lien vers chantier': nouveauxChantiers }) });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      const cache = key === 'TypeTaches' ? _chantierTachesCache.allTypes : _chantierTachesCache.allSousTaches;
+      const idx = cache.findIndex(r => r.id === updated.id);
+      if (idx !== -1) cache[idx] = updated;
+      renderTachesTableChantier(parseInt(chantierId));
+    } catch(e) { alert('Erreur lors du retrait : ' + e.message); }
+  }
+
   // Identique à mettreAJourApercuCharge() mais pour l'onglet Plan de charge du modal "Nouveau chantier"
   function mettreAJourApercuChargeChantier() {
     const el = document.getElementById('chantier-charge-apercu-periodes');
@@ -7667,6 +8126,9 @@
         await chargerFichiersChantier(rowId);
         // En modification, on peut uploader
         document.getElementById('chantier-fichiers-liste').previousElementSibling && null;
+        // Charger les tâches/sous-tâches spécifiques à ce chantier
+        _typeTacheSelectionInitialisee = false;
+        await chargerTachesChantier(rowId);
       } catch(e) {}
       // Charger un éventuel plan de charge déjà existant pour ce chantier
       try {
@@ -7693,6 +8155,15 @@
     if (lblUpload) lblUpload.style.opacity = rowId ? '1' : '0.4';
     if (!rowId) {
       document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Enregistrez d\u2019abord le chantier pour ajouter des fichiers</div>';
+      document.getElementById('chantier-taches-placeholder').style.display = 'block';
+      document.getElementById('chantier-taches-contenu').style.display = 'none';
+      document.getElementById('chantier-types-taches-chips').innerHTML = '';
+      document.getElementById('chantier-type-selectionne-detail').innerHTML = '';
+      _typeTacheSelectionneId = null;
+      _typeTacheSelectionInitialisee = false;
+      document.getElementById('chantier-nouveau-type-tache').value = '';
+      document.getElementById('chantier-nouvelle-sous-tache-sans-type').value = '';
+      document.getElementById('chantier-sous-taches-sans-type-liste').innerHTML = '';
     }
     switchChantierTab('info');
     document.getElementById('modal-chantier').style.display = 'flex';
@@ -7761,6 +8232,7 @@
         const lblUpload = document.querySelector('#chantier-tab-fichiers label');
         if (lblUpload) lblUpload.style.opacity = '1';
         document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
+        await chargerTachesChantier(saved.id);
         switchChantierTab('fichiers');
         await loadChantiersGestion();
       } else {
@@ -10408,6 +10880,7 @@
         <button id="tab-chantier-info" onclick="switchChantierTab('info')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Infos</button>
         <button id="tab-chantier-charge" onclick="switchChantierTab('charge')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📊 Charge</button>
         <button id="tab-chantier-fichiers" onclick="switchChantierTab('fichiers')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📎 Fichiers</button>
+        <button id="tab-chantier-taches" onclick="switchChantierTab('taches')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔧 Tâches</button>
       </div>
     </div>
 
@@ -10485,6 +10958,31 @@
       </label>
       <div id="chantier-fichiers-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
       <button onclick="uploaderFichiersChantier()" id="btn-upload-chantier-fichiers" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer;margin-top:10px;display:none">📤 Uploader les fichiers</button>
+    </div>
+
+    <!-- Onglet Tâches spécifiques -->
+    <div id="chantier-tab-taches" style="padding:0 20px;overflow-y:auto;flex:1;display:none">
+      <div id="chantier-taches-placeholder" style="color:#aaa;font-size:13px;text-align:center;padding:20px">Enregistrez d'abord le chantier pour ajouter des tâches spécifiques</div>
+      <div id="chantier-taches-contenu" style="display:none">
+        <div style="font-size:10px;color:#aaa;margin-bottom:14px">Sélectionnez une tâche ci-dessous pour lui associer des sous-tâches. Ces éléments ne seront proposés que sur ce chantier lors de la saisie des heures, en plus des tâches habituelles.</div>
+
+        <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">⚙️ Tâches de ce chantier</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:8px">Cliquez sur une tâche libre pour l'affecter à ce chantier, ou créez-en une nouvelle.</div>
+        <div id="chantier-types-taches-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;margin-bottom:24px">
+          <input type="text" id="chantier-nouveau-type-tache" placeholder="Ou créer une nouvelle tâche…" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterTypeTacheChantier();}">
+          <button onclick="ajouterTypeTacheChantier()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+ Créer</button>
+        </div>
+        <div id="chantier-type-selectionne-detail" style="margin-bottom:18px"></div>
+
+        <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">📌 Sous-tâches sans type associé</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:10px">Pour une sous-tâche rattachée à une tâche précise, sélectionnez plutôt cette tâche ci-dessus.</div>
+        <div id="chantier-sous-taches-sans-type-liste" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <input type="text" id="chantier-nouvelle-sous-tache-sans-type" placeholder="Ou créer une sous-tâche sans type…" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterSousTacheSansType();}">
+          <button onclick="ajouterSousTacheSansType()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+ Créer</button>
+        </div>
+      </div>
     </div>
 
     <div style="padding:16px 20px">
