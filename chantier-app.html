@@ -5964,19 +5964,31 @@
             td.appendChild(div);
           });
 
-          // Bouton de duplication de l'équipe sur les jours suivants (même chantier)
-          if (isGestAdmin && !isPasseCollectif && affCollab.length > 0) {
-            const idxJour = jours.findIndex(jj => dateYMD(jj) === dateStr);
-            const aDesJoursSuivants = idxJour >= 0 && idxJour < jours.length - 1;
-            if (aDesJoursSuivants) {
-              td.style.position = 'relative';
-              const btnDup = document.createElement('button');
-              btnDup.innerHTML = '⧉';
-              btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
-              btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;z-index:2;font-weight:700';
-              btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
-              td.appendChild(btnDup);
-            }
+          // Boutons d'action sur la case : duplication de l'équipe + suppression globale
+          const idxJour = jours.findIndex(jj => dateYMD(jj) === dateStr);
+          const aDesJoursSuivants = idxJour >= 0 && idxJour < jours.length - 1;
+          const showDup = isGestAdmin && !isPasseCollectif && affCollab.length > 0 && aDesJoursSuivants;
+          const affCollabSupprimables = affCollab.filter(a => a.isSaisie !== true);
+          const showClearAll = isGestAdmin && !isPasseCollectif && affCollabSupprimables.length > 0;
+
+          if (showDup || showClearAll) td.style.position = 'relative';
+
+          if (showDup) {
+            const btnDup = document.createElement('button');
+            btnDup.innerHTML = '⧉';
+            btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
+            btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;z-index:2;font-weight:700';
+            btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
+            td.appendChild(btnDup);
+          }
+
+          if (showClearAll) {
+            const btnClearAll = document.createElement('button');
+            btnClearAll.innerHTML = '🗑';
+            btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
+            btnClearAll.style.cssText = 'position:absolute;top:2px;right:' + (showDup ? '22px' : '2px') + ';background:#fdecea;border:1px solid #e6b3ac;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:#c0392b;line-height:1.4;z-index:2;font-weight:700';
+            btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
+            td.appendChild(btnClearAll);
           }
 
           if (isGestAdmin && !isPasseCollectif) {
@@ -6799,6 +6811,44 @@
       planningCollectifData = planningCollectifData.filter(p => !tempRows.includes(p));
       renderPlanningCollectifGrid();
       alert('Erreur lors de la duplication : ' + e.message);
+    }
+  }
+
+  // Retire en une fois tous les collaborateurs affectés à une case (chantier + jour).
+  // Ne touche ni à la ligne véhicule ni aux affectations issues d'une saisie (verrouillées).
+  async function supprimerTousCollabCase(chantier, dateStr, affsCollab) {
+    if (!affsCollab.length) return;
+    const noms = affsCollab
+      .map(a => ((a['Collaborateurs'] || a['Collaborateur'] || [])[0]?.value || '').split(' ')[0])
+      .filter(Boolean)
+      .join(', ');
+    if (!confirm('Retirer ' + affsCollab.length + ' collaborateur(s) de cette case ?\n👷 ' + noms)) return;
+
+    const ids = affsCollab.map(a => a.id);
+    const backups = ids.map(id => planningCollectifData.find(p => p.id === id)).filter(Boolean);
+    planningCollectifData = planningCollectifData.filter(p => !ids.includes(p.id));
+    renderPlanningCollectifGrid();
+
+    try {
+      const results = await Promise.allSettled(ids.map(id =>
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/',
+          { method: 'DELETE', headers: HEADERS })
+          .then(r => { if (!r.ok) throw new Error('Erreur serveur'); return id; })
+      ));
+      let nbEchecs = 0;
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          const backup = backups[i];
+          if (backup) planningCollectifData.push(backup);
+          nbEchecs++;
+        }
+      });
+      renderPlanningCollectifGrid();
+      if (nbEchecs > 0) alert(nbEchecs + ' suppression(s) ont échoué (erreur réseau).');
+    } catch (e) {
+      planningCollectifData.push(...backups);
+      renderPlanningCollectifGrid();
+      alert('Erreur lors de la suppression : ' + e.message);
     }
   }
 
