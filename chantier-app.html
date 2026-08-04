@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v13';
+  const APP_VERSION = 'v14';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7782,7 +7782,7 @@
 
     const legende = document.createElement('div');
     legende.style.cssText = 'font-size:10px;color:#999;margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:5px';
-    legende.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--vert)"></span> affectée à cette tâche'
+    legende.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c0392b"></span> affectée à cette tâche'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ddd5c5"></span> libre'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2E75B6"></span> affectée à cette tâche (autre chantier)'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#8e5aa6"></span> utilisée par une autre tâche de ce chantier';
@@ -7794,7 +7794,6 @@
       (st['lien vers type de tache'] || []).some(t => t.id === type.id)
     ).sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
     const idsAffectes = new Set(sousTachesDuType.map(st => st.id));
-    console.log('[DEBUG2 affichage] tâche affichée =', type['Libellé'], '(id ' + type.id + ') — sous-tâches reconnues affectées =', sousTachesDuType.map(st => st['Libellé'] + ' (id ' + st.id + ')'));
 
     // Toutes les autres sous-tâches restent proposables (libres, affectées ailleurs, ou sur une autre tâche de ce chantier)
     const autresSousTaches = allSousTaches
@@ -7888,7 +7887,7 @@
   function creerPuceSousTacheToggle(label, actif, variant, onToggle) {
     // Mêmes couleurs que les points de la légende, pour un mapping direct et sans ambiguïté
     const COULEURS_POINT = {
-      affectee: 'var(--vert)',
+      affectee: '#c0392b',
       associee: '#2E75B6',
       partagee: '#8e5aa6',
       defaut:   '#ddd5c5'
@@ -7896,7 +7895,7 @@
     const couleurPoint = actif ? COULEURS_POINT.affectee : (COULEURS_POINT[variant] || COULEURS_POINT.defaut);
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:7px;background:#fff;border:1.5px solid ' + (actif ? 'var(--vert)' : '#e3ded2') + ';border-radius:20px;padding:5px 12px;font-size:12px;color:var(--gris);font-weight:' + (actif ? '700' : '600') + ';cursor:pointer;white-space:nowrap;user-select:none;transition:opacity .15s';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:7px;background:#fff;border:1.5px solid ' + (actif ? '#c0392b' : '#e3ded2') + ';border-radius:20px;padding:5px 12px;font-size:12px;color:var(--gris);font-weight:' + (actif ? '700' : '600') + ';cursor:pointer;white-space:nowrap;user-select:none;transition:opacity .15s';
     const point = document.createElement('span');
     point.style.cssText = 'width:9px;height:9px;border-radius:50%;background:' + couleurPoint + ';flex-shrink:0';
     chip.appendChild(point);
@@ -8028,19 +8027,13 @@
     const typesActuels = (st['lien vers type de tache'] || []).map(t => t.id);
     const nouveauxChantiers = [...new Set([...chantiersActuels, parseInt(chantierId)])];
     const nouveauxTypes = typesActuels.includes(parseInt(typeId)) ? typesActuels : [...typesActuels, parseInt(typeId)];
-    const payload = { 'lien vers chantier': nouveauxChantiers, 'lien vers type de tache': nouveauxTypes };
-    console.log('[DEBUG2 lier] PAYLOAD ENVOYÉ =', JSON.stringify(payload));
     const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/' + sousTacheId + '/?user_field_names=true',
-      { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'lien vers chantier': nouveauxChantiers, 'lien vers type de tache': nouveauxTypes }) });
     if (!res.ok) throw new Error(await res.text());
     const updated = await res.json();
-    console.log('[DEBUG2 lier] REPONSE lien vers chantier =', JSON.stringify(updated['lien vers chantier']));
-    console.log('[DEBUG2 lier] REPONSE lien vers type de tache =', JSON.stringify(updated['lien vers type de tache']));
-    console.log('[DEBUG2 lier] typeId recherché ensuite pour affichage =', typeId, typeof typeId);
     // Met à jour le cache local avec la ligne fraîche renvoyée par Baserow, au lieu de tout recharger
     // (évite un léger décalage de propagation de l'endpoint liste juste après une écriture).
     const idx = _chantierTachesCache.allSousTaches.findIndex(r => r.id === updated.id);
-    console.log('[DEBUG2 lier] index trouvé dans le cache =', idx, '/ total cache =', _chantierTachesCache.allSousTaches.length);
     if (idx !== -1) _chantierTachesCache.allSousTaches[idx] = updated;
   }
 
