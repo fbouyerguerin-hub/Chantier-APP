@@ -5912,8 +5912,9 @@
           const vehActuels = ligneVeh ? (ligneVeh['Véhicule'] || []) : [];
           if (isGestAdmin && !isPasseCollectif) {
             const vehBloc = document.createElement('div');
-            vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700';
+            vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700;max-width:calc(100% - 48px);box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
             vehBloc.innerHTML = vehActuels.length ? '🚐 ' + vehActuels.map(v => v.value).join(' · ') : '🚐 <span style="font-weight:400">+ véhicule</span>';
+            vehBloc.title = vehActuels.length ? vehActuels.map(v => v.value).join(' · ') : '';
             vehBloc.onclick = e => { e.stopPropagation(); ouvrirModalVehiculeCase(chantier, dateStr, ligneVeh); };
             td.appendChild(vehBloc);
           } else if (vehActuels.length) {
