@@ -1231,6 +1231,7 @@
                 <span class="saisie-tache">${tacheStr || 'Sans tâche'}</span>
                 <span class="saisie-heures">${h}h</span>
                 ${peutModifier ? `<button onclick="modifierSaisie(${r.id})" style="background:#f0f7ef;border:1px solid var(--vert);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--vert);cursor:pointer;margin-left:6px">✏️</button>` : ''}
+                ${peutModifier ? `<button onclick="supprimerSaisie(${r.id})" style="background:#fbeeee;border:1px solid #c0392b;border-radius:6px;padding:2px 8px;font-size:11px;color:#c0392b;cursor:pointer;margin-left:6px">🗑️</button>` : ''}
               </div>
               ${notes ? `<div class="saisie-notes">📝 ${notes}</div>` : ''}
             </div>`;
@@ -5645,6 +5646,15 @@
       loadFeuille();
       alert('✅ Saisie modifiée avec succès.');
     } catch(e) { alert('Erreur lors de la modification'); }
+  }
+
+  async function supprimerSaisie(rowId) {
+    if (!confirm('Supprimer cette saisie ?')) return;
+    try {
+      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/`, { method: 'DELETE', headers: HEADERS });
+      loadFeuille();
+      alert('✅ Saisie supprimée.');
+    } catch(e) { alert('Erreur lors de la suppression'); }
   }
 
   function toggleSemaine(id) {
