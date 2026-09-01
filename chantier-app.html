@@ -5988,6 +5988,7 @@
             const btnDup = document.createElement('button');
             btnDup.innerHTML = '⧉';
             btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
+            btnDup.className = 'btn-dup-equipe';
             btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;z-index:2;font-weight:700';
             btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
             td.appendChild(btnDup);
@@ -5997,6 +5998,7 @@
             const btnClearAll = document.createElement('button');
             btnClearAll.innerHTML = '🗑';
             btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
+            btnClearAll.className = 'btn-clear-all-collab';
             btnClearAll.style.cssText = 'position:absolute;top:2px;right:' + (showDup ? '22px' : '2px') + ';background:#fdecea;border:1px solid #e6b3ac;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:#c0392b;line-height:1.4;z-index:2;font-weight:700';
             btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
             td.appendChild(btnClearAll);
@@ -6004,16 +6006,19 @@
 
           if (isGestAdmin && !isPasseCollectif) {
             let touchMoved = false;
-            td.addEventListener('touchstart', () => { touchMoved = false; }, { passive: true });
+            td.addEventListener('touchstart', e => {
+              touchMoved = false;
+              if (e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) touchMoved = true;
+            }, { passive: true });
             td.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
             td.addEventListener('touchend', e => {
               if (touchMoved) return;
-              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) return;
               e.preventDefault();
               if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
             }, { passive: false });
             td.onclick = e => {
-              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff')) return;
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) return;
               if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
             };
           }
