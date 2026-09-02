@@ -8291,9 +8291,9 @@
   }
 
   async function loadGestion() {
-    // Masquer certains onglets pour les Gestionnaires
+    // Masquer certains onglets pour les Gestionnaires (Export reste accessible)
     const isGestionnaire = connectedDroit === 'Gestionnaire';
-    ['tab-g-utilisateurs', 'tab-g-conges', 'tab-g-planning-admin', 'tab-g-export'].forEach(id => {
+    ['tab-g-utilisateurs', 'tab-g-conges', 'tab-g-planning-admin'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = isGestionnaire ? 'none' : '';
     });
