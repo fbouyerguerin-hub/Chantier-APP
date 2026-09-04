@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V19A';
+  const APP_VERSION = 'V20A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2899,9 +2899,12 @@
                 ${estEnvoye ? 'À : <b>' + destinataireNom + '</b>' : 'De : <b>' + expediteurNom + '</b>'}
               </div>
             </div>
-            <div style="font-size:10px;color:#aaa;text-align:right">
-              ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-              ${lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <div style="font-size:10px;color:#aaa;text-align:right">
+                ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
+                ${lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
+              </div>
+              <button onclick="supprimerMessage(${m.id}, event)" title="Supprimer" style="background:none;border:none;color:#c0392b;font-size:14px;cursor:pointer;padding:0;line-height:1">🗑️</button>
             </div>
           </div>
           <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${!estEnvoye && m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
@@ -2916,6 +2919,18 @@
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>';
     }
+  }
+
+  async function supprimerMessage(msgId, e) {
+    if (e) e.stopPropagation();
+    if (!confirm('Supprimer ce message ?')) return;
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${msgId}/`,
+        { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } });
+      if (!res.ok) throw new Error(await res.text());
+      await loadHistoriqueMessages();
+      updateBadgeMessages();
+    } catch(e) { alert('Erreur : ' + e.message); }
   }
 
   let messageActifId = null;
@@ -3068,8 +3083,11 @@
                 De : <b>${expediteurNom}</b> → À : <b>${destinataireNom}</b>
               </div>
             </div>
-            <div style="font-size:10px;color:#aaa;text-align:right">
-              ${envoi ? '📤 ' + envoi : ''}${lecture ? '<br>👁️ ' + lecture : ''}
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <div style="font-size:10px;color:#aaa;text-align:right">
+                ${envoi ? '📤 ' + envoi : ''}${lecture ? '<br>👁️ ' + lecture : ''}
+              </div>
+              <button onclick="supprimerMessageHistorique(${m.id}, '${collabId}', '${collabNom.replace(/'/g,"\\'")}', event)" title="Supprimer" style="background:none;border:none;color:#c0392b;font-size:13px;cursor:pointer;padding:0;line-height:1">🗑️</button>
             </div>
           </div>
           <div style="font-size:13px;color:var(--gris);line-height:1.5;margin-top:6px">${m['Messages'] || ''}</div>
@@ -3080,11 +3098,24 @@
     }
   }
 
+  async function supprimerMessageHistorique(msgId, collabId, collabNom, e) {
+    if (e) e.stopPropagation();
+    if (!confirm('Supprimer ce message ?')) return;
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${msgId}/`,
+        { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } });
+      if (!res.ok) throw new Error(await res.text());
+      await voirHistoriqueUser(collabId, collabNom);
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
   async function ouvrirNouveauMessage() {
     const modal = document.getElementById('modal-nouveau-message');
     modal.style.display = 'flex';
     document.getElementById('nouveau-msg-texte').value = '';
     document.getElementById('nouveau-msg-dest-count').textContent = '';
+    const btnEnvoi = document.getElementById('btn-envoyer-nouveau-message');
+    if (btnEnvoi) { btnEnvoi.disabled = false; btnEnvoi.textContent = 'Envoyer ✓'; }
     const container = document.getElementById('nouveau-msg-destinataires');
     container.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#aaa">Chargement…</div>';
     try {
@@ -3098,6 +3129,12 @@
         const id = u['Vue ID'] || '';
         const nom = u['Nom complet'] || u['Identifiant'] || '';
         const row = document.createElement('label');
+        if (!id) {
+          row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#c0392b';
+          row.innerHTML = `<input type="checkbox" disabled style="width:16px;height:16px"> ${nom} <span style="font-size:11px;font-weight:600">⚠️ Vue ID manquant — ne recevra pas le message</span>`;
+          container.appendChild(row);
+          return;
+        }
         row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:13px;color:var(--gris)';
         row.innerHTML = `<input type="checkbox" value="${id}" data-nom="${nom}" style="width:16px;height:16px;accent-color:var(--vert);cursor:pointer"> ${nom}`;
         row.querySelector('input').addEventListener('change', () => {
@@ -3117,45 +3154,66 @@
   }
 
   async function envoyerNouveauMessage() {
-    const checked = document.getElementById('nouveau-msg-destinataires').querySelectorAll('input:checked');
+    const checked = [...document.getElementById('nouveau-msg-destinataires').querySelectorAll('input:checked')];
     const texte = document.getElementById('nouveau-msg-texte').value.trim();
     if (!checked.length) { alert('Veuillez choisir au moins un destinataire'); return; }
     if (!texte) { alert('Veuillez saisir un message'); return; }
+    const btn = document.getElementById('btn-envoyer-nouveau-message');
+    if (btn) { btn.disabled = true; btn.textContent = 'Envoi…'; }
+    const dateEnvoi = dateYMD(new Date());
+    const echecs = [];
+    let reussis = 0;
+    // Envoi par petits lots (au lieu de tout en même temps) pour éviter de dépasser
+    // la limite de débit de l'API Baserow, qui rejette silencieusement (fetch ne
+    // considère pas un 429/erreur serveur comme un échec réseau).
+    const TAILLE_LOT = 5;
+    for (let i = 0; i < checked.length; i += TAILLE_LOT) {
+      const lot = checked.slice(i, i + TAILLE_LOT);
+      const resultats = await Promise.all(lot.map(cb => envoyerUnMessage(cb.value, texte, dateEnvoi)));
+      resultats.forEach((ok, idx) => {
+        if (ok) reussis++;
+        else echecs.push(lot[idx].dataset.nom || lot[idx].value);
+      });
+    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; }
+    fermerNouveauMessage();
+    if (echecs.length) {
+      alert(`⚠️ ${reussis}/${checked.length} message(s) envoyé(s).\nÉchec pour : ${echecs.join(', ')}.\nMerci de leur renvoyer le message.`);
+    } else {
+      alert(`✅ Message envoyé à ${reussis} destinataire${reussis > 1 ? 's' : ''}`);
+    }
+    loadHistoriqueMessages();
+  }
+
+  // Envoie un message avec 2 tentatives supplémentaires (pause croissante) en cas
+  // d'erreur réseau ou de rejet serveur (429 = trop de requêtes, etc.).
+  async function envoyerUnMessage(destId, texte, dateEnvoi, tentative = 1) {
     try {
-      await Promise.all([...checked].map(cb =>
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
-          method: 'POST',
-          headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            'Messages': texte,
-            'Lu': false,
-            'Destinataire': String(cb.value),
-            'Expediteur': String(connectedViewId),
-            'Date envoi': dateYMD(new Date())
-          })
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
+        method: 'POST',
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          'Messages': texte,
+          'Lu': false,
+          'Destinataire': String(destId),
+          'Expediteur': String(connectedViewId),
+          'Date envoi': dateEnvoi
         })
-      ));
-      fermerNouveauMessage();
-      alert(`✅ Message envoyé à ${checked.length} destinataire${checked.length > 1 ? 's' : ''}`);
-      loadHistoriqueMessages();
+      });
+      if (res.ok) return true;
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerUnMessage(destId, texte, dateEnvoi, tentative + 1); }
+      return false;
     } catch(e) {
-      alert("Erreur lors de l'envoi du message");
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerUnMessage(destId, texte, dateEnvoi, tentative + 1); }
+      return false;
     }
   }
 
   async function envoyerMessage(collabId, collabNom) {
     const texte = prompt(`Message pour ${collabNom} :`);
     if (!texte || !texte.trim()) return;
-    try {
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
-        method: 'POST',
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 'Messages': texte.trim(), 'Lu': false, 'Destinataire': String(collabId), 'Expediteur': String(connectedViewId), 'Date envoi': dateYMD(new Date()) })
-      });
-      alert(`✅ Message envoyé à ${collabNom}`);
-    } catch(e) {
-      alert("Erreur lors de l'envoi du message");
-    }
+    const ok = await envoyerUnMessage(collabId, texte.trim(), dateYMD(new Date()));
+    alert(ok ? `✅ Message envoyé à ${collabNom}` : `❌ Échec de l'envoi à ${collabNom}, réessayez`);
   }
 
   // ── PLAN DE CHARGE ──
@@ -8522,16 +8580,18 @@
     container.innerHTML = users.map(u => {
         const actif = u['Actif'] !== false;
         const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
+        const vueId = (u['Vue ID']||'').toString();
         return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:center;border-left:3px solid ${actif ? 'var(--vert)' : '#ddd'}">
           <div>
             <div style="font-size:14px;font-weight:700;color:var(--gris)">${u['Nom complet'] || '—'}</div>
             <div style="font-size:11px;color:#aaa;margin-top:2px">${u['Identifiant'] || ''} · ${droit}${u['Poste / Métier'] ? ' · ' + u['Poste / Métier'] : ''}</div>
             <div style="font-size:11px;margin-top:2px;color:${actif ? 'var(--vert)' : '#c0392b'}">${actif ? '✅ Actif' : '❌ Inactif'}</div>
+            ${!vueId ? '<div style="font-size:11px;margin-top:2px;color:#c0392b;font-weight:700">⚠️ Vue ID manquant — ne recevra aucun message</div>' : ''}
           </div>
           ${connectedDroit === 'Administrateur' ? `<div style="display:flex;gap:8px">
             <button onclick="ouvrirFormUser(${u.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">✏️</button>
-            <button onclick="envoyerMessage('${(u['Vue ID']||'').toString()}','${(u['Nom complet']||'').replace(/'/g,'')}')" style="background:#e8f0fd;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer" title="Envoyer un message">✉️</button>
-            <button onclick="voirHistoriqueUser('${(u['Vue ID']||'').toString()}','${(u['Nom complet']||'').replace(/'/g,'')}')" style="background:#f5f0eb;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer" title="Voir l'historique">📋</button>
+            <button onclick="envoyerMessage('${vueId}','${(u['Nom complet']||'').replace(/'/g,'')}')" ${!vueId ? 'disabled title="Vue ID manquant"' : ''} style="background:#e8f0fd;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer${!vueId ? ';opacity:0.4;cursor:not-allowed' : ''}" title="Envoyer un message">✉️</button>
+            <button onclick="voirHistoriqueUser('${vueId}','${(u['Nom complet']||'').replace(/'/g,'')}')" style="background:#f5f0eb;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer" title="Voir l'historique">📋</button>
             <button onclick="supprimerUser(${u.id},'${(u['Nom complet']||'').replace(/'/g,"")}')" style="background:#fde8e8;border:none;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer">🗑️</button>
           </div>` : ''}
         </div>`;
@@ -11485,7 +11545,7 @@
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
       <textarea id="nouveau-msg-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;resize:vertical;min-height:100px;outline:none"></textarea>
     </div>
-    <button onclick="envoyerNouveauMessage()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Envoyer ✓</button>
+    <button onclick="envoyerNouveauMessage()" id="btn-envoyer-nouveau-message" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Envoyer ✓</button>
   </div>
 </div>
 
