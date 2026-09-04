@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V24A';
+  const APP_VERSION = 'V25A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9994,7 +9994,7 @@
   const FH_SEUIL_WARN = 40.0;
   const FH_COLS       = ['A','B','C','D','E','F','G','H','I','J'];
   const FH_COL_WIDTHS = [5, 16, 38, 26, 18, 22, 9, 13, 11, 26];
-  const FH_HEADERS    = ['N°','Date','Chantier','Tâche / Sous-tâche','Zone','Notes','Total j.','Cumul jour','Sem.',''];
+  const FH_HEADERS    = ['N°','Date','Chantier','Tâche / Sous-tâche','Zone','Notes','Total j.','Cumul jour','Sem.','Véhicule'];
   const FH_BORDER = { top:{style:'thin',color:{argb:'FFBBBBBB'}}, left:{style:'thin',color:{argb:'FFBBBBBB'}}, bottom:{style:'thin',color:{argb:'FFBBBBBB'}}, right:{style:'thin',color:{argb:'FFBBBBBB'}} };
   const FH_THICK_BORDER = { top:{style:'medium',color:{argb:FH_BLEU_FONCE}}, left:{style:'medium',color:{argb:FH_BLEU_FONCE}}, bottom:{style:'medium',color:{argb:FH_BLEU_FONCE}}, right:{style:'medium',color:{argb:FH_BLEU_FONCE}} };
 
@@ -10218,9 +10218,11 @@
       cH2.fill = fillA; cH2.border = FH_BORDER;
       cH2.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
 
-      // J = vide
+      // J = Véhicule
       const cI2 = ws.getCell('J' + r);
-      cI2.value = '';
+      cI2.value = ligne.vehicule || '';
+      cI2.font = { name:'Arial', size:9, color:{argb:'FF555555'} };
+      cI2.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
       cI2.fill = fillA; cI2.border = FH_BORDER;
     });
 
