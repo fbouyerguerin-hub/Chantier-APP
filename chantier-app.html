@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v14';
+  const APP_VERSION = 'v15';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -795,7 +795,11 @@
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`, { headers: HEADERS });
       const data = await res.json();
-      tableData[key] = (data.results || []).map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
+      let rows = data.results || [];
+      if (key === 'Chantiers') {
+        rows = rows.filter(row => (row['Statue']?.value || row['Statue']) !== 'Terminé');
+      }
+      tableData[key] = rows.map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
     } catch(e) { tableData[key] = []; }
   }
 
@@ -5599,7 +5603,10 @@
       document.getElementById('edit-saisie-heures').value = r['Heures Normales'] || '';
       document.getElementById('edit-saisie-notes').value = r['Notes'] || '';
 
-      _editChantiersCache = chantiers.map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id })).sort((a,b) => a.nom.localeCompare(b.nom));
+      _editChantiersCache = chantiers
+        .filter(c => (c['Statue']?.value || c['Statue']) !== 'Terminé')
+        .map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id }))
+        .sort((a,b) => a.nom.localeCompare(b.nom));
       const chantierId = (r['Chantiers'] || [])[0]?.id;
       const chantierNom = (r['Chantiers'] || [])[0]?.value || '';
       document.getElementById('edit-saisie-chantier-id').value = chantierId || '';
