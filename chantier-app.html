@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V25B';
+  const APP_VERSION = 'V25C';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3033,13 +3033,15 @@
       } else {
         container.innerHTML = msgs.map(m => {
           const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
-          const lu = estLuParMoi(m, connectedViewId);
+          // Pour un message reçu : est-ce que MOI je l'ai lu. Pour un message envoyé : est-ce que
+          // le destinataire (mon correspondant dans cette conversation) l'a lu, pas moi.
+          const lu = estEnvoye ? estLuParMoi(m, collabId) : estLuParMoi(m, connectedViewId);
           const fichiers = m['Fichiers'] || [];
           return `<div style="background:${estEnvoye ? '#f0f7ef' : '#f7f7f7'};border-radius:10px;margin-bottom:8px;padding:10px 12px;border-left:3px solid ${estEnvoye ? 'var(--vert)' : '#A28A6E'}">
             <div style="font-size:11px;font-weight:700;color:${estEnvoye ? 'var(--vert)' : '#A28A6E'};margin-bottom:4px">${estEnvoye ? 'Vous' : currentConversation.nom}</div>
             ${m['Messages'] ? `<div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages']}</div>` : ''}
             ${fichiers.length ? fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:block;font-size:12px;color:var(--vert);text-decoration:underline;margin-top:4px">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
-            <div style="font-size:10px;color:#aaa;margin-top:4px">${m['Date envoi'] || ''}${!estEnvoye ? (lu ? ' · ✅ Lu' : ' · 🔔 Non lu') : ''}</div>
+            <div style="font-size:10px;color:#aaa;margin-top:4px">${m['Date envoi'] || ''}${estEnvoye ? (lu ? ' · ✅ Lu' : ' · 📤 Envoyé') : (lu ? ' · ✅ Lu' : ' · 🔔 Non lu')}</div>
           </div>`;
         }).join('');
         container.scrollTop = container.scrollHeight;
@@ -3200,13 +3202,16 @@
         const lecture = m['Date lecture'] || '';
         const estRecu = dests.includes(String(collabId).trim());
         const lu = groupe ? luParListe(m).includes(String(collabId).trim()) : m['Lu'] === true;
+        // Côté envoi : combien de destinataires ont lu ce message (utile pour les messages diffusés à plusieurs personnes)
+        const nbLu = groupe ? luParListe(m).length : (m['Lu'] === true ? 1 : 0);
+        const luParTous = nbLu >= dests.length && dests.length > 0;
         const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
         const destinataireLabel = groupe ? `${dests.length} destinataires` : (m['Destinataire'] ? getNom(m['Destinataire']) : '—');
-        return `<div style="background:#fff;border-radius:10px;margin-bottom:8px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.07);border-left:3px solid ${estRecu ? (lu ? '#ddd' : 'var(--vert)') : '#A28A6E'}">
+        return `<div style="background:#fff;border-radius:10px;margin-bottom:8px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.07);border-left:3px solid ${estRecu ? (lu ? '#ddd' : 'var(--vert)') : (luParTous ? '#ddd' : '#A28A6E')}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;flex-wrap:wrap;gap:3px">
             <div>
-              <span style="font-size:10px;font-weight:700;color:${estRecu ? (lu ? '#aaa' : 'var(--vert)') : '#A28A6E'}">
-                ${estRecu ? (lu ? '✅ Reçu · Lu' : '🔔 Reçu · Non lu') : (groupe ? '📤 Diffusé' : '📤 Envoyé')}
+              <span style="font-size:10px;font-weight:700;color:${estRecu ? (lu ? '#aaa' : 'var(--vert)') : (luParTous ? '#aaa' : '#A28A6E')}">
+                ${estRecu ? (lu ? '✅ Reçu · Lu' : '🔔 Reçu · Non lu') : `${groupe ? '📤 Diffusé' : '📤 Envoyé'} · ${luParTous ? '✅ Lu' : (nbLu > 0 ? '👀 Lu ' + nbLu + '/' + dests.length : '🔔 Non lu')}`}
               </span>
               <div style="font-size:10px;color:#888;margin-top:2px">
                 De : <b>${expediteurNom}</b> → À : <b>${destinataireLabel}</b>
