@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V27A';
+  const APP_VERSION = 'V28A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2897,48 +2897,153 @@
       const msgs = (dataMsg.results || []).filter(r =>
         destinatairesListe(r).includes(String(connectedViewId).trim()) ||
         String(r['Expediteur'] || '').trim() === String(connectedViewId).trim()
-      ).sort((a, b) => b.id - a.id);
+      );
 
       if (!msgs.length) {
         container.innerHTML = '<div class="feuille-empty">Aucun message</div>';
         return;
       }
 
-      container.innerHTML = msgs.map(m => {
-        const dests = destinatairesListe(m);
-        const groupe = dests.length > 1;
-        const lu = estLuParMoi(m, connectedViewId);
+      // Regroupe par correspondant : un message diffusé à plusieurs personnes
+      // apparaît dans la conversation de chacune d'elles.
+      const conversations = {};
+      msgs.forEach(m => {
         const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
-        const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
-        const destNoms = dests.map(getNom);
-        const luParNoms = groupe ? luParListe(m).map(getNom) : [];
-        return `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:4px solid ${estEnvoye ? '#A28A6E' : (lu ? '#ddd' : 'var(--vert)')}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:4px">
-            <div>
-              <span style="font-size:11px;font-weight:700;color:${estEnvoye ? '#A28A6E' : (lu ? '#aaa' : 'var(--vert)')}">
-                ${estEnvoye ? '📤 Diffusé' : (lu ? '✅ Lu' : '🔔 Non lu')}
-              </span>
-              <div style="font-size:10px;color:#888;margin-top:2px">
-                ${estEnvoye ? (groupe ? 'À : <b>' + destNoms.join(', ') + '</b>' : 'À : <b>' + (destNoms[0]||'—') + '</b>') : 'De : <b>' + expediteurNom + '</b>'}
-              </div>
-              ${estEnvoye && groupe ? `<div style="font-size:10px;color:#aaa;margin-top:2px">👁️ Lu par ${luParNoms.length}/${dests.length}${luParNoms.length ? ' : ' + luParNoms.join(', ') : ''}</div>` : ''}
-            </div>
-            <div style="font-size:10px;color:#aaa;text-align:right">
-              ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-              ${!groupe && lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
-            </div>
+        const correspondantsIds = estEnvoye
+          ? destinatairesListe(m)
+          : [String(m['Expediteur'] || '').trim()].filter(Boolean);
+        correspondantsIds.forEach(id => {
+          if (!conversations[id]) conversations[id] = { id, nom: getNom(id), messages: [] };
+          conversations[id].messages.push(m);
+        });
+      });
+
+      const liste = Object.values(conversations).map(c => {
+        c.messages.sort((a, b) => a.id - b.id);
+        c.dernier = c.messages[c.messages.length - 1];
+        c.nonLus = c.messages.filter(m =>
+          String(m['Expediteur'] || '').trim() === c.id && !estLuParMoi(m, connectedViewId)
+        ).length;
+        return c;
+      }).sort((a, b) => b.dernier.id - a.dernier.id);
+
+      container.innerHTML = liste.map(c => {
+        const dernierEstEnvoye = String(c.dernier['Expediteur'] || '').trim() === String(connectedViewId).trim();
+        const texte = c.dernier['Messages'] || '';
+        const apercu = texte.length > 55 ? texte.slice(0, 55) + '…' : texte;
+        return `<div onclick="ouvrirConversation('${c.id}','${c.nom.replace(/'/g,"\\'")}')" style="background:#fff;border-radius:12px;margin-bottom:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:4px solid ${c.nonLus > 0 ? 'var(--vert)' : '#eee'}">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:14px;font-weight:700;color:var(--gris)">${c.nom}</div>
+            <div style="font-size:12px;color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${dernierEstEnvoye ? '<span style="color:#A28A6E">Vous : </span>' : ''}${apercu}</div>
           </div>
-          <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${!estEnvoye && m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
-          ${!estEnvoye && m['Expediteur'] ? `<div id="reply-zone-${m.id}">
-            <button onclick="toggleReply(${m.id},'${m['Expediteur']}')"
-              style="background:#f0f7ef;border:1px solid var(--vert);border-radius:8px;padding:5px 12px;font-size:11px;color:var(--vert);font-weight:700;cursor:pointer">
-              ↩️ Répondre
-            </button>
-          </div>` : ''}
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
+            <div style="font-size:10px;color:#aaa">${c.dernier['Date envoi'] || ''}</div>
+            ${c.nonLus > 0 ? `<span style="background:var(--vert);color:#fff;border-radius:10px;min-width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;padding:0 5px">${c.nonLus}</span>` : ''}
+          </div>
         </div>`;
       }).join('');
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>';
+    }
+  }
+
+  // ── FIL DE CONVERSATION AVEC UN CORRESPONDANT ──
+  let currentConversation = null;
+
+  async function ouvrirConversation(collabId, collabNom) {
+    let modal = document.getElementById('modal-conversation');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'modal-conversation';
+      modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:flex-end;justify-content:center;padding:0';
+      modal.innerHTML = `<div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee">
+          <div id="conv-titre" style="font-size:15px;font-weight:800;color:var(--gris)"></div>
+          <button onclick="fermerConversation()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+        </div>
+        <div id="conv-content" style="overflow-y:auto;padding:12px 16px;flex:1"></div>
+        <div style="padding:10px 16px 16px;border-top:1px solid #eee">
+          <textarea id="conv-reply-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;resize:vertical;min-height:50px"></textarea>
+          <button onclick="envoyerReponseConversation()" id="btn-conv-envoyer" style="width:100%;margin-top:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Envoyer ✓</button>
+        </div>
+      </div>`;
+      document.body.appendChild(modal);
+    }
+    currentConversation = { id: collabId, nom: collabNom };
+    document.getElementById('conv-titre').textContent = '💬 ' + collabNom;
+    document.getElementById('conv-content').innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    document.getElementById('conv-reply-texte').value = '';
+    modal.style.display = 'flex';
+    await rafraichirConversation();
+  }
+
+  function fermerConversation() {
+    const modal = document.getElementById('modal-conversation');
+    if (modal) modal.style.display = 'none';
+    currentConversation = null;
+    loadHistoriqueMessages();
+    updateBadgeMessages();
+  }
+
+  async function rafraichirConversation() {
+    if (!currentConversation) return;
+    const collabId = currentConversation.id;
+    const container = document.getElementById('conv-content');
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      });
+      const dataMsg = await res.json();
+      const msgs = (dataMsg.results || []).filter(r => {
+        const estEnvoye = String(r['Expediteur'] || '').trim() === String(connectedViewId).trim();
+        if (estEnvoye) return destinatairesListe(r).includes(String(collabId).trim());
+        return String(r['Expediteur'] || '').trim() === String(collabId).trim() && destinatairesListe(r).includes(String(connectedViewId).trim());
+      }).sort((a, b) => a.id - b.id);
+
+      if (!msgs.length) {
+        container.innerHTML = '<div class="feuille-empty">Aucun message</div>';
+      } else {
+        container.innerHTML = msgs.map(m => {
+          const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
+          const lu = estLuParMoi(m, connectedViewId);
+          return `<div style="background:${estEnvoye ? '#f0f7ef' : '#f7f7f7'};border-radius:10px;margin-bottom:8px;padding:10px 12px;border-left:3px solid ${estEnvoye ? 'var(--vert)' : '#A28A6E'}">
+            <div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages'] || ''}</div>
+            <div style="font-size:10px;color:#aaa;margin-top:4px">${estEnvoye ? 'Vous' : currentConversation.nom} · ${m['Date envoi'] || ''}${!estEnvoye ? (lu ? ' · ✅ Lu' : ' · 🔔 Non lu') : ''}</div>
+          </div>`;
+        }).join('');
+        container.scrollTop = container.scrollHeight;
+      }
+
+      // Marque comme lus les messages reçus de ce correspondant qui ne l'étaient pas encore
+      const aMarquer = msgs.filter(m => String(m['Expediteur'] || '').trim() === String(collabId).trim() && !estLuParMoi(m, connectedViewId));
+      for (const m of aMarquer) {
+        const payload = estGroupe(m)
+          ? { 'Lu par': [...new Set([...luParListe(m), String(connectedViewId).trim()])].join(',') }
+          : { 'Lu': true, 'Date lecture': dateYMD(new Date()) };
+        await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${m.id}/?user_field_names=true`, {
+          method: 'PATCH', headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+      }
+      if (aMarquer.length) updateBadgeMessages();
+    } catch(e) {
+      container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
+    }
+  }
+
+  async function envoyerReponseConversation() {
+    if (!currentConversation) return;
+    const ta = document.getElementById('conv-reply-texte');
+    const texte = ta.value.trim();
+    if (!texte) return;
+    const btn = document.getElementById('btn-conv-envoyer');
+    btn.disabled = true; btn.textContent = 'Envoi…';
+    const ok = await envoyerMessageGroupe([String(currentConversation.id)], texte);
+    btn.disabled = false; btn.textContent = 'Envoyer ✓';
+    if (ok) {
+      ta.value = '';
+      await rafraichirConversation();
+    } else {
+      alert('❌ Échec de l\'envoi, réessayez');
     }
   }
 
@@ -2978,42 +3083,6 @@
         document.getElementById('modal-message').classList.add('open');
       }
     } catch(e) {}
-  }
-
-  function toggleReply(msgId, expediteurId) {
-    const zone = document.getElementById('reply-zone-' + msgId);
-    if (!zone) return;
-    if (zone.querySelector('textarea')) {
-      zone.innerHTML = `<button onclick="toggleReply(${msgId},'${expediteurId}')"
-        style="background:#f0f7ef;border:1px solid var(--vert);border-radius:8px;padding:5px 12px;font-size:11px;color:var(--vert);font-weight:700;cursor:pointer">
-        ↩️ Répondre</button>`;
-      return;
-    }
-    zone.innerHTML = `
-      <textarea id="reply-text-${msgId}" placeholder="Votre réponse…"
-        style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;resize:vertical;min-height:70px;margin-top:6px"></textarea>
-      <div style="display:flex;gap:8px;margin-top:6px">
-        <button onclick="envoyerReponse(${msgId},'${expediteurId}')"
-          style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer">
-          Envoyer ✓
-        </button>
-        <button onclick="toggleReply(${msgId},'${expediteurId}')"
-          style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer">
-          Annuler
-        </button>
-      </div>`;
-  }
-
-  async function envoyerReponse(msgId, expediteurId) {
-    const ta = document.getElementById('reply-text-' + msgId);
-    if (!ta || !ta.value.trim()) return;
-    const ok = await envoyerMessageGroupe([String(expediteurId)], ta.value.trim());
-    if (ok) {
-      alert('✅ Réponse envoyée');
-      loadHistoriqueMessages();
-    } else {
-      alert("Erreur lors de l'envoi de la réponse, réessayez");
-    }
   }
 
   async function voirHistoriqueUser(collabId, collabNom) {
