@@ -256,6 +256,8 @@
     .planning-admin-table td.col-collab-cell { padding: 6px 8px; background: #fafafa; border-right: 1px solid #e0e0e0; }
     .collab-initiales { font-size: 11px; font-weight: 800; color: var(--vert); }
     .collab-name { font-size: 10px; color: #666; line-height: 1.3; }
+    .btn-note-collab { background: none; border: none; cursor: pointer; font-size: 12px; padding: 1px 2px; opacity: 0.35; vertical-align: middle; line-height: 1; }
+    .btn-note-collab.has-note { opacity: 1; }
     .aff-tag { background: var(--vert-clair); border-left: 2px solid var(--vert); border-radius: 4px; padding: 3px 5px 3px 5px; margin-bottom: 3px; font-size: 10px; color: var(--vert); font-weight: 600; position: relative; word-break: break-word; max-width: 100%; box-sizing: border-box; }
     .aff-tag .btn-del-aff { position: absolute; right: 2px; top: 2px; background: none; border: none; font-size: 10px; cursor: pointer; color: #c0392b; padding: 0; line-height: 1; }
     .aff-notes { font-size: 9px; color: #888; margin-top: 2px; word-break: break-word; white-space: normal; line-height: 1.3; }
@@ -525,6 +527,24 @@
 
 </div>
 
+<!-- MODAL NOTE COLLABORATEUR (globale, accessible depuis toutes les pages) -->
+<div class="modal-backdrop" id="modal-note-collab" onclick="closeModalNoteCollab(event)">
+  <div class="modal-sheet">
+    <div class="modal-header">
+      <h3 id="modal-note-collab-title">📝 Note</h3>
+      <button class="modal-close" onclick="closeModalNoteCollab()">✕</button>
+    </div>
+    <div style="padding:16px 20px">
+      <div class="field">
+        <label>Note (visible uniquement ce jour-là dans le planning du collaborateur)</label>
+        <textarea id="modal-note-collab-texte" placeholder="Écrire une note…" style="min-height:80px"></textarea>
+      </div>
+      <button onclick="enregistrerNoteCollab()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-note-collab">✅ Enregistrer</button>
+      <button onclick="supprimerNoteCollab()" style="width:100%;background:#fde8e8;color:#c0392b;border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px" id="btn-suppr-note-collab">🗑️ Supprimer la note</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL MESSAGE -->
 <div class="modal-message" id="modal-message">
   <div class="modal-message-card">
@@ -577,7 +597,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v16';
+  const APP_VERSION = 'v16A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -5980,22 +6000,28 @@
           });
           affCollab.forEach(aff => {
             const collabNom = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.value || '—';
+            const collabIdAff = (aff['Collaborateurs']||aff['Collaborateur']||[])[0]?.id;
             const isSaisie = aff.isSaisie === true;
             const heures = aff['heures'] || '';
             const notes = aff['Notes'] || '';
             const div = document.createElement('div');
             div.className = 'aff-tag';
-            div.style.cssText = 'font-size:9px;padding:3px 5px;margin-bottom:3px;user-select:none;' +
+            div.style.cssText = 'font-size:9px;padding:3px 16px 3px 5px;margin-bottom:3px;user-select:none;' +
               (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;cursor:default' : 'cursor:grab');
-            div.innerHTML = '👷 ' + collabNom.split(' ')[0] +
+            div.innerHTML = '<span style="display:inline-flex;align-items:center;gap:2px">👷 ' + collabNom.split(' ')[0] +
+              (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note pour ce jour') + '">📝</button>' : '') +
+              '</span>' +
               (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
               (notes ? '<div class="aff-notes">📝 '+notes+'</div>' : '') +
               (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
 
             if (isGestAdmin && !isSaisie) {
+              div.querySelector('.btn-note-collab').onclick = e => { e.stopPropagation(); ouvrirModalNoteCollab(aff.id, collabNom, notes, e); };
+            }
+            if (isGestAdmin && !isSaisie) {
               div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
               div.onclick = e => {
-                if (e.target.classList.contains('btn-del-aff')) return;
+                if (e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-note-collab')) return;
                 if (collabDeplace) return;
                 document.querySelectorAll('.aff-tag.selected-move').forEach(el => { el.classList.remove('selected-move'); el.style.cursor = 'grab'; });
                 div.classList.add('selected-move');
@@ -7355,6 +7381,63 @@
     if (!confirm('Supprimer cette affectation ?')) return;
     await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + id + '/', { method: 'DELETE', headers: HEADERS });
     await loadPlanningAdmin();
+  }
+
+  // ── NOTE SUR L'AFFECTATION DU JOUR (visible uniquement ce jour-là dans le planning du collaborateur) ──
+  let currentNoteCollab = null;
+
+  function ouvrirModalNoteCollab(affId, collabNom, noteActuelle, e) {
+    if (e) e.stopPropagation();
+    currentNoteCollab = { affId };
+    document.getElementById('modal-note-collab-title').textContent = '📝 Note — ' + collabNom.split(' ')[0];
+    document.getElementById('modal-note-collab-texte').value = noteActuelle || '';
+    document.getElementById('btn-suppr-note-collab').style.display = noteActuelle ? '' : 'none';
+    document.getElementById('modal-note-collab').classList.add('open');
+  }
+
+  function closeModalNoteCollab(e) {
+    if (!e || e.target === document.getElementById('modal-note-collab')) {
+      document.getElementById('modal-note-collab').classList.remove('open');
+    }
+  }
+
+  async function enregistrerNoteCollab() {
+    if (!currentNoteCollab) return;
+    const texte = document.getElementById('modal-note-collab-texte').value.trim();
+    const btn = document.getElementById('btn-valider-note-collab');
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: texte }) });
+      if (!res.ok) throw new Error(await res.text());
+      const aff = planningCollectifData.find(p => p.id === currentNoteCollab.affId) || planningAdminData.find(p => p.id === currentNoteCollab.affId);
+      if (aff) aff.Notes = texte;
+      document.getElementById('modal-note-collab').classList.remove('open');
+      await rafraichirVuesApresNote();
+    } catch(e) { alert('Erreur : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '✅ Enregistrer'; }
+  }
+
+  async function supprimerNoteCollab() {
+    if (!currentNoteCollab) return;
+    if (!confirm('Supprimer cette note ?')) return;
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: '' }) });
+      if (!res.ok) throw new Error(await res.text());
+      const aff = planningCollectifData.find(p => p.id === currentNoteCollab.affId) || planningAdminData.find(p => p.id === currentNoteCollab.affId);
+      if (aff) aff.Notes = '';
+      document.getElementById('modal-note-collab').classList.remove('open');
+      await rafraichirVuesApresNote();
+    } catch(e) { alert('Erreur : ' + e.message); }
+  }
+
+  // Rafraîchit uniquement la ou les vues planning actuellement affichées (sans re-fetch inutile)
+  async function rafraichirVuesApresNote() {
+    const gridCollectif = document.getElementById('planning-collectif-grid');
+    if (gridCollectif && gridCollectif.innerHTML.trim()) renderPlanningCollectifGrid();
+    const gridAdmin = document.getElementById('planning-admin-grid');
+    if (gridAdmin && gridAdmin.innerHTML.trim()) await loadPlanningAdmin();
   }
 
   function openOptionsChantierAdmin() {
