@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V20B';
+  const APP_VERSION = 'V27A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2924,9 +2924,8 @@
               ${estEnvoye && groupe ? `<div style="font-size:10px;color:#aaa;margin-top:2px">👁️ Lu par ${luParNoms.length}/${dests.length}${luParNoms.length ? ' : ' + luParNoms.join(', ') : ''}</div>` : ''}
             </div>
             <div style="font-size:10px;color:#aaa;text-align:right">
-                ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-                ${!groupe && lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
-              </div>
+              ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
+              ${!groupe && lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
             </div>
           </div>
           <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${!estEnvoye && m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
@@ -2986,7 +2985,7 @@
     if (!zone) return;
     if (zone.querySelector('textarea')) {
       zone.innerHTML = `<button onclick="toggleReply(${msgId},'${expediteurId}')"
-        style="background:#f0f7ef;border:1px solid var(--vent);border-radius:8px;padding:5px 12px;font-size:11px;color:var(--vert);font-weight:700;cursor:pointer">
+        style="background:#f0f7ef;border:1px solid var(--vert);border-radius:8px;padding:5px 12px;font-size:11px;color:var(--vert);font-weight:700;cursor:pointer">
         ↩️ Répondre</button>`;
       return;
     }
@@ -3084,8 +3083,8 @@
               </div>
             </div>
             <div style="font-size:10px;color:#aaa;text-align:right">
-                ${envoi ? '📤 ' + envoi : ''}${!groupe && lecture ? '<br>👁️ ' + lecture : ''}
-              </div>
+              ${envoi ? '📤 ' + envoi : ''}${!groupe && lecture ? '<br>👁️ ' + lecture : ''}
+            </div>
           </div>
           <div style="font-size:13px;color:var(--gris);line-height:1.5;margin-top:6px">${m['Messages'] || ''}</div>
         </div>`;
