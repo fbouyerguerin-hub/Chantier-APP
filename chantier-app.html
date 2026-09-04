@@ -5837,6 +5837,12 @@
     renderPlanningCollectifGrid();
   }
 
+  function tronquer(texte, max) {
+    if (!texte) return '';
+    const t = texte.trim();
+    return t.length > max ? t.slice(0, max).trim() + '…' : t;
+  }
+
   function renderPlanningCollectifGrid() {
     const jours = joursCollectif;
     const today = todayCollectif;
@@ -6012,7 +6018,7 @@
               (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note pour ce jour') + '">📝</button>' : '') +
               '</span>' +
               (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
-              (notes ? '<div class="aff-notes">📝 '+notes+'</div>' : '') +
+              (notes ? '<div class="aff-notes" title="' + notes.replace(/"/g,'&quot;') + '">📝 '+tronquer(notes, 18)+'</div>' : '') +
               (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
 
             if (isGestAdmin && !isSaisie) {
@@ -7011,7 +7017,7 @@
           (p['Collaborateurs'] || p['Collaborateur'] || []).forEach(cc => {
             const collab = COLLABORATEURS_ADMIN.find(c => c.collabId === cc.id);
             const nom = collab ? collab.nom : (cc.value || '?');
-            if (!entry.collabs.includes(nom)) entry.collabs.push(nom);
+            if (!entry.collabs.some(c => c.nom === nom)) entry.collabs.push({ nom, notes: p['Notes'] || '' });
           });
           // Véhicules (ligne sans collaborateur)
           if (!(p['Collaborateurs'] || p['Collaborateur'] || []).length) {
@@ -7123,7 +7129,7 @@
         const dateStr = dateYMD(j);
         const entry = chantiersMap[chantierNom]?.[dateStr];
         if (entry) {
-          const lines = entry.collabs.length + (entry.vehs.length > 0 ? 1 : 0);
+          const lines = entry.collabs.reduce((sum, c) => sum + 1 + (c.notes ? 1 : 0), 0) + (entry.vehs.length > 0 ? 1 : 0);
           if (lines > maxLines) maxLines = lines;
         }
       });
@@ -7153,12 +7159,19 @@
           });
         }
         if (entry?.collabs?.length) {
-          entry.collabs.forEach(nom => {
+          entry.collabs.forEach(c => {
             if (richParts.length > 0) richParts.push({ text: '\n' });
             richParts.push({
-              text: '👷 ' + nom,
+              text: '👷 ' + c.nom,
               font: { name: 'Arial', size: 9, color: { argb: GRIS } }
             });
+            if (c.notes) {
+              richParts.push({ text: '\n' });
+              richParts.push({
+                text: '📝 ' + c.notes,
+                font: { name: 'Arial', size: 8, italic: true, color: { argb: BEIGE } }
+              });
+            }
           });
         }
 
