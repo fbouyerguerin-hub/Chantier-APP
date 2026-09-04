@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V16A';
+  const APP_VERSION = 'V16B';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -759,11 +759,30 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     chargerMessage();
     updateBadgeMessages();
+    demarrerVeilleMessages();
     // Vérifier signature vendredi
     verifierSignatureVendredi().then(bloquer => {
       if (!bloquer) showPage('page-form');
     });
   }
+
+  // Vérifie régulièrement l'arrivée de nouveaux messages sans attendre une reconnexion :
+  // l'appli reste souvent ouverte plusieurs heures sur un téléphone/tablette de chantier.
+  let intervalVeilleMessages = null;
+  function demarrerVeilleMessages() {
+    if (intervalVeilleMessages) clearInterval(intervalVeilleMessages);
+    intervalVeilleMessages = setInterval(() => {
+      if (!connectedViewId) return;
+      updateBadgeMessages();
+      chargerMessageIndividuel();
+    }, 60 * 1000);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && connectedViewId) {
+      updateBadgeMessages();
+      chargerMessageIndividuel();
+    }
+  });
 
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
