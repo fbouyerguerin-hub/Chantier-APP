@@ -558,7 +558,7 @@
 <div class="modal-message" id="modal-message">
   <div class="modal-message-card">
     <div class="modal-message-icon">📢</div>
-    <div class="modal-message-title">Message de l'administrateur</div>
+    <div class="modal-message-title" id="modal-message-title">Nouveau message</div>
     <div class="modal-message-body" id="modal-message-body"></div>
     <button class="modal-message-btn" onclick="fermerMessage()">J'ai compris ✓</button>
   </div>
@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V28A';
+  const APP_VERSION = 'V22A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2877,6 +2877,8 @@
     }
   }
 
+  let conversationsCache = [];
+
   async function loadHistoriqueMessages() {
     const container = document.getElementById('messages-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -2900,6 +2902,7 @@
       );
 
       if (!msgs.length) {
+        conversationsCache = [];
         container.innerHTML = '<div class="feuille-empty">Aucun message</div>';
         return;
       }
@@ -2918,7 +2921,7 @@
         });
       });
 
-      const liste = Object.values(conversations).map(c => {
+      conversationsCache = Object.values(conversations).map(c => {
         c.messages.sort((a, b) => a.id - b.id);
         c.dernier = c.messages[c.messages.length - 1];
         c.nonLus = c.messages.filter(m =>
@@ -2927,24 +2930,40 @@
         return c;
       }).sort((a, b) => b.dernier.id - a.dernier.id);
 
-      container.innerHTML = liste.map(c => {
-        const dernierEstEnvoye = String(c.dernier['Expediteur'] || '').trim() === String(connectedViewId).trim();
-        const texte = c.dernier['Messages'] || '';
-        const apercu = texte.length > 55 ? texte.slice(0, 55) + '…' : texte;
-        return `<div onclick="ouvrirConversation('${c.id}','${c.nom.replace(/'/g,"\\'")}')" style="background:#fff;border-radius:12px;margin-bottom:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:4px solid ${c.nonLus > 0 ? 'var(--vert)' : '#eee'}">
-          <div style="min-width:0;flex:1">
-            <div style="font-size:14px;font-weight:700;color:var(--gris)">${c.nom}</div>
-            <div style="font-size:12px;color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${dernierEstEnvoye ? '<span style="color:#A28A6E">Vous : </span>' : ''}${apercu}</div>
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
-            <div style="font-size:10px;color:#aaa">${c.dernier['Date envoi'] || ''}</div>
-            ${c.nonLus > 0 ? `<span style="background:var(--vert);color:#fff;border-radius:10px;min-width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;padding:0 5px">${c.nonLus}</span>` : ''}
-          </div>
-        </div>`;
-      }).join('');
+      filtrerConversations();
     } catch(e) {
+      conversationsCache = [];
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>';
     }
+  }
+
+  function renderConversationsListe(liste) {
+    const container = document.getElementById('messages-content');
+    if (!liste.length) {
+      container.innerHTML = '<div class="feuille-empty">Aucun résultat</div>';
+      return;
+    }
+    container.innerHTML = liste.map(c => {
+      const dernierEstEnvoye = String(c.dernier['Expediteur'] || '').trim() === String(connectedViewId).trim();
+      const texte = c.dernier['Messages'] || '';
+      const apercu = texte.length > 55 ? texte.slice(0, 55) + '…' : texte;
+      return `<div onclick="ouvrirConversation('${c.id}','${c.nom.replace(/'/g,"\\'")}')" style="background:#fff;border-radius:12px;margin-bottom:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:4px solid ${c.nonLus > 0 ? 'var(--vert)' : '#eee'}">
+        <div style="min-width:0;flex:1">
+          <div style="font-size:14px;font-weight:700;color:var(--gris)">${c.nom}</div>
+          <div style="font-size:12px;color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${dernierEstEnvoye ? '<span style="color:#A28A6E">Vous : </span>' : ''}${apercu}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex-shrink:0">
+          <div style="font-size:10px;color:#aaa">${c.dernier['Date envoi'] || ''}</div>
+          ${c.nonLus > 0 ? `<span style="background:var(--vert);color:#fff;border-radius:10px;min-width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;padding:0 5px">${c.nonLus}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function filtrerConversations() {
+    const q = (document.getElementById('search-messages-collab')?.value || '').toLowerCase().trim();
+    const liste = !q ? conversationsCache : conversationsCache.filter(c => c.nom.toLowerCase().includes(q));
+    renderConversationsListe(liste);
   }
 
   // ── FIL DE CONVERSATION AVEC UN CORRESPONDANT ──
@@ -3007,8 +3026,9 @@
           const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
           const lu = estLuParMoi(m, connectedViewId);
           return `<div style="background:${estEnvoye ? '#f0f7ef' : '#f7f7f7'};border-radius:10px;margin-bottom:8px;padding:10px 12px;border-left:3px solid ${estEnvoye ? 'var(--vert)' : '#A28A6E'}">
+            <div style="font-size:11px;font-weight:700;color:${estEnvoye ? 'var(--vert)' : '#A28A6E'};margin-bottom:4px">${estEnvoye ? 'Vous' : currentConversation.nom}</div>
             <div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages'] || ''}</div>
-            <div style="font-size:10px;color:#aaa;margin-top:4px">${estEnvoye ? 'Vous' : currentConversation.nom} · ${m['Date envoi'] || ''}${!estEnvoye ? (lu ? ' · ✅ Lu' : ' · 🔔 Non lu') : ''}</div>
+            <div style="font-size:10px;color:#aaa;margin-top:4px">${m['Date envoi'] || ''}${!estEnvoye ? (lu ? ' · ✅ Lu' : ' · 🔔 Non lu') : ''}</div>
           </div>`;
         }).join('');
         container.scrollTop = container.scrollHeight;
@@ -3070,15 +3090,25 @@
   async function chargerMessageIndividuel() {
     if (!connectedViewId) return;
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      const [resMsg, resUsers] = await Promise.all([
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+          headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+        }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+      ]);
+      const data = await resMsg.json();
+      const dataUsers = await resUsers.json();
+      const usersMap = {};
+      (dataUsers.results || []).forEach(u => {
+        if (u['Vue ID']) usersMap[String(u['Vue ID']).trim()] = u['Nom complet'] || u['Identifiant'] || '?';
       });
-      const data = await res.json();
       const msg = (data.results || []).find(r =>
         destinatairesListe(r).includes(String(connectedViewId).trim()) && !estLuParMoi(r, connectedViewId)
       );
       if (msg && msg['Messages']) {
         messageActif = msg;
+        const nomExpediteur = usersMap[String(msg['Expediteur'] || '').trim()] || 'un collaborateur';
+        document.getElementById('modal-message-title').textContent = '📢 Message de ' + nomExpediteur;
         document.getElementById('modal-message-body').textContent = msg['Messages'];
         document.getElementById('modal-message').classList.add('open');
       }
@@ -11563,6 +11593,9 @@
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">✉️ Mes messages</div>
     <button onclick="ouvrirNouveauMessage()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+  </div>
+  <div style="padding:0 16px 10px">
+    <input type="text" id="search-messages-collab" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerConversations()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:13px;outline:none" />
   </div>
   <div id="messages-content" style="padding:8px 16px 80px">
     <div class="feuille-loading">⏳ Chargement…</div>
