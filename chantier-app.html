@@ -577,7 +577,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v15';
+  const APP_VERSION = 'v16';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -5289,21 +5289,32 @@
     });
     _suiviSaisiesParChantierCache = saisiesParChantier;
 
-    let suivi = '<div style="padding:8px 16px 0"><div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:12px">📈 Réel vs Prévu par affaire</div>';
+    const posteEtudeSuivi = POSTES_CHARGE.find(p => p.key === 'Étude');
+    const postesGlobauxSuivi = POSTES_CHARGE.filter(p => p.key !== 'Étude');
+
+    let suivi = '<div style="padding:8px 16px 0"><div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:4px">📈 Réel vs Prévu par affaire</div>';
+    suivi += '<div style="font-size:10px;color:#999;font-style:italic;margin-bottom:12px">ℹ️ Étude non comprise dans le TOTAL CHANTIER</div>';
     suivi += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px">';
     suivi += '<thead><tr style="background:#f8f8f8"><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd;min-width:140px">Affaire</th><th style="padding:8px;text-align:left;border-bottom:2px solid #ddd">Pose</th>';
-    POSTES_CHARGE.forEach(p => { suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${p.color};border-left:2px solid #eee">${p.key}</th>`; });
+    // Analyse globale (Fab Bois / Fab Acier / Pose)
+    postesGlobauxSuivi.forEach(p => { suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${p.color};border-left:2px solid #eee">${p.key}</th>`; });
     suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:var(--gris);border-left:2px solid #ccc;background:#f0ede8">TOTAL CHANTIER</th>`;
+    // Étude : séparé, tout à droite, hors analyse globale
+    suivi += `<th colspan="3" style="padding:8px;text-align:center;border-bottom:2px solid #ddd;color:${posteEtudeSuivi.color};border-left:3px solid #bbb;background:#eef3f8">${posteEtudeSuivi.key}</th>`;
     suivi += '</tr><tr style="background:#fafafa"><th style="padding:4px 8px;border-bottom:1px solid #eee"></th><th style="padding:4px 8px;border-bottom:1px solid #eee"></th>';
-    POSTES_CHARGE.forEach(() => {
-      suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;border-left:2px solid #eee">Prévu</th>';
+    postesGlobauxSuivi.forEach((p, i) => {
+      suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;border-left:${i === 0 ? '2px solid #eee' : '2px solid #eee'}">Prévu</th>`;
       suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Réel</th>';
       suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa">Écart</th>';
     });
     suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;border-left:2px solid #ccc;background:#f0ede8">Prévu</th>`;
     suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;background:#f0ede8">Réel</th>`;
     suivi += `<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#888;background:#f0ede8">Écart</th>`;
+    suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;border-left:3px solid #bbb;background:#eef3f8">Prévu</th>';
+    suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;background:#eef3f8">Réel</th>';
+    suivi += '<th style="padding:4px 8px;border-bottom:1px solid #eee;font-size:10px;color:#aaa;background:#eef3f8">Écart</th>';
     suivi += '</tr></thead><tbody>';
+
 
     affaires.forEach((a, idx) => {
       const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
@@ -5314,8 +5325,9 @@
       suivi += `<tr style="background:${bgRow};border-bottom:1px solid #f0f0f0">`;
       suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom} <button onclick="afficherDetailSaisiesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" title="Voir toutes les saisies de ce chantier" style="background:#eef5f0;border:none;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;color:var(--vert);vertical-align:middle">📋</button></td>`;
       suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateLivraison||'—'}</td>`;
-      let totalPrevu = 0, totalReel = 0;
-      POSTES_CHARGE.forEach(p => {
+
+      // Calcul générique Prévu/Réel pour un poste donné
+      const calculPoste = (p) => {
         const prevu = parseFloat(a[p.field]) || 0;
         const collabsPoste = collabs.filter(c => (c['Poste / Métier']||'') === p.posteCollab);
         const collabIds = new Set(collabsPoste.map(c => c.id));
@@ -5327,17 +5339,23 @@
           const sPoste = (s['Poste']||[])[0]?.value || '';
           return sPoste === p.posteCollab || collabIds.has(sCollab);
         }).reduce((sum, s) => sum + (parseFloat(s['Heures Normales'])||parseFloat(s['Total Heures'])||0), 0);
+        return { prevu, reel };
+      };
+
+      let totalPrevu = 0, totalReel = 0;
+      postesGlobauxSuivi.forEach((p, i) => {
+        const { prevu, reel } = calculPoste(p);
         const reelArrondi = Math.round(reel * 10) / 10;
         const ecart = Math.round((prevu - reel) * 10) / 10; // positif = il reste des heures
         const pct = prevu > 0 ? Math.round((reel / prevu) * 100) : null;
         const couleur = ecart < 0 ? '#c0392b' : ecart < prevu * 0.1 ? '#d99a3d' : '#2D8A4E';
-        suivi += `<td style="padding:8px;text-align:center;border-left:2px solid #eee;color:#555">${prevu > 0 ? prevu + 'h' : '—'}</td>`;
+        suivi += `<td style="padding:8px;text-align:center;border-left:${i === 0 ? '2px solid #eee' : '2px solid #eee'};color:#555">${prevu > 0 ? prevu + 'h' : '—'}</td>`;
         suivi += `<td style="padding:8px;text-align:center;font-weight:700">${prevu > 0 ? reelArrondi + 'h' : '—'}</td>`;
         suivi += `<td style="padding:8px;text-align:center;color:${prevu > 0 ? couleur : '#ddd'};font-weight:700">${prevu > 0 ? (ecart > 0 ? '+' : '') + ecart + 'h' + (pct !== null ? ' (' + pct + '%)' : '') : '—'}</td>`;
         totalPrevu += prevu;
         totalReel += reel;
       });
-      // Colonne TOTAL CHANTIER : somme tous postes confondus, pour une vision globale positive/négative
+      // Colonne TOTAL CHANTIER : somme Fab Bois + Fab Acier + Pose (hors Étude), pour une vision globale positive/négative
       const totalReelArrondi = Math.round(totalReel * 10) / 10;
       const totalEcart = Math.round((totalPrevu - totalReel) * 10) / 10; // positif = il reste des heures (chantier dans les temps)
       const totalPct = totalPrevu > 0 ? Math.round((totalReel / totalPrevu) * 100) : null;
@@ -5345,6 +5363,18 @@
       suivi += `<td style="padding:8px;text-align:center;border-left:2px solid #ccc;background:#f7f5f2;color:#555;font-weight:700">${totalPrevu > 0 ? totalPrevu + 'h' : '—'}</td>`;
       suivi += `<td style="padding:8px;text-align:center;background:#f7f5f2;font-weight:700">${totalPrevu > 0 ? totalReelArrondi + 'h' : '—'}</td>`;
       suivi += `<td style="padding:8px;text-align:center;background:#f7f5f2;color:${totalPrevu > 0 ? totalCouleur : '#ddd'};font-weight:800">${totalPrevu > 0 ? (totalEcart > 0 ? '+' : '') + totalEcart + 'h' + (totalPct !== null ? ' (' + totalPct + '%)' : '') : '—'}</td>`;
+
+      // Étude : colonne séparée tout à droite, exclue de l'analyse globale / du total chantier
+      {
+        const { prevu, reel } = calculPoste(posteEtudeSuivi);
+        const reelArrondi = Math.round(reel * 10) / 10;
+        const ecart = Math.round((prevu - reel) * 10) / 10;
+        const pct = prevu > 0 ? Math.round((reel / prevu) * 100) : null;
+        const couleur = ecart < 0 ? '#c0392b' : ecart < prevu * 0.1 ? '#d99a3d' : '#2D8A4E';
+        suivi += `<td style="padding:8px;text-align:center;border-left:3px solid #bbb;background:#f5f8fb;color:#555">${prevu > 0 ? prevu + 'h' : '—'}</td>`;
+        suivi += `<td style="padding:8px;text-align:center;background:#f5f8fb;font-weight:700">${prevu > 0 ? reelArrondi + 'h' : '—'}</td>`;
+        suivi += `<td style="padding:8px;text-align:center;background:#f5f8fb;color:${prevu > 0 ? couleur : '#ddd'};font-weight:700">${prevu > 0 ? (ecart > 0 ? '+' : '') + ecart + 'h' + (pct !== null ? ' (' + pct + '%)' : '') : '—'}</td>`;
+      }
       suivi += '</tr>';
     });
     suivi += '</tbody></table></div></div>';
