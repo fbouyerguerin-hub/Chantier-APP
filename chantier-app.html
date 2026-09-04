@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V22A';
+  const APP_VERSION = 'V23A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2946,7 +2946,7 @@
     container.innerHTML = liste.map(c => {
       const dernierEstEnvoye = String(c.dernier['Expediteur'] || '').trim() === String(connectedViewId).trim();
       const texte = c.dernier['Messages'] || '';
-      const apercu = texte.length > 55 ? texte.slice(0, 55) + '…' : texte;
+      const apercu = texte ? (texte.length > 55 ? texte.slice(0, 55) + '…' : texte) : ((c.dernier['Fichiers']||[]).length ? '📎 Pièce jointe' : '');
       return `<div onclick="ouvrirConversation('${c.id}','${c.nom.replace(/'/g,"\\'")}')" style="background:#fff;border-radius:12px;margin-bottom:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:4px solid ${c.nonLus > 0 ? 'var(--vert)' : '#eee'}">
         <div style="min-width:0;flex:1">
           <div style="font-size:14px;font-weight:700;color:var(--gris)">${c.nom}</div>
@@ -2983,7 +2983,14 @@
         <div id="conv-content" style="overflow-y:auto;padding:12px 16px;flex:1"></div>
         <div style="padding:10px 16px 16px;border-top:1px solid #eee">
           <textarea id="conv-reply-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;resize:vertical;min-height:50px"></textarea>
-          <button onclick="envoyerReponseConversation()" id="btn-conv-envoyer" style="width:100%;margin-top:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Envoyer ✓</button>
+          <div id="conv-pj-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <label style="display:flex;align-items:center;justify-content:center;gap:6px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:8px;padding:10px;font-size:13px;color:var(--gris-moyen);cursor:pointer;flex-shrink:0">
+              📎
+              <input type="file" id="conv-pj-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none" onchange="previewPJConversation(this)" />
+            </label>
+            <button onclick="envoyerReponseConversation()" id="btn-conv-envoyer" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Envoyer ✓</button>
+          </div>
         </div>
       </div>`;
       document.body.appendChild(modal);
@@ -2992,6 +2999,8 @@
     document.getElementById('conv-titre').textContent = '💬 ' + collabNom;
     document.getElementById('conv-content').innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     document.getElementById('conv-reply-texte').value = '';
+    document.getElementById('conv-pj-input').value = '';
+    document.getElementById('conv-pj-preview').innerHTML = '';
     modal.style.display = 'flex';
     await rafraichirConversation();
   }
@@ -3025,9 +3034,11 @@
         container.innerHTML = msgs.map(m => {
           const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
           const lu = estLuParMoi(m, connectedViewId);
+          const fichiers = m['Fichiers'] || [];
           return `<div style="background:${estEnvoye ? '#f0f7ef' : '#f7f7f7'};border-radius:10px;margin-bottom:8px;padding:10px 12px;border-left:3px solid ${estEnvoye ? 'var(--vert)' : '#A28A6E'}">
             <div style="font-size:11px;font-weight:700;color:${estEnvoye ? 'var(--vert)' : '#A28A6E'};margin-bottom:4px">${estEnvoye ? 'Vous' : currentConversation.nom}</div>
-            <div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages'] || ''}</div>
+            ${m['Messages'] ? `<div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages']}</div>` : ''}
+            ${fichiers.length ? fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:block;font-size:12px;color:var(--vert);text-decoration:underline;margin-top:4px">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
             <div style="font-size:10px;color:#aaa;margin-top:4px">${m['Date envoi'] || ''}${!estEnvoye ? (lu ? ' · ✅ Lu' : ' · 🔔 Non lu') : ''}</div>
           </div>`;
         }).join('');
@@ -3050,20 +3061,40 @@
     }
   }
 
+  function previewPJConversation(input) {
+    const preview = document.getElementById('conv-pj-preview'); preview.innerHTML = '';
+    [...input.files].forEach(f => { const t = document.createElement('div'); t.style.cssText='background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600'; t.textContent='📎 '+f.name; preview.appendChild(t); });
+  }
+
   async function envoyerReponseConversation() {
     if (!currentConversation) return;
     const ta = document.getElementById('conv-reply-texte');
+    const pjInput = document.getElementById('conv-pj-input');
     const texte = ta.value.trim();
-    if (!texte) return;
+    if (!texte && !pjInput.files.length) return;
     const btn = document.getElementById('btn-conv-envoyer');
     btn.disabled = true; btn.textContent = 'Envoi…';
-    const ok = await envoyerMessageGroupe([String(currentConversation.id)], texte);
-    btn.disabled = false; btn.textContent = 'Envoyer ✓';
-    if (ok) {
-      ta.value = '';
-      await rafraichirConversation();
-    } else {
-      alert('❌ Échec de l\'envoi, réessayez');
+    try {
+      const fichiers = [];
+      for (const file of pjInput.files) {
+        const fd = new FormData(); fd.append('file', file);
+        const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+        if (!r.ok) throw new Error('Erreur upload pièce jointe');
+        fichiers.push({ name: (await r.json()).name });
+      }
+      const ok = await envoyerMessageGroupe([String(currentConversation.id)], texte, fichiers);
+      if (ok) {
+        ta.value = '';
+        pjInput.value = '';
+        document.getElementById('conv-pj-preview').innerHTML = '';
+        await rafraichirConversation();
+      } else {
+        alert('❌ Échec de l\'envoi, réessayez');
+      }
+    } catch(e) {
+      alert('Erreur : ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Envoyer ✓';
     }
   }
 
@@ -3198,6 +3229,8 @@
     modal.style.display = 'flex';
     document.getElementById('nouveau-msg-texte').value = '';
     document.getElementById('nouveau-msg-dest-count').textContent = '';
+    document.getElementById('nouveau-msg-pj-input').value = '';
+    document.getElementById('nouveau-msg-pj-preview').innerHTML = '';
     const btnEnvoi = document.getElementById('btn-envoyer-nouveau-message');
     if (btnEnvoi) { btnEnvoi.disabled = false; btnEnvoi.textContent = 'Envoyer ✓'; }
     const container = document.getElementById('nouveau-msg-destinataires');
@@ -3237,28 +3270,46 @@
     document.getElementById('modal-nouveau-message').style.display = 'none';
   }
 
+  function previewPJNouveauMessage(input) {
+    const preview = document.getElementById('nouveau-msg-pj-preview'); preview.innerHTML = '';
+    [...input.files].forEach(f => { const t = document.createElement('div'); t.style.cssText='background:var(--vert-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--vert);font-weight:600'; t.textContent='📎 '+f.name; preview.appendChild(t); });
+  }
+
   async function envoyerNouveauMessage() {
     const checked = [...document.getElementById('nouveau-msg-destinataires').querySelectorAll('input:checked')];
     const texte = document.getElementById('nouveau-msg-texte').value.trim();
+    const pjInput = document.getElementById('nouveau-msg-pj-input');
     if (!checked.length) { alert('Veuillez choisir au moins un destinataire'); return; }
-    if (!texte) { alert('Veuillez saisir un message'); return; }
+    if (!texte && !pjInput.files.length) { alert('Veuillez saisir un message ou joindre un fichier'); return; }
     const btn = document.getElementById('btn-envoyer-nouveau-message');
     if (btn) { btn.disabled = true; btn.textContent = 'Envoi…'; }
     const destinataires = checked.map(cb => String(cb.value));
-    const ok = await envoyerMessageGroupe(destinataires, texte);
-    if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; }
-    fermerNouveauMessage();
-    alert(ok
-      ? `✅ Message diffusé à ${destinataires.length} destinataire${destinataires.length > 1 ? 's' : ''}`
-      : `❌ Échec de l'envoi, réessayez`);
-    loadHistoriqueMessages();
+    try {
+      const fichiers = [];
+      for (const file of pjInput.files) {
+        const fd = new FormData(); fd.append('file', file);
+        const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+        if (!r.ok) throw new Error('Erreur upload pièce jointe');
+        fichiers.push({ name: (await r.json()).name });
+      }
+      const ok = await envoyerMessageGroupe(destinataires, texte, fichiers);
+      fermerNouveauMessage();
+      alert(ok
+        ? `✅ Message diffusé à ${destinataires.length} destinataire${destinataires.length > 1 ? 's' : ''}`
+        : `❌ Échec de l'envoi, réessayez`);
+      loadHistoriqueMessages();
+    } catch(e) {
+      alert('Erreur : ' + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; }
+    }
   }
 
   // Crée UNE seule ligne pour le message, avec la liste des destinataires dans
   // 'Destinataire' (IDs séparés par des virgules) — au lieu de dupliquer une ligne
   // par personne. Avec 2 tentatives supplémentaires en cas d'erreur réseau ou de
   // rejet serveur (429 = trop de requêtes, etc.).
-  async function envoyerMessageGroupe(destinataires, texte, tentative = 1) {
+  async function envoyerMessageGroupe(destinataires, texte, fichiers = [], tentative = 1) {
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
         method: 'POST',
@@ -3269,14 +3320,15 @@
           'Lu par': '',
           'Destinataire': destinataires.join(','),
           'Expediteur': String(connectedViewId),
-          'Date envoi': dateYMD(new Date())
+          'Date envoi': dateYMD(new Date()),
+          'Fichiers': fichiers
         })
       });
       if (res.ok) return true;
-      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, tentative + 1); }
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, fichiers, tentative + 1); }
       return false;
     } catch(e) {
-      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, tentative + 1); }
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, fichiers, tentative + 1); }
       return false;
     }
   }
@@ -11616,9 +11668,16 @@
       </div>
       <div id="nouveau-msg-dest-count" style="font-size:11px;color:var(--beige);margin-top:4px;font-weight:600"></div>
     </div>
-    <div style="margin-bottom:16px">
+    <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
       <textarea id="nouveau-msg-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;resize:vertical;min-height:100px;outline:none"></textarea>
+    </div>
+    <div style="margin-bottom:16px">
+      <div id="nouveau-msg-pj-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+      <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
+        📎 Ajouter un fichier
+        <input type="file" id="nouveau-msg-pj-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none" onchange="previewPJNouveauMessage(this)" />
+      </label>
     </div>
     <button onclick="envoyerNouveauMessage()" id="btn-envoyer-nouveau-message" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Envoyer ✓</button>
   </div>
