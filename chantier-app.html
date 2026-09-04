@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V25A';
+  const APP_VERSION = 'V25B';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3670,12 +3670,12 @@
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
             <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${collabsPoste.length} pers.)</span></span>
           </div>
-          <div style="overflow-x:auto">
+          <div style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;background:#f8f8f8;z-index:2">Chantiers</th>
-                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : 'transparent'};font-weight:700;white-space:nowrap;min-width:44px;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Chantiers</th>
+                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:44px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -3983,12 +3983,12 @@
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
             <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${detail.length} pers.)</span></span>
           </div>
-          <div style="overflow-x:auto">
+          <div style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
-                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;background:#f8f8f8;z-index:2">Ressources / Chantiers</th>
-                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : 'transparent'};font-weight:700;white-space:nowrap;min-width:52px;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Ressources / Chantiers</th>
+                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:52px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
