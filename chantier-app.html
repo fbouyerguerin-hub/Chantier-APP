@@ -2719,7 +2719,7 @@
         const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
         const heuresEstimees = estimerHeuresPeriode(d, periode);
         const chantierId = (r['Chantier'] || [])[0]?.id;
-        byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', chantierId, notes: r['Notes'] || '', periode, heures: heuresEstimees });
+        byDatePlanning[d].push({ chantier: (r['Chantier'] || [])[0]?.value || '—', chantierId, notes: r['Notes'] || '', fichiers: r['Fichiers'] || [], periode, heures: heuresEstimees });
       });
 
       (await resSaisies.json()).results?.forEach(r => {
@@ -2757,6 +2757,7 @@
               ${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}
               ${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}
               ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
+              ${(r.fichiers && r.fichiers.length) ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="planning-cell-notes" style="display:block;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
             </div>`;
           }).join('');
         } else if (ferie) {
@@ -7319,7 +7320,9 @@
           affs.forEach(aff => {
             const chantier = (aff['Chantier'] || [])[0]?.value || '—';
             const notes = aff['Notes'] || '';
-            html += '<div class="aff-tag">🏗 ' + chantier + (notes ? '<div class="aff-notes">' + notes + '</div>' : '') + '<button class="btn-del-aff" onclick="supprimerAffAdmin(' + aff.id + ', event)">✕</button></div>';
+            const fichiersAff = aff['Fichiers'] || [];
+            const pjHTML = fichiersAff.length ? fichiersAff.map(f => '<a href="' + f.url + '" target="_blank" class="aff-notes" style="display:block;color:var(--vert);text-decoration:underline" onclick="event.stopPropagation()">📎 ' + (f.visible_name || f.name || 'Fichier') + '</a>').join('') : '';
+            html += '<div class="aff-tag">🏗 ' + chantier + (notes ? '<div class="aff-notes">' + notes + '</div>' : '') + pjHTML + '<button class="btn-del-aff" onclick="supprimerAffAdmin(' + aff.id + ', event)">✕</button></div>';
           });
           const btnAff = '<button class="btn-add-aff-admin" data-nom="' + collab.nom.replace(/"/g, '&quot;') + '" data-id="' + collab.collabId + '" data-date="' + dateStr + '" onclick="ouvrirModalAffAdminFromBtn(this)">+</button>';
       html += btnAff;
