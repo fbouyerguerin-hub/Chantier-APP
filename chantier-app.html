@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V20A';
+  const APP_VERSION = 'V20B';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2838,21 +2838,41 @@
   }
 
   // ── MESSAGERIE INDIVIDUELLE ──
+  // Un message diffusé à plusieurs personnes tient sur UNE seule ligne Baserow :
+  // 'Destinataire' contient alors une liste d'IDs séparés par des virgules, et
+  // 'Lu par' accumule les IDs de ceux qui l'ont ouvert (au lieu du booléen 'Lu',
+  // qui reste utilisé tel quel pour les messages à un seul destinataire).
+  function destinatairesListe(r) {
+    return String(r['Destinataire'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  }
+  function luParListe(r) {
+    return String(r['Lu par'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  }
+  function estGroupe(r) {
+    return destinatairesListe(r).length > 1;
+  }
+  function estLuParMoi(r, monId) {
+    return estGroupe(r) ? luParListe(r).includes(String(monId).trim()) : r['Lu'] === true;
+  }
+
   async function chargerMessage() {
     await chargerMessageIndividuel();
   }
 
   async function fermerMessage() {
     document.getElementById('modal-message').classList.remove('open');
-    if (messageActifId) {
+    if (messageActif) {
       try {
-        await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${messageActifId}/?user_field_names=true`, {
+        const payload = estGroupe(messageActif)
+          ? { 'Lu par': [...new Set([...luParListe(messageActif), String(connectedViewId).trim()])].join(',') }
+          : { 'Lu': true, 'Date lecture': dateYMD(new Date()) };
+        await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${messageActif.id}/?user_field_names=true`, {
           method: 'PATCH',
           headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 'Lu': true, 'Date lecture': dateYMD(new Date()) })
+          body: JSON.stringify(payload)
         });
       } catch(e) {}
-      messageActifId = null;
+      messageActif = null;
       updateBadgeMessages();
     }
   }
@@ -2875,7 +2895,7 @@
       const getNom = id => usersMap[String(id || '').trim()] || ('ID ' + id);
 
       const msgs = (dataMsg.results || []).filter(r =>
-        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim() ||
+        destinatairesListe(r).includes(String(connectedViewId).trim()) ||
         String(r['Expediteur'] || '').trim() === String(connectedViewId).trim()
       ).sort((a, b) => b.id - a.id);
 
@@ -2885,26 +2905,28 @@
       }
 
       container.innerHTML = msgs.map(m => {
-        const lu = m['Lu'] === true;
+        const dests = destinatairesListe(m);
+        const groupe = dests.length > 1;
+        const lu = estLuParMoi(m, connectedViewId);
         const estEnvoye = String(m['Expediteur'] || '').trim() === String(connectedViewId).trim();
         const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
-        const destinataireNom = m['Destinataire'] ? getNom(m['Destinataire']) : '—';
+        const destNoms = dests.map(getNom);
+        const luParNoms = groupe ? luParListe(m).map(getNom) : [];
         return `<div style="background:#fff;border-radius:12px;margin-bottom:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:4px solid ${estEnvoye ? '#A28A6E' : (lu ? '#ddd' : 'var(--vert)')}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;gap:4px">
             <div>
               <span style="font-size:11px;font-weight:700;color:${estEnvoye ? '#A28A6E' : (lu ? '#aaa' : 'var(--vert)')}">
-                ${estEnvoye ? '📤 Envoyé' : (lu ? '✅ Lu' : '🔔 Non lu')}
+                ${estEnvoye ? '📤 Diffusé' : (lu ? '✅ Lu' : '🔔 Non lu')}
               </span>
               <div style="font-size:10px;color:#888;margin-top:2px">
-                ${estEnvoye ? 'À : <b>' + destinataireNom + '</b>' : 'De : <b>' + expediteurNom + '</b>'}
+                ${estEnvoye ? (groupe ? 'À : <b>' + destNoms.join(', ') + '</b>' : 'À : <b>' + (destNoms[0]||'—') + '</b>') : 'De : <b>' + expediteurNom + '</b>'}
               </div>
+              ${estEnvoye && groupe ? `<div style="font-size:10px;color:#aaa;margin-top:2px">👁️ Lu par ${luParNoms.length}/${dests.length}${luParNoms.length ? ' : ' + luParNoms.join(', ') : ''}</div>` : ''}
             </div>
-            <div style="display:flex;align-items:flex-start;gap:8px">
-              <div style="font-size:10px;color:#aaa;text-align:right">
+            <div style="font-size:10px;color:#aaa;text-align:right">
                 ${m['Date envoi'] ? '📤 ' + m['Date envoi'] : ''}
-                ${lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
+                ${!groupe && lu && m['Date lecture'] ? '<br>👁️ ' + m['Date lecture'] : ''}
               </div>
-              <button onclick="supprimerMessage(${m.id}, event)" title="Supprimer" style="background:none;border:none;color:#c0392b;font-size:14px;cursor:pointer;padding:0;line-height:1">🗑️</button>
             </div>
           </div>
           <div style="font-size:14px;color:var(--gris);line-height:1.5;margin-bottom:${!estEnvoye && m['Expediteur'] ? '10px' : '0'}">${m['Messages'] || ''}</div>
@@ -2921,19 +2943,7 @@
     }
   }
 
-  async function supprimerMessage(msgId, e) {
-    if (e) e.stopPropagation();
-    if (!confirm('Supprimer ce message ?')) return;
-    try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${msgId}/`,
-        { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } });
-      if (!res.ok) throw new Error(await res.text());
-      await loadHistoriqueMessages();
-      updateBadgeMessages();
-    } catch(e) { alert('Erreur : ' + e.message); }
-  }
-
-  let messageActifId = null;
+  let messageActif = null;
 
   async function updateBadgeMessages() {
     if (!connectedViewId) return;
@@ -2943,8 +2953,7 @@
       });
       const data = await res.json();
       const nonLus = (data.results || []).filter(r =>
-        r['Lu'] !== true &&
-        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim()
+        destinatairesListe(r).includes(String(connectedViewId).trim()) && !estLuParMoi(r, connectedViewId)
       ).length;
       const badge = document.getElementById('badge-messages');
       if (badge) {
@@ -2962,11 +2971,10 @@
       });
       const data = await res.json();
       const msg = (data.results || []).find(r =>
-        r['Lu'] !== true &&
-        String(r['Destinataire'] || '').trim() === String(connectedViewId).trim()
+        destinatairesListe(r).includes(String(connectedViewId).trim()) && !estLuParMoi(r, connectedViewId)
       );
       if (msg && msg['Messages']) {
-        messageActifId = msg.id;
+        messageActif = msg;
         document.getElementById('modal-message-body').textContent = msg['Messages'];
         document.getElementById('modal-message').classList.add('open');
       }
@@ -3000,22 +3008,12 @@
   async function envoyerReponse(msgId, expediteurId) {
     const ta = document.getElementById('reply-text-' + msgId);
     if (!ta || !ta.value.trim()) return;
-    try {
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
-        method: 'POST',
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          'Messages': ta.value.trim(),
-          'Lu': false,
-          'Destinataire': String(expediteurId),
-          'Expediteur': String(connectedViewId),
-          'Date envoi': dateYMD(new Date())
-        })
-      });
+    const ok = await envoyerMessageGroupe([String(expediteurId)], ta.value.trim());
+    if (ok) {
       alert('✅ Réponse envoyée');
       loadHistoriqueMessages();
-    } catch(e) {
-      alert("Erreur lors de l'envoi de la réponse");
+    } else {
+      alert("Erreur lors de l'envoi de la réponse, réessayez");
     }
   }
 
@@ -3057,7 +3055,7 @@
       const getNom = id => usersMap[String(id || '').trim()] || ('ID ' + id);
 
       const msgs = (dataMsg.results || []).filter(r =>
-        String(r['Destinataire'] || '').trim() === String(collabId).trim() ||
+        destinatairesListe(r).includes(String(collabId).trim()) ||
         String(r['Expediteur'] || '').trim() === String(collabId).trim()
       ).sort((a, b) => b.id - a.id);
 
@@ -3067,28 +3065,27 @@
       }
 
       document.getElementById('modal-hist-content').innerHTML = msgs.map(m => {
-        const lu = m['Lu'] === true;
+        const dests = destinatairesListe(m);
+        const groupe = dests.length > 1;
         const envoi = m['Date envoi'] || '';
         const lecture = m['Date lecture'] || '';
-        const estRecu = String(m['Destinataire'] || '').trim() === String(collabId).trim();
+        const estRecu = dests.includes(String(collabId).trim());
+        const lu = groupe ? luParListe(m).includes(String(collabId).trim()) : m['Lu'] === true;
         const expediteurNom = m['Expediteur'] ? getNom(m['Expediteur']) : '—';
-        const destinataireNom = m['Destinataire'] ? getNom(m['Destinataire']) : '—';
+        const destinataireLabel = groupe ? `${dests.length} destinataires` : (m['Destinataire'] ? getNom(m['Destinataire']) : '—');
         return `<div style="background:#fff;border-radius:10px;margin-bottom:8px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.07);border-left:3px solid ${estRecu ? (lu ? '#ddd' : 'var(--vert)') : '#A28A6E'}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:5px;flex-wrap:wrap;gap:3px">
             <div>
               <span style="font-size:10px;font-weight:700;color:${estRecu ? (lu ? '#aaa' : 'var(--vert)') : '#A28A6E'}">
-                ${estRecu ? (lu ? '✅ Reçu · Lu' : '🔔 Reçu · Non lu') : '📤 Envoyé'}
+                ${estRecu ? (lu ? '✅ Reçu · Lu' : '🔔 Reçu · Non lu') : (groupe ? '📤 Diffusé' : '📤 Envoyé')}
               </span>
               <div style="font-size:10px;color:#888;margin-top:2px">
-                De : <b>${expediteurNom}</b> → À : <b>${destinataireNom}</b>
+                De : <b>${expediteurNom}</b> → À : <b>${destinataireLabel}</b>
               </div>
             </div>
-            <div style="display:flex;align-items:flex-start;gap:8px">
-              <div style="font-size:10px;color:#aaa;text-align:right">
-                ${envoi ? '📤 ' + envoi : ''}${lecture ? '<br>👁️ ' + lecture : ''}
+            <div style="font-size:10px;color:#aaa;text-align:right">
+                ${envoi ? '📤 ' + envoi : ''}${!groupe && lecture ? '<br>👁️ ' + lecture : ''}
               </div>
-              <button onclick="supprimerMessageHistorique(${m.id}, '${collabId}', '${collabNom.replace(/'/g,"\\'")}', event)" title="Supprimer" style="background:none;border:none;color:#c0392b;font-size:13px;cursor:pointer;padding:0;line-height:1">🗑️</button>
-            </div>
           </div>
           <div style="font-size:13px;color:var(--gris);line-height:1.5;margin-top:6px">${m['Messages'] || ''}</div>
         </div>`;
@@ -3096,17 +3093,6 @@
     } catch(e) {
       document.getElementById('modal-hist-content').innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
     }
-  }
-
-  async function supprimerMessageHistorique(msgId, collabId, collabNom, e) {
-    if (e) e.stopPropagation();
-    if (!confirm('Supprimer ce message ?')) return;
-    try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${msgId}/`,
-        { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } });
-      if (!res.ok) throw new Error(await res.text());
-      await voirHistoriqueUser(collabId, collabNom);
-    } catch(e) { alert('Erreur : ' + e.message); }
   }
 
   async function ouvrirNouveauMessage() {
@@ -3160,34 +3146,21 @@
     if (!texte) { alert('Veuillez saisir un message'); return; }
     const btn = document.getElementById('btn-envoyer-nouveau-message');
     if (btn) { btn.disabled = true; btn.textContent = 'Envoi…'; }
-    const dateEnvoi = dateYMD(new Date());
-    const echecs = [];
-    let reussis = 0;
-    // Envoi par petits lots (au lieu de tout en même temps) pour éviter de dépasser
-    // la limite de débit de l'API Baserow, qui rejette silencieusement (fetch ne
-    // considère pas un 429/erreur serveur comme un échec réseau).
-    const TAILLE_LOT = 5;
-    for (let i = 0; i < checked.length; i += TAILLE_LOT) {
-      const lot = checked.slice(i, i + TAILLE_LOT);
-      const resultats = await Promise.all(lot.map(cb => envoyerUnMessage(cb.value, texte, dateEnvoi)));
-      resultats.forEach((ok, idx) => {
-        if (ok) reussis++;
-        else echecs.push(lot[idx].dataset.nom || lot[idx].value);
-      });
-    }
+    const destinataires = checked.map(cb => String(cb.value));
+    const ok = await envoyerMessageGroupe(destinataires, texte);
     if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; }
     fermerNouveauMessage();
-    if (echecs.length) {
-      alert(`⚠️ ${reussis}/${checked.length} message(s) envoyé(s).\nÉchec pour : ${echecs.join(', ')}.\nMerci de leur renvoyer le message.`);
-    } else {
-      alert(`✅ Message envoyé à ${reussis} destinataire${reussis > 1 ? 's' : ''}`);
-    }
+    alert(ok
+      ? `✅ Message diffusé à ${destinataires.length} destinataire${destinataires.length > 1 ? 's' : ''}`
+      : `❌ Échec de l'envoi, réessayez`);
     loadHistoriqueMessages();
   }
 
-  // Envoie un message avec 2 tentatives supplémentaires (pause croissante) en cas
-  // d'erreur réseau ou de rejet serveur (429 = trop de requêtes, etc.).
-  async function envoyerUnMessage(destId, texte, dateEnvoi, tentative = 1) {
+  // Crée UNE seule ligne pour le message, avec la liste des destinataires dans
+  // 'Destinataire' (IDs séparés par des virgules) — au lieu de dupliquer une ligne
+  // par personne. Avec 2 tentatives supplémentaires en cas d'erreur réseau ou de
+  // rejet serveur (429 = trop de requêtes, etc.).
+  async function envoyerMessageGroupe(destinataires, texte, tentative = 1) {
     try {
       const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
         method: 'POST',
@@ -3195,16 +3168,17 @@
         body: JSON.stringify({
           'Messages': texte,
           'Lu': false,
-          'Destinataire': String(destId),
+          'Lu par': '',
+          'Destinataire': destinataires.join(','),
           'Expediteur': String(connectedViewId),
-          'Date envoi': dateEnvoi
+          'Date envoi': dateYMD(new Date())
         })
       });
       if (res.ok) return true;
-      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerUnMessage(destId, texte, dateEnvoi, tentative + 1); }
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, tentative + 1); }
       return false;
     } catch(e) {
-      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerUnMessage(destId, texte, dateEnvoi, tentative + 1); }
+      if (tentative < 3) { await new Promise(r => setTimeout(r, 700 * tentative)); return envoyerMessageGroupe(destinataires, texte, tentative + 1); }
       return false;
     }
   }
@@ -3212,7 +3186,7 @@
   async function envoyerMessage(collabId, collabNom) {
     const texte = prompt(`Message pour ${collabNom} :`);
     if (!texte || !texte.trim()) return;
-    const ok = await envoyerUnMessage(collabId, texte.trim(), dateYMD(new Date()));
+    const ok = await envoyerMessageGroupe([String(collabId)], texte.trim());
     alert(ok ? `✅ Message envoyé à ${collabNom}` : `❌ Échec de l'envoi à ${collabNom}, réessayez`);
   }
 
