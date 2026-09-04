@@ -529,15 +529,24 @@
 
 <!-- MODAL NOTE COLLABORATEUR (globale, accessible depuis toutes les pages) -->
 <div class="modal-backdrop" id="modal-note-collab" onclick="closeModalNoteCollab(event)">
-  <div class="modal-sheet">
+  <div class="modal-sheet" style="max-height:80vh">
     <div class="modal-header">
       <h3 id="modal-note-collab-title">📝 Note</h3>
       <button class="modal-close" onclick="closeModalNoteCollab()">✕</button>
     </div>
-    <div style="padding:16px 20px">
+    <div style="padding:16px 20px;overflow-y:auto">
       <div class="field">
         <label>Note (visible uniquement ce jour-là dans le planning du collaborateur)</label>
         <textarea id="modal-note-collab-texte" placeholder="Écrire une note…" style="min-height:80px"></textarea>
+      </div>
+      <div class="field">
+        <label>Pièces jointes</label>
+        <div id="note-collab-pj-liste" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+        <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
+          📎 Ajouter un fichier
+          <input type="file" id="note-collab-pj-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none" onchange="previewPJNoteCollab(this)" />
+        </label>
+        <div id="note-collab-pj-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div>
       </div>
       <button onclick="enregistrerNoteCollab()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-note-collab">✅ Enregistrer</button>
       <button onclick="supprimerNoteCollab()" style="width:100%;background:#fde8e8;color:#c0392b;border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px" id="btn-suppr-note-collab">🗑️ Supprimer la note</button>
@@ -597,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'v16A';
+  const APP_VERSION = 'V16A';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6010,19 +6019,20 @@
             const isSaisie = aff.isSaisie === true;
             const heures = aff['heures'] || '';
             const notes = aff['Notes'] || '';
+            const fichiersAff = aff['Fichiers'] || [];
             const div = document.createElement('div');
             div.className = 'aff-tag';
             div.style.cssText = 'font-size:9px;padding:3px 16px 3px 5px;margin-bottom:3px;user-select:none;' +
               (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f;cursor:default' : 'cursor:grab');
             div.innerHTML = '<span style="display:inline-flex;align-items:center;gap:2px">👷 ' + collabNom.split(' ')[0] +
-              (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note pour ce jour') + '">📝</button>' : '') +
+              (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note pour ce jour') + '">📝' + (fichiersAff.length ? '📎' : '') + '</button>' : '') +
               '</span>' +
               (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
               (notes ? '<div class="aff-notes" title="' + notes.replace(/"/g,'&quot;') + '">📝 '+tronquer(notes, 18)+'</div>' : '') +
               (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
 
             if (isGestAdmin && !isSaisie) {
-              div.querySelector('.btn-note-collab').onclick = e => { e.stopPropagation(); ouvrirModalNoteCollab(aff.id, collabNom, notes, e); };
+              div.querySelector('.btn-note-collab').onclick = e => { e.stopPropagation(); ouvrirModalNoteCollab(aff.id, collabNom, notes, fichiersAff, e); };
             }
             if (isGestAdmin && !isSaisie) {
               div.querySelector('.btn-del-aff').onclick = e => { e.stopPropagation(); supprimerAffCollectif(aff.id); };
@@ -7399,13 +7409,49 @@
   // ── NOTE SUR L'AFFECTATION DU JOUR (visible uniquement ce jour-là dans le planning du collaborateur) ──
   let currentNoteCollab = null;
 
-  function ouvrirModalNoteCollab(affId, collabNom, noteActuelle, e) {
+  function ouvrirModalNoteCollab(affId, collabNom, noteActuelle, fichiersActuels, e) {
     if (e) e.stopPropagation();
-    currentNoteCollab = { affId };
+    currentNoteCollab = { affId, fichiers: fichiersActuels || [] };
     document.getElementById('modal-note-collab-title').textContent = '📝 Note — ' + collabNom.split(' ')[0];
     document.getElementById('modal-note-collab-texte').value = noteActuelle || '';
     document.getElementById('btn-suppr-note-collab').style.display = noteActuelle ? '' : 'none';
+    document.getElementById('note-collab-pj-input').value = '';
+    document.getElementById('note-collab-pj-preview').innerHTML = '';
+    renderNoteCollabPJListe();
     document.getElementById('modal-note-collab').classList.add('open');
+  }
+
+  function renderNoteCollabPJListe() {
+    const container = document.getElementById('note-collab-pj-liste');
+    const fichiers = (currentNoteCollab && currentNoteCollab.fichiers) || [];
+    container.innerHTML = fichiers.length
+      ? fichiers.map(f => `
+        <div style="display:flex;align-items:center;gap:8px;background:var(--vert-clair);border-radius:8px;padding:8px 12px">
+          <a href="${f.url}" target="_blank" style="flex:1;font-size:13px;color:var(--vert);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${f.visible_name || f.name || 'Fichier'}</a>
+          <button onclick="supprimerFichierNoteCollab('${f.name}')" style="background:none;border:none;color:#c0392b;font-size:14px;cursor:pointer;padding:0;line-height:1">✕</button>
+        </div>`).join('')
+      : '<div style="color:#aaa;font-size:12px">Aucune pièce jointe</div>';
+  }
+
+  function previewPJNoteCollab(input) {
+    const preview = document.getElementById('note-collab-pj-preview'); preview.innerHTML = '';
+    [...input.files].forEach(f => { const t = document.createElement('div'); t.style.cssText='background:var(--beige-clair);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--gris-moyen);font-weight:600'; t.textContent='📎 '+f.name; preview.appendChild(t); });
+  }
+
+  async function supprimerFichierNoteCollab(fileName) {
+    if (!currentNoteCollab) return;
+    if (!confirm('Supprimer cette pièce jointe ?')) return;
+    try {
+      const nouveauxFichiers = currentNoteCollab.fichiers.filter(f => f.name !== fileName).map(f => ({ name: f.name }));
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Fichiers: nouveauxFichiers }) });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      currentNoteCollab.fichiers = data['Fichiers'] || [];
+      const aff = planningCollectifData.find(p => p.id === currentNoteCollab.affId) || planningAdminData.find(p => p.id === currentNoteCollab.affId);
+      if (aff) aff.Fichiers = currentNoteCollab.fichiers;
+      renderNoteCollabPJListe();
+    } catch(e) { alert('Erreur : ' + e.message); }
   }
 
   function closeModalNoteCollab(e) {
@@ -7417,14 +7463,24 @@
   async function enregistrerNoteCollab() {
     if (!currentNoteCollab) return;
     const texte = document.getElementById('modal-note-collab-texte').value.trim();
+    const inputPJ = document.getElementById('note-collab-pj-input');
     const btn = document.getElementById('btn-valider-note-collab');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
     try {
+      const nouveaux = [];
+      for (const file of inputPJ.files) {
+        const fd = new FormData(); fd.append('file', file);
+        const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+        if (!r.ok) throw new Error('Erreur upload pièce jointe');
+        nouveaux.push({ name: (await r.json()).name });
+      }
+      const fichiersFinaux = [...currentNoteCollab.fichiers.map(f => ({ name: f.name })), ...nouveaux];
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
-        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: texte }) });
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: texte, Fichiers: fichiersFinaux }) });
       if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
       const aff = planningCollectifData.find(p => p.id === currentNoteCollab.affId) || planningAdminData.find(p => p.id === currentNoteCollab.affId);
-      if (aff) aff.Notes = texte;
+      if (aff) { aff.Notes = texte; aff.Fichiers = data['Fichiers'] || []; }
       document.getElementById('modal-note-collab').classList.remove('open');
       await rafraichirVuesApresNote();
     } catch(e) { alert('Erreur : ' + e.message); }
@@ -7433,7 +7489,7 @@
 
   async function supprimerNoteCollab() {
     if (!currentNoteCollab) return;
-    if (!confirm('Supprimer cette note ?')) return;
+    if (!confirm('Supprimer cette note ? (les pièces jointes seront conservées)')) return;
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: '' }) });
