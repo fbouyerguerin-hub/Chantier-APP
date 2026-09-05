@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V25D';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8276,7 +8276,7 @@
         <button onclick="toggleValiderARForm(${r.id})" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider (AR reçu)</button>
         <div id="ar-form-${r.id}" style="display:none;margin-top:8px">
           <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:12px;color:var(--gris-moyen);margin-bottom:6px">
-            📎 Joindre l'accusé de réception
+            📎 Joindre l'accusé de réception (facultatif)
             <input type="file" id="ar-fichier-${r.id}" accept="image/*,.pdf" style="display:none" onchange="previewFichierAR(${r.id})" />
           </label>
           <div id="ar-fichier-preview-${r.id}" style="font-size:11px;color:var(--vert);margin-bottom:6px"></div>
@@ -8371,24 +8371,22 @@
 
   async function validerAR(id) {
     const input = document.getElementById('ar-fichier-' + id);
-    if (!input || !input.files.length) {
-      alert('Merci de joindre l\'accusé de réception avant de valider.');
-      return;
-    }
     const btn = document.getElementById('ar-btn-valider-' + id);
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
     try {
-      const fd = new FormData();
-      fd.append('file', input.files[0]);
-      const rUpload = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
-        method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd
-      });
-      if (!rUpload.ok) throw new Error('Échec de l\'envoi du fichier');
-      const fichier = { name: (await rUpload.json()).name };
+      const payload = { 'Statut': 'En attente réception' };
+      if (input && input.files.length) {
+        const fd = new FormData();
+        fd.append('file', input.files[0]);
+        const rUpload = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
+          method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd
+        });
+        if (!rUpload.ok) throw new Error('Échec de l\'envoi du fichier');
+        payload['Accusé de réception'] = [{ name: (await rUpload.json()).name }];
+      }
 
       await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS,
-        body: JSON.stringify({ 'Statut': 'En attente réception', 'Accusé de réception': [fichier] })
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
       await chargerCommandesPage();
     } catch (e) {
