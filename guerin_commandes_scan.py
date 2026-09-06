@@ -13,7 +13,7 @@ Concu pour tourner en tache planifiee Windows (meme principe que
 guerin_backup_baserow.py), ou etre lance manuellement.
 
 Prerequis :
-    pip install pdfplumber requests
+    pip install pdfplumber requests fpdf2
 
 A FAIRE AVANT LA PREMIERE EXECUTION (cote Baserow) :
   1. Creer une table "Commandes" avec les champs :
@@ -26,8 +26,12 @@ A FAIRE AVANT LA PREMIERE EXECUTION (cote Baserow) :
        Designation (texte)          -> reste de la ligne Reference (nom chantier +
                                        libelle libre, non fiable pour le matching,
                                        informatif uniquement)
-       PDF (fichier)                -> le PDF original de la commande, televerse
-                                       automatiquement par le script
+       PDF (fichier)                -> le PDF original de la commande (avec prix),
+                                       televerse automatiquement - reserve
+                                       Gestionnaire/Administrateur cote appli
+       PDF sans prix (fichier)      -> genere automatiquement par le script a partir
+                                       des donnees extraites (memes articles, sans
+                                       montants) - accessible a tous cote appli
        Montant total HT (nombre)
        Montant total TVA (nombre)
        Net a payer (nombre)
@@ -59,6 +63,7 @@ from pathlib import Path
 
 import pdfplumber
 import requests
+from fpdf import FPDF
 
 # --------------------------------------------------------------------------
 # CONFIGURATION - a completer
@@ -289,6 +294,58 @@ def extraire_commande(pdf_path: Path) -> dict:
     return donnees
 
 
+def generer_pdf_sans_prix(donnees: dict, chemin_sortie: Path):
+    """Genere un PDF simplifie (memes articles, sans aucun montant/prix) a
+    partir des donnees deja extraites. Destine a etre accessible a tous les
+    utilisateurs de l'appli, sans exposer les prix presents sur le PDF EBP
+    original (reserve Gestionnaire/Administrateur)."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 9, f"Commande {donnees.get('numero_commande') or ''}", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 10)
+    if donnees.get("date_commande"):
+        pdf.cell(0, 6, f"Date : {donnees['date_commande']}", new_x="LMARGIN", new_y="NEXT")
+    if donnees.get("fournisseur"):
+        pdf.cell(0, 6, f"Fournisseur : {donnees['fournisseur']}", new_x="LMARGIN", new_y="NEXT")
+    if donnees.get("numero_chantier"):
+        pdf.cell(0, 6, f"Chantier : {donnees['numero_chantier']}", new_x="LMARGIN", new_y="NEXT")
+    if donnees.get("reference_complete"):
+        pdf.multi_cell(0, 6, f"Reference : {donnees['reference_complete']}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    largeur_page = pdf.w - 2 * pdf.l_margin
+    largeur_desc = largeur_page - 70
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(largeur_desc, 7, "Description", border=1, fill=True)
+    pdf.cell(35, 7, "Unite", border=1, fill=True)
+    pdf.cell(35, 7, "Quantite", border=1, fill=True, new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_font("Helvetica", "", 9)
+    categorie_affichee = None
+    for art in donnees.get("articles", []):
+        categorie = art.get("categorie")
+        if categorie and categorie != categorie_affichee:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.multi_cell(0, 6, categorie, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 9)
+            categorie_affichee = categorie
+        y_avant = pdf.get_y()
+        x_avant = pdf.get_x()
+        pdf.multi_cell(largeur_desc, 6, art.get("description") or "", border=1, new_x="LEFT", new_y="TOP")
+        y_apres = pdf.get_y()
+        hauteur = max(y_apres - y_avant, 6)
+        pdf.set_xy(x_avant + largeur_desc, y_avant)
+        pdf.cell(35, hauteur, art.get("unite") or "", border=1)
+        qte = art.get("quantite")
+        pdf.cell(35, hauteur, ("" if qte is None else f"{qte:g}"), border=1)
+        pdf.set_xy(x_avant, y_avant + hauteur)
+
+    pdf.output(str(chemin_sortie))
+
+
 # --------------------------------------------------------------------------
 # BASEROW
 # --------------------------------------------------------------------------
@@ -353,7 +410,7 @@ def televerser_pdf(pdf_path: Path) -> dict:
     return r.json()  # contient notamment 'name' (nom genere cote Baserow)
 
 
-def pousser_commande(donnees: dict, chantier_id, fichier_baserow=None) -> int:
+def pousser_commande(donnees: dict, chantier_id, fichier_baserow=None, fichier_sans_prix_baserow=None) -> int:
     """Cree la ligne d'entete de commande. Retourne son ID."""
     payload = {
         "Numero commande": donnees["numero_commande"],
@@ -373,6 +430,8 @@ def pousser_commande(donnees: dict, chantier_id, fichier_baserow=None) -> int:
         payload["Chantier"] = [chantier_id]
     if fichier_baserow:
         payload["PDF"] = [{"name": fichier_baserow["name"]}]
+    if fichier_sans_prix_baserow:
+        payload["PDF sans prix"] = [{"name": fichier_sans_prix_baserow["name"]}]
 
     url = f"{BASEROW_URL}/{TABLE_COMMANDES}/?user_field_names=true"
     r = requests.post(url, headers=HEADERS, json=payload, timeout=30)
@@ -470,7 +529,19 @@ def executer_scan():
                     )
 
             fichier_baserow = televerser_pdf(pdf_path)
-            commande_id = pousser_commande(donnees, chantier_id, fichier_baserow)
+
+            chemin_sans_prix = pdf_path.with_name(pdf_path.stem + "_sans_prix.pdf")
+            fichier_sans_prix_baserow = None
+            try:
+                generer_pdf_sans_prix(donnees, chemin_sans_prix)
+                fichier_sans_prix_baserow = televerser_pdf(chemin_sans_prix)
+            except Exception as e_pdf:
+                print(f"   [!] PDF sans prix non genere/televerse : {e_pdf}")
+            finally:
+                if chemin_sans_prix.exists():
+                    chemin_sans_prix.unlink()
+
+            commande_id = pousser_commande(donnees, chantier_id, fichier_baserow, fichier_sans_prix_baserow)
             pousser_lignes(commande_id, donnees["articles"])
 
             shutil.move(str(pdf_path), str(TRAITE_DIR / pdf_path.name))
