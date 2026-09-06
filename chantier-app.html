@@ -304,7 +304,7 @@
     <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
     <div style="text-align:right">
       <div class="header-title">Saisie de chantier</div>
-      <div id="header-collab-name" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600"></div>
+      <div id="header-collab-name" onclick="ouvrirModalMotDePasse()" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600;cursor:pointer" title="Changer mon mot de passe"></div>
       <div id="app-version-tag" style="font-size:9px;color:var(--beige);opacity:.65;margin-top:2px"></div>
     </div>
   </div>
@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -617,6 +617,10 @@
   // dans une section repliée pour ne pas polluer la vue principale, aussi
   // bien dans l'onglet Commandes que dans la fenêtre "Commandes" de Mon planning.
   const STATUTS_COMMANDE_RECEPTIONNEE = ['Réceptionné en atelier', 'Réceptionné sur chantier', 'Envoyé sur chantier'];
+  // Postes pour lesquels les commandes encore en "En attente AR" (non
+  // validées) sont masquées : ces équipes n'ont besoin de voir une commande
+  // qu'une fois son AR confirmé.
+  const POSTES_SANS_VUE_AR = ['Pose', 'Fab Acier', 'Fab Bois'];
 
   // ── Jours fériés français ────────────────────────────────────────────────
   const _joursFeriesCache = {};
@@ -707,6 +711,7 @@
       }
 
       errEl.style.display = 'none';
+      connectedUserRowId = user.id;
       seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '', user['Accès Plan de charge'] === true);
 
     } catch(e) {
@@ -729,6 +734,7 @@
   let connectedViewId = null;
   let connectedDroit = '';
   let connectedAccesCharge = false; // accès dédié "Plan de charge" pour un simple Utilisateur, sans le passer Gestionnaire
+  let connectedUserRowId = null; // ID de la ligne TABLE_USERS du collaborateur connecté (pour changer son mot de passe)
 
   function seConnecter(nom, viewId, droit, accesChargeSupp) {
     connectedCollab = nom;
@@ -747,7 +753,7 @@
     }
     // Afficher le header et le nom
     document.querySelector('.header').style.display = 'block';
-    document.getElementById('header-collab-name').textContent = nom;
+    document.getElementById('header-collab-name').textContent = nom + ' 🔑';
     document.getElementById('header-collab-name').style.display = 'block';
     // Afficher la nav
     document.querySelector('.bottom-nav').style.display = 'flex';
@@ -1354,7 +1360,8 @@
     connectedCollab = null;
     connectedViewId = null;
     feuilleCollab = null;
-    _posteCollaborateurCache = null;
+    connectedUserRowId = null;
+    _collaborateurConnecteCache = null;
     document.querySelector('.header').style.display = 'none';
     document.querySelector('.bottom-nav').style.display = 'none';
     document.getElementById('header-collab-name').style.display = 'none';
@@ -2735,12 +2742,12 @@
         }
       });
 
-      // Poste "Pose" : masquer les commandes pas encore validées (AR non
-      // reçu), pas encore pertinentes pour l'équipe pose (même règle que
-      // l'onglet Commandes).
+      // Postes Pose/Fab Acier/Fab Bois : masquer les commandes pas encore
+      // validées (AR non reçu), pas encore pertinentes pour ces équipes
+      // (même règle que l'onglet Commandes).
       let commandesAffichees = commandesFiltrees;
       if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
-        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+        if (POSTES_SANS_VUE_AR.includes(await obtenirPosteCollaborateurConnecte())) {
           commandesAffichees = commandesFiltrees.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
         }
       }
@@ -2806,6 +2813,7 @@
     modal.style.display = 'flex';
 
     _modalCommandesCache = await chargerCommandesPourChantiers([chantierId]);
+    _peutVoirPrixActuel = await peutVoirPrixCommandes();
     renderModalCommandes();
   }
 
@@ -2832,8 +2840,8 @@
     const receptionnees = commandes.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
 
     const trier = (liste) => [...liste].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
-    const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, false, 'modal')).join('');
-    const htmlReceptionnees = trier(receptionnees).map(r => renderCarteCommande(r, false, 'modal')).join('');
+    const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
+    const htmlReceptionnees = trier(receptionnees).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
 
     content.innerHTML =
       (htmlEnCours || (receptionnees.length ? '' : '<div class="feuille-empty">Aucune commande trouvée.</div>')) +
@@ -2876,17 +2884,91 @@
     document.getElementById('modal-commandes-chantier').style.display = 'none';
   }
 
+  // Permet à tout collaborateur connecté de changer son propre mot de passe.
+  function ouvrirModalMotDePasse() {
+    document.getElementById('mdp-actuel').value = '';
+    document.getElementById('mdp-nouveau').value = '';
+    document.getElementById('mdp-confirmation').value = '';
+    const msgEl = document.getElementById('mdp-message');
+    msgEl.style.display = 'none';
+    document.getElementById('modal-mdp').style.display = 'flex';
+  }
+
+  function fermerModalMotDePasse() {
+    document.getElementById('modal-mdp').style.display = 'none';
+  }
+
+  function afficherMessageMdp(texte, estErreur) {
+    const msgEl = document.getElementById('mdp-message');
+    msgEl.textContent = texte;
+    msgEl.style.color = estErreur ? '#c0392b' : 'var(--vert)';
+    msgEl.style.display = 'block';
+  }
+
+  async function changerMotDePasse() {
+    const actuel = document.getElementById('mdp-actuel').value;
+    const nouveau = document.getElementById('mdp-nouveau').value;
+    const confirmation = document.getElementById('mdp-confirmation').value;
+    const btn = document.getElementById('btn-changer-mdp');
+
+    if (!actuel || !nouveau || !confirmation) {
+      afficherMessageMdp('Merci de remplir tous les champs.', true);
+      return;
+    }
+    if (nouveau !== confirmation) {
+      afficherMessageMdp('Les deux nouveaux mots de passe ne correspondent pas.', true);
+      return;
+    }
+    if (nouveau.length < 4) {
+      afficherMessageMdp('Le nouveau mot de passe doit faire au moins 4 caractères.', true);
+      return;
+    }
+    if (!connectedUserRowId) {
+      afficherMessageMdp('Session invalide, merci de vous reconnecter.', true);
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Vérification…';
+    try {
+      const resGet = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + connectedUserRowId + '/?user_field_names=true', { headers: HEADERS });
+      if (!resGet.ok) throw new Error('Impossible de vérifier le compte.');
+      const u = await resGet.json();
+      if ((u['Mot de passe'] || '') !== actuel) {
+        afficherMessageMdp('Mot de passe actuel incorrect.', true);
+        btn.disabled = false;
+        btn.textContent = 'Enregistrer';
+        return;
+      }
+
+      btn.textContent = 'Enregistrement…';
+      const resPatch = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + connectedUserRowId + '/?user_field_names=true', {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Mot de passe': nouveau })
+      });
+      if (!resPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + resPatch.status + ') : ' + (await resPatch.text()));
+
+      afficherMessageMdp('✅ Mot de passe modifié avec succès.', false);
+      setTimeout(fermerModalMotDePasse, 1500);
+    } catch (e) {
+      console.error('Erreur changement mot de passe', e);
+      afficherMessageMdp('Erreur : ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Enregistrer';
+    }
+  }
+
   // Ensemble des IDs de chantiers ayant au moins une commande fournisseur —
   // permet de n'afficher l'icône 📦 que quand c'est pertinent.
   async function obtenirChantiersAvecCommandes() {
     try {
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
       let toutes = await fetchToutesLesPages(url);
-      // Poste "Pose" : ne pas compter les commandes pas encore validées (AR
-      // non reçu) pour décider d'afficher l'icône 📦, même règle que pour
-      // le contenu de la fenêtre "Commandes".
+      // Postes Pose/Fab Acier/Fab Bois : ne pas compter les commandes pas
+      // encore validées (AR non reçu) pour décider d'afficher l'icône 📦,
+      // même règle que pour le contenu de la fenêtre "Commandes".
       if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
-        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+        if (POSTES_SANS_VUE_AR.includes(await obtenirPosteCollaborateurConnecte())) {
           toutes = toutes.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
         }
       }
@@ -6209,6 +6291,8 @@
   let todayCollectif = '';
   let dataChantiersCached = null;
 
+  let chantiersAvecCommandesCollectif = new Set();
+
   async function loadPlanningCollectif() {
     // Charger collaborateurs, en excluant ceux dont l'utilisateur est inactif
     const [resC, resUsersActif] = await Promise.all([
@@ -6279,6 +6363,15 @@
     }
 
     renderPlanningCollectifGrid();
+
+    // Icône 📦 sur les étiquettes collaborateur (Gestionnaire/Administrateur
+    // uniquement) : chargé après le premier rendu, sans bloquer l'affichage.
+    if (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') {
+      obtenirChantiersAvecCommandes().then(ensemble => {
+        chantiersAvecCommandesCollectif = ensemble;
+        renderPlanningCollectifGrid();
+      });
+    }
 
     const lundi2 = getLundiAdmin(semaineCollectif);
     const vendredi = new Date(lundi2); vendredi.setDate(lundi2.getDate()+4);
@@ -6376,13 +6469,21 @@
         const chData = dataChantiers.results.find(r => r.id === chantier.id);
         const fichiers = chData?.['Fichiers'] || [];
         const nomDiv = document.createElement('div');
-        nomDiv.style.cssText = 'font-weight:700;margin-bottom:2px;cursor:pointer;color:var(--vert);text-decoration:underline dotted;font-size:9px;line-height:1.3';
+        nomDiv.style.cssText = 'font-weight:700;margin-bottom:2px;cursor:pointer;color:var(--vert);text-decoration:underline dotted;font-size:9px;line-height:1.3;display:inline-block';
         nomDiv.textContent = chantier.nom;
         nomDiv.title = 'Cliquer pour changer de chantier';
         if (isGestAdmin) {
           nomDiv.onclick = e => { e.stopPropagation(); ouvrirModalChangerChantier(chantier); };
         }
         tdNom.appendChild(nomDiv);
+        if (isGestAdmin && chantiersAvecCommandesCollectif.has(chantier.id)) {
+          const btnCommandes = document.createElement('span');
+          btnCommandes.textContent = '📦';
+          btnCommandes.title = 'Voir les commandes de ce chantier';
+          btnCommandes.style.cssText = 'cursor:pointer;margin-left:2px';
+          btnCommandes.onclick = e => { e.stopPropagation(); ouvrirCommandesChantier(chantier.id, chantier.nom); };
+          tdNom.appendChild(btnCommandes);
+        }
         // Badge statut + select inline
         const statutWrap = document.createElement('div');
         statutWrap.style.cssText = 'margin-top:2px';
@@ -8162,22 +8263,44 @@
   // la liste est en plus restreinte aux chantiers qui lui sont affectés.
   let _commandesCache = [];
   let _commandesLignesCache = {};
+  // Résultat mis en cache de peutVoirPrixCommandes() pour ce chargement, afin
+  // que les fonctions de rendu (synchrones) puissent le lire directement.
+  let _peutVoirPrixActuel = false;
 
-  // Poste/métier du collaborateur connecté (TABLE_COLLABS_ADMIN), mis en
-  // cache pour éviter des appels répétés lors d'un même chargement de page.
-  let _posteCollaborateurCache = null;
-  async function obtenirPosteCollaborateurConnecte() {
-    if (_posteCollaborateurCache !== null) return _posteCollaborateurCache;
-    if (!feuilleCollab || !feuilleCollab.id) return '';
+  // Fiche complète du collaborateur connecté (TABLE_COLLABS_ADMIN), mise en
+  // cache pour éviter des appels répétés (poste/métier, droit de voir les
+  // prix des commandes, etc.).
+  let _collaborateurConnecteCache = null;
+  async function obtenirCollaborateurConnecte() {
+    if (_collaborateurConnecteCache !== null) return _collaborateurConnecteCache;
+    if (!connectedCollab) return {};
     try {
-      const resCollab = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
-      const collabRow = await resCollab.json();
-      _posteCollaborateurCache = collabRow['Poste / Métier'] || '';
+      // Recherche par nom (et non par feuilleCollab.id, qui peut ne pas
+      // encore être résolu selon le moment où cette fonction est appelée)
+      // pour être robuste quel que soit l'état de chargement de la page.
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200';
+      const toutes = await fetchToutesLesPages(url);
+      const nomLower = connectedCollab.trim().toLowerCase();
+      _collaborateurConnecteCache = toutes.find(c => (c['Nom Complet'] || '').trim().toLowerCase() === nomLower) || {};
     } catch (e) {
-      console.error('Erreur chargement poste collaborateur', e);
-      _posteCollaborateurCache = '';
+      console.error('Erreur chargement collaborateur connecté', e);
+      _collaborateurConnecteCache = {};
     }
-    return _posteCollaborateurCache;
+    return _collaborateurConnecteCache;
+  }
+
+  async function obtenirPosteCollaborateurConnecte() {
+    const row = await obtenirCollaborateurConnecte();
+    return row['Poste / Métier'] || '';
+  }
+
+  // Droit de voir les prix des commandes fournisseurs : toujours vrai pour
+  // Gestionnaire/Administrateur, ou accordé individuellement à certains
+  // Utilisateurs via la case à cocher "Voir prix commandes".
+  async function peutVoirPrixCommandes() {
+    if (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') return true;
+    const row = await obtenirCollaborateurConnecte();
+    return row['Voir prix commandes'] === true;
   }
 
   // IDs des chantiers affectés au collaborateur connecté (via TABLE_PLANNING).
@@ -8213,17 +8336,23 @@
     const listeEl = document.getElementById('commandes-liste');
     listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
+      _peutVoirPrixActuel = await peutVoirPrixCommandes();
       const urlCommandes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
       let toutes = await fetchToutesLesPages(urlCommandes);
 
-      // Utilisateur : ne garder que les commandes des chantiers qui lui sont affectés
+      // Utilisateur : ne garder que les commandes des chantiers qui lui sont
+      // affectés — sauf pour Fab Acier/Fab Bois (ateliers, sans affectation
+      // chantier au jour le jour) qui doivent voir toutes les commandes.
       if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
-        const chantierIdsAssignes = await obtenirChantierIdsAssignesUtilisateur();
-        toutes = toutes.filter(r => (r['Chantier'] || []).some(c => chantierIdsAssignes.has(c.id)));
+        const poste = await obtenirPosteCollaborateurConnecte();
+        if (!['Fab Acier', 'Fab Bois'].includes(poste)) {
+          const chantierIdsAssignes = await obtenirChantierIdsAssignesUtilisateur();
+          toutes = toutes.filter(r => (r['Chantier'] || []).some(c => chantierIdsAssignes.has(c.id)));
+        }
 
-        // Poste "Pose" : masquer les commandes pas encore validées (AR non reçu),
-        // pas encore pertinentes pour l'équipe pose
-        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+        // Postes Pose/Fab Acier/Fab Bois : masquer les commandes pas encore
+        // validées (AR non reçu), pas encore pertinentes pour ces équipes
+        if (POSTES_SANS_VUE_AR.includes(poste)) {
           toutes = toutes.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
         }
       }
@@ -8244,6 +8373,7 @@
       _commandesLignesCache = lignesParCommande;
       renderCommandesListe();
       renderCommandesParChantier();
+      renderCommandesReceptionnees();
     } catch (e) {
       console.error('Erreur page Commandes', e);
       listeEl.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
@@ -8252,11 +8382,36 @@
 
   function switchCommandesVue(vue) {
     document.getElementById('commandes-vue-liste').style.display = vue === 'liste' ? 'block' : 'none';
+    document.getElementById('commandes-vue-receptionnees').style.display = vue === 'receptionnees' ? 'block' : 'none';
     document.getElementById('commandes-vue-chantier').style.display = vue === 'chantier' ? 'block' : 'none';
     document.getElementById('tab-commandes-liste').style.background = vue === 'liste' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-liste').style.color = vue === 'liste' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-commandes-receptionnees').style.background = vue === 'receptionnees' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-receptionnees').style.color = vue === 'receptionnees' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-chantier').style.background = vue === 'chantier' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-chantier').style.color = vue === 'chantier' ? '#fff' : 'var(--gris-moyen)';
+    if (vue === 'receptionnees') renderCommandesReceptionnees();
+  }
+
+  function renderCommandesReceptionnees() {
+    const listeEl = document.getElementById('commandes-receptionnees-liste');
+    const recherche = (document.getElementById('commandes-receptionnees-recherche')?.value || '').trim().toLowerCase();
+    const peutVoirPrix = _peutVoirPrixActuel;
+
+    let filtrees = _commandesCache.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    if (recherche) {
+      filtrees = filtrees.filter(r => {
+        const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
+        const fournisseur = (r['Fournisseur'] || '').toLowerCase();
+        const numero = (r['Numero commande'] || '').toLowerCase();
+        const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+      });
+    }
+
+    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'receptionnees')).join('') ||
+      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande réceptionnée.</div>';
   }
 
   // Vue "Par chantier" : regroupe toutes les commandes (tous statuts confondus)
@@ -8266,7 +8421,7 @@
     const container = document.getElementById('commandes-par-chantier');
     if (!container) return;
     const recherche = (document.getElementById('commandes-chantier-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire');
+    const peutVoirPrix = _peutVoirPrixActuel;
 
     const parChantier = {};
     _commandesCache.forEach(r => {
@@ -8319,9 +8474,9 @@
     const resumeEl = document.getElementById('commandes-resume');
     const listeEl = document.getElementById('commandes-liste');
     const recherche = (document.getElementById('commandes-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire');
+    const peutVoirPrix = _peutVoirPrixActuel;
 
-    let filtrees = _commandesCache;
+    let filtrees = _commandesCache.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (recherche) {
       filtrees = filtrees.filter(r => {
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
@@ -8332,41 +8487,18 @@
       });
     }
 
-    const enAttente = filtrees.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
-    const receptionnees = filtrees.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (peutVoirPrix) {
-      const totalEnAttente = enAttente.reduce((s, r) => s + (Number(r['Montant total HT']) || 0), 0);
-      resumeEl.textContent = enAttente.length
-        ? `${enAttente.length} commande(s) en attente · ${totalEnAttente.toFixed(2)} € HT`
+      const totalEnAttente = filtrees.reduce((s, r) => s + (Number(r['Montant total HT']) || 0), 0);
+      resumeEl.textContent = filtrees.length
+        ? `${filtrees.length} commande(s) en attente · ${totalEnAttente.toFixed(2)} € HT`
         : 'Aucune commande en attente';
     } else {
-      resumeEl.textContent = enAttente.length ? `${enAttente.length} commande(s) en attente de réception` : 'Aucune commande en attente';
+      resumeEl.textContent = filtrees.length ? `${filtrees.length} commande(s) en attente de réception` : 'Aucune commande en attente';
     }
 
-    const trieesEnAttente = [...enAttente].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
-    const trieesReceptionnees = [...receptionnees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
-
-    const htmlEnAttente = trieesEnAttente.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('');
-    const htmlReceptionnees = trieesReceptionnees.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('');
-
-    listeEl.innerHTML =
-      (htmlEnAttente || (trieesReceptionnees.length ? '' : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>')) +
-      (trieesReceptionnees.length ? `
-        <div onclick="toggleSectionReceptionnees()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;padding:10px 12px;background:#f1f5f9;border-radius:8px;font-size:12px;font-weight:700;color:var(--gris-moyen)">
-          <span>✅ Commandes réceptionnées (${trieesReceptionnees.length})</span>
-          <span id="commandes-receptionnees-chevron">▸</span>
-        </div>
-        <div id="commandes-receptionnees-liste" style="display:none">${htmlReceptionnees}</div>
-      ` : '');
-  }
-
-  function toggleSectionReceptionnees() {
-    const div = document.getElementById('commandes-receptionnees-liste');
-    const chevron = document.getElementById('commandes-receptionnees-chevron');
-    if (!div) return;
-    const ouvert = div.style.display !== 'none';
-    div.style.display = ouvert ? 'none' : 'block';
-    if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
+    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('') ||
+      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>';
   }
 
   // Regroupe les lignes d'articles par catégorie consécutive (comme sur le
@@ -8428,6 +8560,7 @@
     const chantierNom = (r['Chantier'] || [])[0]?.value || '—';
     const montantHT = Number(r['Montant total HT']) || 0;
     const pdf = (r['PDF'] || [])[0];
+    const pdfSansPrix = (r['PDF sans prix'] || [])[0];
     const fichierAR = (r['Accusé de réception'] || [])[0];
     const documents = r['Documents'] || [];
     const lieu = r['Lieu de réception'] || '';
@@ -8438,6 +8571,7 @@
     const dateReceptionPrevue = r['Date reception prevue'] || '';
     const referenceComplete = r['Reference complete'] || '';
 
+    const nbArticles = (_commandesLignesCache[r.id] || []).length;
     const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix);
 
     let actionsHTML = '';
@@ -8482,25 +8616,17 @@
       actionsHTML = extras;
     }
 
-    return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
-        <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
-        <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
-      </div>
-      <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
-      ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
-      ${dateReceptionPrevue ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
-        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
-        ${peutVoirPrix ? `<span style="font-weight:700;font-size:12px;color:var(--gris)">${montantHT.toFixed(2)} € HT</span>` : ''}
-      </div>
+    // Tout ce qui n'est pas l'entete essentiel (fournisseur/chantier/référence/
+    // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
+    const contenuDetails = `
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}</div>` : ''}
       ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 Réceptionné par : ${receptionnePar}</div>` : ''}
       ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}</div>` : ''}
       ${lignesHTML}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
-      ${fichierAR ? `<a href="${fichierAR.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>` : ''}
+      ${(pdfSansPrix && !peutVoirPrix) ? `<a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a>` : ''}
+      ${(fichierAR && peutVoirPrix) ? `<a href="${fichierAR.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>` : ''}
       ${documents.map(f => `<a href="${f.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a>`).join('')}
       <label style="display:flex;align-items:center;gap:6px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:11px;color:var(--gris-moyen);margin-top:8px">
         📎 Ajouter un document (bon de livraison, photo…)
@@ -8508,7 +8634,66 @@
       </label>
       <div id="doc-statut-${uid}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
       ${actionsHTML}
+      ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<button onclick="supprimerCommande(${r.id})" style="width:100%;margin-top:10px;background:none;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px;font-size:10px;font-weight:700;cursor:pointer">🗑️ Supprimer cette commande</button>` : ''}
+    `;
+    const detailsHTML = `
+      <div onclick="toggleDetailsCommande('${uid}')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:5px 8px;background:#fafafa;border-radius:6px;font-size:10px;font-weight:700;color:var(--gris-moyen)">
+        <span>▸ Détail${nbArticles ? ` (${nbArticles} article${nbArticles > 1 ? 's' : ''})` : ''}</span>
+        <span id="details-chevron-${uid}">▸</span>
+      </div>
+      <div id="details-${uid}" style="display:none">${contenuDetails}</div>
+    `;
+
+    return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
+        <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
+        <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
+      </div>
+      <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
+      ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
+      ${(dateReceptionPrevue && !STATUTS_COMMANDE_RECEPTIONNEE.includes(statut)) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
+        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
+        ${peutVoirPrix ? `<span style="font-weight:700;font-size:12px;color:var(--gris)">${montantHT.toFixed(2)} € HT</span>` : ''}
+      </div>
+      ${detailsHTML}
     </div>`;
+  }
+
+  function toggleDetailsCommande(uid) {
+    const div = document.getElementById('details-' + uid);
+    const chevron = document.getElementById('details-chevron-' + uid);
+    if (!div) return;
+    const ouvert = div.style.display !== 'none';
+    div.style.display = ouvert ? 'none' : 'block';
+    if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
+  }
+
+  async function supprimerCommande(id) {
+    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
+    if (!confirm('Supprimer définitivement cette commande et ses articles ? Cette action est irréversible.')) return;
+    try {
+      const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
+      const toutesLignes = await fetchToutesLesPages(urlLignes);
+      const lignesCommande = toutesLignes.filter(l => (l['Commande'] || []).some(c => c.id === id));
+      for (const l of lignesCommande) {
+        await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${l.id}/`, {
+          method: 'DELETE', headers: HEADERS
+        });
+      }
+
+      const rDelete = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/`, {
+        method: 'DELETE', headers: HEADERS
+      });
+      if (!rDelete.ok) throw new Error('Baserow a refusé la suppression (' + rDelete.status + ') : ' + (await rDelete.text()));
+
+      _commandesCache = _commandesCache.filter(r => r.id !== id);
+      delete _commandesLignesCache[id];
+      await rafraichirApresActionCommande();
+    } catch (e) {
+      console.error('Erreur suppression commande', e);
+      alert('Erreur lors de la suppression : ' + e.message);
+    }
   }
 
   async function ajouterDocumentCommande(id, input, uid) {
@@ -9449,9 +9634,23 @@
     const searchEl = document.getElementById('search-users');
     if (searchEl) searchEl.value = '';
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      usersCache = data.results || [];
+      const [resUsers, resCollabs] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })
+      ]);
+      const data = await resUsers.json();
+      const dataCollabs = await resCollabs.json();
+      // Le poste/métier vit sur la table Collaborateurs, pas Utilisateurs :
+      // on le rattache ici par correspondance de nom pour l'affichage/recherche.
+      const posteParNom = {};
+      (dataCollabs.results || []).forEach(c => {
+        const nomLower = (c['Nom Complet'] || '').trim().toLowerCase();
+        if (nomLower) posteParNom[nomLower] = c['Poste / Métier'] || '';
+      });
+      usersCache = (data.results || []).map(u => ({
+        ...u,
+        'Poste / Métier': posteParNom[(u['Nom complet'] || '').trim().toLowerCase()] || u['Poste / Métier'] || ''
+      }));
       renderUsersListe(usersCache);
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
     const btnNouvel = document.getElementById('btn-nouvel-user');
@@ -9522,20 +9721,22 @@
         document.getElementById('user-mdp').value = u['Mot de passe'] || '';
         document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
-        // Poste depuis Collaborateurs
-        const collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
+        // Poste depuis Collaborateurs : recherche directe par nom (indépendante
+        // de COLLABORATEURS_ADMIN, qui peut être vide si Planning Admin n'a
+        // pas encore été visité dans cette session).
+        let collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
+        if (!collabFound) {
+          try {
+            const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+            const dataCollabs = await resCollabs.json();
+            const nomLower = nomUser.trim().toLowerCase();
+            const row = (dataCollabs.results || []).find(c => (c['Nom Complet'] || '').trim().toLowerCase() === nomLower);
+            if (row) collabFound = { nom: row['Nom Complet'], collabId: row.id, poste: row['Poste / Métier'] || '' };
+          } catch (e) {}
+        }
         const posteModif = collabFound?.poste || u['Poste / Métier'] || '';
         await chargerPostesSelect(posteModif);
         document.getElementById('user-poste-modif').value = posteModif;
-        if (collabFound) {
-          try {
-            const resCol = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabFound.collabId + '/?user_field_names=true', { headers: HEADERS });
-            const col = await resCol.json();
-            document.getElementById('user-email-modif').value = col['Courriel'] || '';
-            document.getElementById('user-tel-modif').value = col['Telephone'] || '';
-          } catch(e) {}
-        }
-        // Charger email et tel depuis la table Collaborateurs
         if (collabFound) {
           try {
             const resCol = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabFound.collabId + '/?user_field_names=true', { headers: HEADERS });
@@ -12468,17 +12669,26 @@
   <div style="padding:8px 16px 0">
     <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px">
       <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Liste</button>
+      <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
     </div>
   </div>
 
-  <!-- Vue Liste -->
+  <!-- Vue Liste (commandes en cours uniquement) -->
   <div id="commandes-vue-liste">
     <div style="padding:10px 16px 0">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="filtrerCommandesPage()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue Réceptionnées -->
+  <div id="commandes-vue-receptionnees" style="display:none">
+    <div style="padding:10px 16px 0">
+      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
+    <div id="commandes-receptionnees-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Par chantier -->
@@ -12556,6 +12766,24 @@
       <input type="text" id="modal-commandes-recherche" placeholder="🔍 Rechercher par fournisseur, n° commande ou devis…" oninput="renderModalCommandes()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="modal-commandes-chantier-content" style="overflow-y:auto;padding:16px;flex:1"></div>
+  </div>
+</div>
+
+<!-- Modal Changer mon mot de passe -->
+<div id="modal-mdp" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:400;align-items:center;justify-content:center;padding:20px;box-sizing:border-box">
+  <div style="background:#fff;border-radius:16px;width:100%;max-width:380px;padding:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="font-size:15px;font-weight:700;color:var(--gris)">🔑 Changer mon mot de passe</div>
+      <button onclick="fermerModalMotDePasse()" style="background:var(--beige-clair);border:none;border-radius:50%;width:28px;height:28px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
+    </div>
+    <label style="display:block;font-size:12px;color:var(--gris-moyen);margin-bottom:4px">Mot de passe actuel</label>
+    <input type="password" id="mdp-actuel" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin-bottom:10px" />
+    <label style="display:block;font-size:12px;color:var(--gris-moyen);margin-bottom:4px">Nouveau mot de passe</label>
+    <input type="password" id="mdp-nouveau" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin-bottom:10px" />
+    <label style="display:block;font-size:12px;color:var(--gris-moyen);margin-bottom:4px">Confirmer le nouveau mot de passe</label>
+    <input type="password" id="mdp-confirmation" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin-bottom:10px" />
+    <div id="mdp-message" style="font-size:12px;margin-bottom:10px;display:none"></div>
+    <button onclick="changerMotDePasse()" id="btn-changer-mdp" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Enregistrer</button>
   </div>
 </div>
 
