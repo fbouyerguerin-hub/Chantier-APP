@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2866,7 +2866,7 @@
   async function signalerDepartChantier(uid, commandeId) {
     const noteInput = document.getElementById('depart-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
-    const payload = { 'Statut': 'Envoyé sur chantier', 'Envoye par': connectedCollab || '' };
+    const payload = { 'Statut': 'Envoyé sur chantier', 'Envoye par': connectedCollab || '', 'Date envoi chantier': dateYMD(new Date()) };
     if (note) payload['Note statut'] = note;
     try {
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${commandeId}/?user_field_names=true`, {
@@ -8568,8 +8568,13 @@
     const arValidePar = extraireValeurChamp(r['Valide par'], '');
     const receptionnePar = extraireValeurChamp(r['Receptionne par'], '');
     const envoyePar = extraireValeurChamp(r['Envoye par'], '');
+    const dateValidationAR = r['Date validation AR'] || '';
+    const dateReceptionEffective = r['Date reception'] || '';
+    const dateEnvoiChantier = r['Date envoi chantier'] || '';
     const dateReceptionPrevue = r['Date reception prevue'] || '';
     const referenceComplete = r['Reference complete'] || '';
+
+    const formaterDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
 
     const nbArticles = (_commandesLignesCache[r.id] || []).length;
     const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix);
@@ -8592,8 +8597,8 @@
     } else if (statut === 'En attente réception') {
       actionsHTML = `
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button onclick="toggleReceptionForm('${uid}', 'atelier')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
-          <button onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
+          <button id="btn-reception-atelier-${uid}" onclick="toggleReceptionForm('${uid}', 'atelier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
+          <button id="btn-reception-chantier-${uid}" onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
         </div>
         <div id="reception-form-${uid}" style="display:none;margin-top:8px" data-type="">
           <input type="text" id="reception-lieu-${uid}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
@@ -8619,9 +8624,9 @@
     // Tout ce qui n'est pas l'entete essentiel (fournisseur/chantier/référence/
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
     const contenuDetails = `
-      ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}</div>` : ''}
-      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 Réceptionné par : ${receptionnePar}</div>` : ''}
-      ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}</div>` : ''}
+      ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
+      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 Réceptionné par : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
+      ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}${dateEnvoiChantier ? ` (${formaterDate(dateEnvoiChantier)})` : ''}</div>` : ''}
       ${lignesHTML}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
@@ -8739,6 +8744,12 @@
       input.placeholder = type === 'atelier' ? 'Emplacement en atelier…' : 'Emplacement sur chantier…';
       input.focus();
     }
+    const btnAtelier = document.getElementById('btn-reception-atelier-' + uid);
+    const btnChantier = document.getElementById('btn-reception-chantier-' + uid);
+    const styleActif = { background: 'var(--vert)', color: '#fff' };
+    const styleInactif = { background: 'var(--beige-clair)', color: 'var(--gris)' };
+    if (btnAtelier) Object.assign(btnAtelier.style, type === 'atelier' ? styleActif : styleInactif);
+    if (btnChantier) Object.assign(btnChantier.style, type === 'chantier' ? styleActif : styleInactif);
   }
 
   function toggleValiderARForm(uid) {
@@ -8759,7 +8770,7 @@
     const btn = document.getElementById('ar-btn-valider-' + uid);
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
     try {
-      const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '' };
+      const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '', 'Date validation AR': dateYMD(new Date()) };
       const note = noteInput ? noteInput.value.trim() : '';
       if (note) payload['Note statut'] = note;
       if (dateInput && dateInput.value) payload['Date reception prevue'] = dateInput.value;
@@ -8794,7 +8805,7 @@
     const noteInput = document.getElementById('reception-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
     const statutCible = type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier';
-    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '' };
+    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateYMD(new Date()) };
     if (note) payload['Note statut'] = note;
     try {
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
