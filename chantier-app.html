@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -5845,10 +5845,12 @@
       urlCommandesSuivi = data.next ? data.next.replace('http://', 'https://') : null;
     }
     const commandesTotalParChantier = {};
+    const chantierIdsAvecCommandes = new Set();
     allCommandesSuivi.forEach(c => {
       const cId = (c['Chantier'] || [])[0]?.id;
       if (!cId) return;
       commandesTotalParChantier[cId] = (commandesTotalParChantier[cId] || 0) + (Number(c['Montant total HT']) || 0);
+      chantierIdsAvecCommandes.add(cId);
     });
 
     const posteEtudeSuivi = POSTES_CHARGE.find(p => p.key === 'Étude');
@@ -5941,7 +5943,11 @@
       }
       // Colonne Commandes : total des commandes fournisseurs passées pour ce chantier (tous statuts)
       const totalCommandesChantier = commandesTotalParChantier[chantierId] || 0;
-      suivi += `<td style="padding:8px;text-align:center;border-left:3px solid #bbb;background:#fdf6ea;font-weight:700;color:#a5761f">${totalCommandesChantier > 0 ? totalCommandesChantier.toFixed(2) + ' €' : '—'}</td>`;
+      const aDesCommandesSuivi = chantierIdsAvecCommandes.has(chantierId);
+      suivi += `<td style="padding:8px;text-align:center;border-left:3px solid #bbb;background:#fdf6ea;font-weight:700;color:#a5761f">
+        ${totalCommandesChantier > 0 ? totalCommandesChantier.toFixed(2) + ' €' : '—'}
+        ${aDesCommandesSuivi ? `<span onclick="ouvrirCommandesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" style="cursor:pointer;margin-left:4px" title="Voir les commandes de ce chantier">📦</span>` : ''}
+      </td>`;
       suivi += '</tr>';
     });
     suivi += '</tbody></table></div></div>';
