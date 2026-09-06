@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1350,6 +1350,7 @@
     connectedCollab = null;
     connectedViewId = null;
     feuilleCollab = null;
+    _posteCollaborateurCache = null;
     document.querySelector('.header').style.display = 'none';
     document.querySelector('.bottom-nav').style.display = 'none';
     document.getElementById('header-collab-name').style.display = 'none';
@@ -2721,29 +2722,34 @@
       const idsCommandes = commandesFiltrees.map(r => r.id);
       const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
       const toutesLignes = await fetchToutesLesPages(urlLignes);
-      const lignesParCommande = {};
       toutesLignes.forEach(l => {
         const cid = (l['Commande'] || [])[0]?.id;
         if (!cid || !idsCommandes.includes(cid)) return;
-        if (!lignesParCommande[cid]) lignesParCommande[cid] = [];
-        lignesParCommande[cid].push({
-          categorie: l['Categorie'] || '',
-          description: l['Description'] || '',
-          unite: l['Unite'] || '',
-          quantite: l['Quantite'] ?? ''
-        });
+        if (!_commandesLignesCache[cid]) _commandesLignesCache[cid] = [];
+        if (!_commandesLignesCache[cid].some(x => x.id === l.id)) {
+          _commandesLignesCache[cid].push(l);
+        }
       });
 
-      return commandesFiltrees.map(r => ({
-        id: r.id,
-        chantierId: (r['Chantier'] || [])[0]?.id,
-        numero: r['Numero commande'] || '',
-        fournisseur: r['Fournisseur'] || '',
-        date: r['Date commande'] || '',
-        statut: extraireValeurChamp(r['Statut'], 'En attente AR'),
-        lieu: r['Lieu de réception'] || '',
-        lignes: lignesParCommande[r.id] || []
-      }));
+      // Poste "Pose" : masquer les commandes pas encore validées (AR non
+      // reçu), pas encore pertinentes pour l'équipe pose (même règle que
+      // l'onglet Commandes).
+      let commandesAffichees = commandesFiltrees;
+      if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
+        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+          commandesAffichees = commandesFiltrees.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
+        }
+      }
+
+      // Garde une trace de ces commandes dans le cache global (utilisé par
+      // renderCarteCommande), pour pouvoir réutiliser les mêmes actions
+      // (Valider AR, réception, départ chantier…) depuis Mon planning.
+      commandesFiltrees.forEach(r => {
+        const idx = _commandesCache.findIndex(x => x.id === r.id);
+        if (idx >= 0) _commandesCache[idx] = r; else _commandesCache.push(r);
+      });
+
+      return commandesAffichees;
     } catch (e) {
       console.error('Erreur chargement commandes fournisseurs', e);
       return [];
@@ -2765,8 +2771,21 @@
   let _modalCommandesChantierId = null;
   let _modalCommandesChantierNom = null;
 
+  // Après une action (Valider AR, réception, départ chantier, document…),
+  // rafraîchit la bonne vue selon le contexte d'où l'action a été lancée.
+  async function rafraichirApresActionCommande() {
+    const modal = document.getElementById('modal-commandes-chantier');
+    if (modal && modal.style.display !== 'none') {
+      await ouvrirCommandesChantier(_modalCommandesChantierId, _modalCommandesChantierNom);
+    } else {
+      await chargerCommandesPage();
+    }
+  }
+
   // Ouvre la fenêtre "Commandes" pour le chantier cliqué dans l'étiquette du
-  // planning. Chargement à la demande (pas de pré-chargement systématique).
+  // planning. Chargement à la demande. Réutilise renderCarteCommande (sans
+  // prix ni PDF) pour offrir les mêmes actions que l'onglet Commandes :
+  // Valider AR, réception atelier/chantier, départ sur chantier, documents.
   async function ouvrirCommandesChantier(chantierId, nomChantier) {
     _modalCommandesChantierId = chantierId;
     _modalCommandesChantierNom = nomChantier;
@@ -2783,38 +2802,24 @@
       return;
     }
 
-    content.innerHTML = commandes.map(c => {
-      const dateLabel = c.date ? new Date(c.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
-      const couleur = couleurStatutCommande(c.statut);
-      const lignesHTML = c.lignes.map(l => {
-        const texte = [l.categorie, l.description].filter(Boolean).join(' — ');
-        return `<div style="color:#666;padding-left:4px;font-size:11px">• ${texte}${l.quantite !== '' ? ` (${l.quantite}${l.unite ? ' ' + l.unite : ''})` : ''}</div>`;
-      }).join('');
-      const actionDepart = c.statut === 'Réceptionné en atelier'
-        ? `<button onclick="signalerDepartChantier(${c.id})" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🚚 Départ sur chantier</button>`
-        : '';
-      return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:700;color:var(--gris)">
-          <span>${c.fournisseur}${c.numero ? ` <span style="font-weight:400;color:#aaa">· ${c.numero}</span>` : ''}</span>
-          <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
-        </div>
-        <div style="display:inline-block;margin:4px 0 6px;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${c.statut}</div>
-        ${c.lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-bottom:6px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${c.lieu}</div>` : ''}
-        ${lignesHTML}
-        ${actionDepart}
-      </div>`;
-    }).join('');
+    const triees = [...commandes].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    content.innerHTML = triees.map(r => renderCarteCommande(r, false, 'modal')).join('');
   }
 
-  async function signalerDepartChantier(commandeId) {
+  async function signalerDepartChantier(uid, commandeId) {
+    const noteInput = document.getElementById('depart-note-' + uid);
+    const note = noteInput ? noteInput.value.trim() : '';
+    const payload = { 'Statut': 'Envoyé sur chantier', 'Envoye par': connectedCollab || '' };
+    if (note) payload['Note statut'] = note;
     try {
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${commandeId}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': 'Envoyé sur chantier' })
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${commandeId}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
-      await ouvrirCommandesChantier(_modalCommandesChantierId, _modalCommandesChantierNom);
+      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
     } catch (e) {
       console.error('Erreur signalement départ chantier', e);
-      alert('Erreur lors de la mise à jour. Réessayez.');
+      alert('Erreur lors de la mise à jour : ' + e.message);
     }
   }
 
@@ -2827,7 +2832,15 @@
   async function obtenirChantiersAvecCommandes() {
     try {
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
-      const toutes = await fetchToutesLesPages(url);
+      let toutes = await fetchToutesLesPages(url);
+      // Poste "Pose" : ne pas compter les commandes pas encore validées (AR
+      // non reçu) pour décider d'afficher l'icône 📦, même règle que pour
+      // le contenu de la fenêtre "Commandes".
+      if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
+        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+          toutes = toutes.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
+        }
+      }
       const ensemble = new Set();
       toutes.forEach(r => (r['Chantier'] || []).forEach(c => ensemble.add(c.id)));
       return ensemble;
@@ -8096,16 +8109,76 @@
 
   // Page "Commandes fournisseurs" du menu défilant d'accueil, accessible à
   // tous les rôles (réception atelier/chantier). Les montants et le PDF ne
-  // sont affichés qu'aux Gestionnaire/Administrateur.
+  // sont affichés qu'aux Gestionnaire/Administrateur. Pour un Utilisateur,
+  // la liste est en plus restreinte aux chantiers qui lui sont affectés.
   let _commandesCache = [];
   let _commandesLignesCache = {};
+
+  // Poste/métier du collaborateur connecté (TABLE_COLLABS_ADMIN), mis en
+  // cache pour éviter des appels répétés lors d'un même chargement de page.
+  let _posteCollaborateurCache = null;
+  async function obtenirPosteCollaborateurConnecte() {
+    if (_posteCollaborateurCache !== null) return _posteCollaborateurCache;
+    if (!feuilleCollab || !feuilleCollab.id) return '';
+    try {
+      const resCollab = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
+      const collabRow = await resCollab.json();
+      _posteCollaborateurCache = collabRow['Poste / Métier'] || '';
+    } catch (e) {
+      console.error('Erreur chargement poste collaborateur', e);
+      _posteCollaborateurCache = '';
+    }
+    return _posteCollaborateurCache;
+  }
+
+  // IDs des chantiers affectés au collaborateur connecté (via TABLE_PLANNING).
+  // Le filtrage n'est restreint à la semaine actuellement affichée dans "Mon
+  // planning" que pour les collaborateurs dont le poste/métier est "Pose" ;
+  // les autres voient leurs chantiers affectés toutes périodes confondues.
+  async function obtenirChantierIdsAssignesUtilisateur() {
+    if (!feuilleCollab || !feuilleCollab.id) return new Set();
+    try {
+      const estPose = (await obtenirPosteCollaborateurConnecte()) === 'Pose';
+
+      let url = `https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200`;
+      if (estPose) {
+        const lundi = getLundi(planningDate);
+        const vendredi = new Date(lundi);
+        vendredi.setDate(lundi.getDate() + 4);
+        url += `&filter__Date__date_after_or_equal=${dateYMD(lundi)}&filter__Date__date_before_or_equal=${dateYMD(vendredi)}`;
+      }
+      const toutes = await fetchToutesLesPages(url);
+      const ids = new Set();
+      toutes.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id)).forEach(r => {
+        const chId = (r['Chantier'] || [])[0]?.id;
+        if (chId) ids.add(chId);
+      });
+      return ids;
+    } catch (e) {
+      console.error('Erreur chargement chantiers assignés', e);
+      return new Set();
+    }
+  }
 
   async function chargerCommandesPage() {
     const listeEl = document.getElementById('commandes-liste');
     listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       const urlCommandes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
-      const toutes = await fetchToutesLesPages(urlCommandes);
+      let toutes = await fetchToutesLesPages(urlCommandes);
+
+      // Utilisateur : ne garder que les commandes des chantiers qui lui sont affectés
+      if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
+        const chantierIdsAssignes = await obtenirChantierIdsAssignesUtilisateur();
+        toutes = toutes.filter(r => (r['Chantier'] || []).some(c => chantierIdsAssignes.has(c.id)));
+
+        // Poste "Pose" : masquer les commandes pas encore validées (AR non reçu),
+        // pas encore pertinentes pour l'équipe pose
+        if ((await obtenirPosteCollaborateurConnecte()) === 'Pose') {
+          toutes = toutes.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR');
+        }
+      }
+
       const idsCommandes = toutes.map(r => r.id);
 
       const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
@@ -8174,7 +8247,7 @@
           </span>
         </div>
         <div id="${idGroupe}" style="display:none;padding-top:8px">
-          ${trieesCommandes.map(r => renderCarteCommande(r, peutVoirPrix)).join('')}
+          ${trieesCommandes.map(r => renderCarteCommande(r, peutVoirPrix, 'parchantier')).join('')}
         </div>
       </div>`;
     }).join('') || '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucun chantier trouvé.</div>';
@@ -8205,7 +8278,8 @@
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche);
+        const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
       });
     }
 
@@ -8224,8 +8298,8 @@
     const trieesEnAttente = [...enAttente].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     const trieesReceptionnees = [...receptionnees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
 
-    const htmlEnAttente = trieesEnAttente.map(r => renderCarteCommande(r, peutVoirPrix)).join('');
-    const htmlReceptionnees = trieesReceptionnees.map(r => renderCarteCommande(r, peutVoirPrix)).join('');
+    const htmlEnAttente = trieesEnAttente.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('');
+    const htmlReceptionnees = trieesReceptionnees.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('');
 
     listeEl.innerHTML =
       (htmlEnAttente || (trieesReceptionnees.length ? '' : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>')) +
@@ -8247,7 +8321,9 @@
     if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
   }
 
-  function renderCarteCommande(r, peutVoirPrix) {
+  function renderCarteCommande(r, peutVoirPrix, contexte) {
+    contexte = contexte || 'page';
+    const uid = r.id + '-' + contexte;
     const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
     const statut = extraireValeurChamp(r['Statut'], 'En attente AR');
     const couleur = couleurStatutCommande(statut);
@@ -8257,6 +8333,12 @@
     const fichierAR = (r['Accusé de réception'] || [])[0];
     const documents = r['Documents'] || [];
     const lieu = r['Lieu de réception'] || '';
+    const noteStatut = r['Note statut'] || '';
+    const arValidePar = extraireValeurChamp(r['Valide par'], '');
+    const receptionnePar = extraireValeurChamp(r['Receptionne par'], '');
+    const envoyePar = extraireValeurChamp(r['Envoye par'], '');
+    const dateReceptionPrevue = r['Date reception prevue'] || '';
+    const referenceComplete = r['Reference complete'] || '';
 
     const lignesHTML = (_commandesLignesCache[r.id] || []).map(l => {
       const texte = [l['Categorie'], l['Description']].filter(Boolean).join(' — ');
@@ -8273,27 +8355,43 @@
     let actionsHTML = '';
     if (statut === 'En attente AR') {
       actionsHTML = `
-        <button onclick="toggleValiderARForm(${r.id})" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider (AR reçu)</button>
-        <div id="ar-form-${r.id}" style="display:none;margin-top:8px">
+        <button onclick="toggleValiderARForm('${uid}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider (AR reçu)</button>
+        <div id="ar-form-${uid}" style="display:none;margin-top:8px">
           <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:12px;color:var(--gris-moyen);margin-bottom:6px">
             📎 Joindre l'accusé de réception (facultatif)
-            <input type="file" id="ar-fichier-${r.id}" accept="image/*,.pdf" style="display:none" onchange="previewFichierAR(${r.id})" />
+            <input type="file" id="ar-fichier-${uid}" accept="image/*,.pdf" style="display:none" onchange="previewFichierAR('${uid}')" />
           </label>
-          <div id="ar-fichier-preview-${r.id}" style="font-size:11px;color:var(--vert);margin-bottom:6px"></div>
-          <button onclick="validerAR(${r.id})" id="ar-btn-valider-${r.id}" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Confirmer la validation</button>
+          <div id="ar-fichier-preview-${uid}" style="font-size:11px;color:var(--vert);margin-bottom:6px"></div>
+          <label style="display:block;font-size:11px;color:var(--gris-moyen);margin-bottom:4px">Date de réception prévue (facultatif)</label>
+          <input type="date" id="ar-date-${uid}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
+          <textarea id="ar-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
+          <button onclick="validerAR('${uid}', ${r.id})" id="ar-btn-valider-${uid}" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Confirmer la validation</button>
         </div>`;
     } else if (statut === 'En attente réception') {
       actionsHTML = `
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button onclick="toggleReceptionForm(${r.id}, 'atelier')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
-          <button onclick="toggleReceptionForm(${r.id}, 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
+          <button onclick="toggleReceptionForm('${uid}', 'atelier')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
+          <button onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
         </div>
-        <div id="reception-form-${r.id}" style="display:none;margin-top:8px" data-type="">
-          <input type="text" id="reception-lieu-${r.id}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
-          <button onclick="validerReception(${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider la réception</button>
+        <div id="reception-form-${uid}" style="display:none;margin-top:8px" data-type="">
+          <input type="text" id="reception-lieu-${uid}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
+          <textarea id="reception-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
+          <button onclick="validerReception('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider la réception</button>
         </div>`;
-    } else if (lieu) {
-      actionsHTML = `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>`;
+    } else {
+      let extras = '';
+      if (lieu) {
+        extras += `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>`;
+      }
+      if (statut === 'Réceptionné en atelier') {
+        extras += `
+          <button onclick="toggleDepartForm('${uid}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🚚 Départ sur chantier</button>
+          <div id="depart-form-${uid}" style="display:none;margin-top:8px">
+            <textarea id="depart-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
+            <button onclick="signalerDepartChantier('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Confirmer le départ</button>
+          </div>`;
+      }
+      actionsHTML = extras;
     }
 
     return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
@@ -8301,27 +8399,33 @@
         <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
         <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
       </div>
-      <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
+      ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
+      ${dateReceptionPrevue ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
         ${peutVoirPrix ? `<span style="font-weight:700;font-size:12px;color:var(--gris)">${montantHT.toFixed(2)} € HT</span>` : ''}
       </div>
+      ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}</div>` : ''}
+      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 Réceptionné par : ${receptionnePar}</div>` : ''}
+      ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}</div>` : ''}
       ${lignesHTML}
+      ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
       ${fichierAR ? `<a href="${fichierAR.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>` : ''}
       ${documents.map(f => `<a href="${f.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a>`).join('')}
       <label style="display:flex;align-items:center;gap:6px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:11px;color:var(--gris-moyen);margin-top:8px">
         📎 Ajouter un document (bon de livraison, photo…)
-        <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this)" />
+        <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this, '${uid}')" />
       </label>
-      <div id="doc-statut-${r.id}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
+      <div id="doc-statut-${uid}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
       ${actionsHTML}
     </div>`;
   }
 
-  async function ajouterDocumentCommande(id, input) {
+  async function ajouterDocumentCommande(id, input, uid) {
     if (!input.files.length) return;
-    const statutEl = document.getElementById('doc-statut-' + id);
+    const statutEl = document.getElementById('doc-statut-' + uid);
     if (statutEl) statutEl.textContent = '⏳ Envoi…';
     try {
       const commande = _commandesCache.find(r => r.id === id);
@@ -8334,47 +8438,58 @@
       if (!rUpload.ok) throw new Error('Échec de l\'envoi du fichier');
       const nouveau = { name: (await rUpload.json()).name };
 
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS,
         body: JSON.stringify({ 'Documents': [...existants, nouveau] })
       });
-      await chargerCommandesPage();
+      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
     } catch (e) {
       console.error('Erreur ajout document commande', e);
-      alert('Erreur lors de l\'envoi du document. Réessayez.');
+      alert('Erreur lors de l\'envoi du document : ' + e.message);
       if (statutEl) statutEl.textContent = '';
     }
   }
 
-  function toggleReceptionForm(id, type) {
-    const div = document.getElementById('reception-form-' + id);
+  function toggleDepartForm(uid) {
+    const div = document.getElementById('depart-form-' + uid);
+    if (div) div.style.display = (div.style.display === 'none') ? 'block' : 'none';
+  }
+
+  function toggleReceptionForm(uid, type) {
+    const div = document.getElementById('reception-form-' + uid);
     if (!div) return;
     div.dataset.type = type;
     div.style.display = 'block';
-    const input = document.getElementById('reception-lieu-' + id);
+    const input = document.getElementById('reception-lieu-' + uid);
     if (input) {
       input.placeholder = type === 'atelier' ? 'Emplacement en atelier…' : 'Emplacement sur chantier…';
       input.focus();
     }
   }
 
-  function toggleValiderARForm(id) {
-    const div = document.getElementById('ar-form-' + id);
+  function toggleValiderARForm(uid) {
+    const div = document.getElementById('ar-form-' + uid);
     if (div) div.style.display = (div.style.display === 'none') ? 'block' : 'none';
   }
 
-  function previewFichierAR(id) {
-    const input = document.getElementById('ar-fichier-' + id);
-    const preview = document.getElementById('ar-fichier-preview-' + id);
+  function previewFichierAR(uid) {
+    const input = document.getElementById('ar-fichier-' + uid);
+    const preview = document.getElementById('ar-fichier-preview-' + uid);
     if (input.files.length && preview) preview.textContent = '📎 ' + input.files[0].name;
   }
 
-  async function validerAR(id) {
-    const input = document.getElementById('ar-fichier-' + id);
-    const btn = document.getElementById('ar-btn-valider-' + id);
+  async function validerAR(uid, id) {
+    const input = document.getElementById('ar-fichier-' + uid);
+    const noteInput = document.getElementById('ar-note-' + uid);
+    const dateInput = document.getElementById('ar-date-' + uid);
+    const btn = document.getElementById('ar-btn-valider-' + uid);
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
     try {
-      const payload = { 'Statut': 'En attente réception' };
+      const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '' };
+      const note = noteInput ? noteInput.value.trim() : '';
+      if (note) payload['Note statut'] = note;
+      if (dateInput && dateInput.value) payload['Date reception prevue'] = dateInput.value;
       if (input && input.files.length) {
         const fd = new FormData();
         fd.append('file', input.files[0]);
@@ -8385,33 +8500,38 @@
         payload['Accusé de réception'] = [{ name: (await rUpload.json()).name }];
       }
 
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
-      await chargerCommandesPage();
+      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
     } catch (e) {
       console.error('Erreur validation AR', e);
-      alert('Erreur lors de la mise à jour. Réessayez.');
+      alert('Erreur lors de la mise à jour : ' + e.message);
       if (btn) { btn.disabled = false; btn.textContent = '✅ Confirmer la validation'; }
     }
   }
 
-  async function validerReception(id) {
-    const div = document.getElementById('reception-form-' + id);
+  async function validerReception(uid, id) {
+    const div = document.getElementById('reception-form-' + uid);
     const type = div?.dataset.type;
-    const lieuInput = document.getElementById('reception-lieu-' + id);
+    const lieuInput = document.getElementById('reception-lieu-' + uid);
     const lieu = lieuInput ? lieuInput.value.trim() : '';
     if (!lieu) { alert('Merci d\'indiquer l\'emplacement de réception.'); return; }
+    const noteInput = document.getElementById('reception-note-' + uid);
+    const note = noteInput ? noteInput.value.trim() : '';
     const statutCible = type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier';
-    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu };
+    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '' };
+    if (note) payload['Note statut'] = note;
     try {
-      await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
-      await chargerCommandesPage();
+      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
     } catch (e) {
       console.error('Erreur réception commande', e);
-      alert('Erreur lors de la mise à jour. Réessayez.');
+      alert('Erreur lors de la mise à jour : ' + e.message);
     }
   }
 
@@ -12268,7 +12388,7 @@
   <div id="commandes-vue-liste">
     <div style="padding:10px 16px 0">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher par chantier, fournisseur ou n° commande…" oninput="filtrerCommandesPage()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="filtrerCommandesPage()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
   </div>
