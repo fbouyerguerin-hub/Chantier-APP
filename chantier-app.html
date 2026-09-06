@@ -606,13 +606,17 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
   const TABLE_SIGNATURES = '1099211';
   const TABLE_COMMANDES_FOURNISSEURS = '1179060';
   const TABLE_COMMANDES_FOURNISSEURS_LIGNES = '1179061';
+  // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
+  // dans une section repliée pour ne pas polluer la vue principale, aussi
+  // bien dans l'onglet Commandes que dans la fenêtre "Commandes" de Mon planning.
+  const STATUTS_COMMANDE_RECEPTIONNEE = ['Réceptionné en atelier', 'Réceptionné sur chantier', 'Envoyé sur chantier'];
 
   // ── Jours fériés français ────────────────────────────────────────────────
   const _joursFeriesCache = {};
@@ -2776,7 +2780,8 @@
   async function rafraichirApresActionCommande() {
     const modal = document.getElementById('modal-commandes-chantier');
     if (modal && modal.style.display !== 'none') {
-      await ouvrirCommandesChantier(_modalCommandesChantierId, _modalCommandesChantierNom);
+      _modalCommandesCache = await chargerCommandesPourChantiers([_modalCommandesChantierId]);
+      renderModalCommandes();
     } else {
       await chargerCommandesPage();
     }
@@ -2786,24 +2791,68 @@
   // planning. Chargement à la demande. Réutilise renderCarteCommande (sans
   // prix ni PDF) pour offrir les mêmes actions que l'onglet Commandes :
   // Valider AR, réception atelier/chantier, départ sur chantier, documents.
+  let _modalCommandesCache = [];
+
   async function ouvrirCommandesChantier(chantierId, nomChantier) {
     _modalCommandesChantierId = chantierId;
     _modalCommandesChantierNom = nomChantier;
     const modal = document.getElementById('modal-commandes-chantier');
     const titre = document.getElementById('modal-commandes-chantier-titre');
     const content = document.getElementById('modal-commandes-chantier-content');
+    const rechercheEl = document.getElementById('modal-commandes-recherche');
+    if (rechercheEl) rechercheEl.value = '';
     titre.textContent = '📦 Commandes · ' + (nomChantier || 'Chantier');
     content.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     modal.style.display = 'flex';
 
-    const commandes = await chargerCommandesPourChantiers([chantierId]);
+    _modalCommandesCache = await chargerCommandesPourChantiers([chantierId]);
+    renderModalCommandes();
+  }
+
+  function renderModalCommandes() {
+    const content = document.getElementById('modal-commandes-chantier-content');
+    const recherche = (document.getElementById('modal-commandes-recherche')?.value || '').trim().toLowerCase();
+
+    let commandes = _modalCommandesCache;
+    if (recherche) {
+      commandes = commandes.filter(r => {
+        const fournisseur = (r['Fournisseur'] || '').toLowerCase();
+        const numero = (r['Numero commande'] || '').toLowerCase();
+        const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+        return fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+      });
+    }
+
     if (!commandes.length) {
-      content.innerHTML = '<div class="feuille-empty">Aucune commande fournisseur trouvée pour ce chantier.</div>';
+      content.innerHTML = '<div class="feuille-empty">Aucune commande trouvée.</div>';
       return;
     }
 
-    const triees = [...commandes].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
-    content.innerHTML = triees.map(r => renderCarteCommande(r, false, 'modal')).join('');
+    const enCours = commandes.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const receptionnees = commandes.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+
+    const trier = (liste) => [...liste].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, false, 'modal')).join('');
+    const htmlReceptionnees = trier(receptionnees).map(r => renderCarteCommande(r, false, 'modal')).join('');
+
+    content.innerHTML =
+      (htmlEnCours || (receptionnees.length ? '' : '<div class="feuille-empty">Aucune commande trouvée.</div>')) +
+      (receptionnees.length ? `
+        <div onclick="toggleModalCommandesReceptionnees()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px;padding:10px 12px;background:#f1f5f9;border-radius:8px;font-size:12px;font-weight:700;color:var(--gris-moyen)">
+          <span>✅ Commandes réceptionnées (${receptionnees.length})</span>
+          <span id="modal-commandes-receptionnees-chevron">▸</span>
+        </div>
+        <div id="modal-commandes-receptionnees-liste" style="display:none">${htmlReceptionnees}</div>
+      ` : '');
+  }
+
+  function toggleModalCommandesReceptionnees() {
+    const div = document.getElementById('modal-commandes-receptionnees-liste');
+    const chevron = document.getElementById('modal-commandes-receptionnees-chevron');
+    if (!div) return;
+    const ouvert = div.style.display !== 'none';
+    div.style.display = ouvert ? 'none' : 'block';
+    if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
   }
 
   async function signalerDepartChantier(uid, commandeId) {
@@ -8283,9 +8332,8 @@
       });
     }
 
-    const statutsReceptionnes = ['Réceptionné en atelier', 'Réceptionné sur chantier', 'Envoyé sur chantier'];
-    const enAttente = filtrees.filter(r => !statutsReceptionnes.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
-    const receptionnees = filtrees.filter(r => statutsReceptionnes.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const enAttente = filtrees.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const receptionnees = filtrees.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (peutVoirPrix) {
       const totalEnAttente = enAttente.reduce((s, r) => s + (Number(r['Montant total HT']) || 0), 0);
       resumeEl.textContent = enAttente.length
@@ -8321,6 +8369,56 @@
     if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
   }
 
+  // Regroupe les lignes d'articles par catégorie consécutive (comme sur le
+  // PDF : la catégorie n'apparaît qu'une fois, en en-tête, au-dessus des
+  // articles qu'elle regroupe) et les affiche façon tableau (Description /
+  // Qté·Unité / Montant alignés), plutôt qu'une liste à puces plate.
+  function renderLignesArticlesGroupees(lignes, peutVoirPrix) {
+    if (!lignes.length) return '';
+    const groupes = [];
+    let categorieCourante;
+    let groupeCourant = null;
+    lignes.forEach(l => {
+      const cat = l['Categorie'] || '';
+      if (groupeCourant === null || cat !== categorieCourante) {
+        groupeCourant = { categorie: cat, items: [] };
+        groupes.push(groupeCourant);
+        categorieCourante = cat;
+      }
+      groupeCourant.items.push(l);
+    });
+
+    const nbColonnes = peutVoirPrix ? 5 : 4;
+    const entetes = `<tr style="background:#f5f5f5">
+      <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Réf.</th>
+      <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Description</th>
+      <th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Qté</th>
+      <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Unité</th>
+      ${peutVoirPrix ? '<th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Montant HT</th>' : ''}
+    </tr>`;
+
+    const corps = groupes.map(g => {
+      const entete = g.categorie
+        ? `<tr><td colspan="${nbColonnes}" style="font-weight:700;font-size:11px;color:var(--gris);padding:6px 4px 2px">${g.categorie}</td></tr>`
+        : '';
+      const lignesGroupe = g.items.map(l => {
+        const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
+        const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
+          ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+        return `<tr>
+          <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
+          ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
+        </tr>`;
+      }).join('');
+      return entete + lignesGroupe;
+    }).join('');
+
+    return `<table style="width:100%;border-collapse:collapse;margin-top:6px">${entetes}${corps}</table>`;
+  }
+
   function renderCarteCommande(r, peutVoirPrix, contexte) {
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
@@ -8340,17 +8438,7 @@
     const dateReceptionPrevue = r['Date reception prevue'] || '';
     const referenceComplete = r['Reference complete'] || '';
 
-    const lignesHTML = (_commandesLignesCache[r.id] || []).map(l => {
-      const texte = [l['Categorie'], l['Description']].filter(Boolean).join(' — ');
-      const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '')
-        ? ` (${l['Quantite']}${l['Unite'] ? ' ' + l['Unite'] : ''})` : '';
-      const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
-        ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
-      return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;color:#666;padding-left:4px">
-        <span>• ${texte}${qte}</span>
-        <span style="color:#999;flex-shrink:0">${montantLigne}</span>
-      </div>`;
-    }).join('');
+    const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix);
 
     let actionsHTML = '';
     if (statut === 'En attente AR') {
@@ -12463,6 +12551,9 @@
     <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
       <div id="modal-commandes-chantier-titre" style="font-size:15px;font-weight:700;color:var(--gris)"></div>
       <button onclick="fermerModalCommandesChantier()" style="background:var(--beige-clair);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
+    </div>
+    <div style="padding:12px 16px 0;flex-shrink:0">
+      <input type="text" id="modal-commandes-recherche" placeholder="🔍 Rechercher par fournisseur, n° commande ou devis…" oninput="renderModalCommandes()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="modal-commandes-chantier-content" style="overflow-y:auto;padding:16px;flex:1"></div>
   </div>
