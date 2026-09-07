@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1179,6 +1179,9 @@
       if (badge) badge.style.display = 'none';
     } else if (nav === 'commandes') {
       showPage('page-commandes');
+      const rechercheGlobale = document.getElementById('commandes-recherche-globale');
+      if (rechercheGlobale) rechercheGlobale.value = '';
+      rechercherCommandesGlobal('');
       switchCommandesVue('liste');
       chargerCommandesPage();
     }
@@ -8554,6 +8557,8 @@
       renderCommandesPartielles();
       renderCommandesParChantier();
       renderCommandesReceptionnees();
+      const rechercheGlobaleEl = document.getElementById('commandes-recherche-globale');
+      if (rechercheGlobaleEl && rechercheGlobaleEl.value.trim()) rechercherCommandesGlobal(rechercheGlobaleEl.value);
     } catch (e) {
       console.error('Erreur page Commandes', e);
       listeEl.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
@@ -8712,19 +8717,36 @@
     if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
   }
 
-  // Synchronise le même terme de recherche entre les 4 onglets qui partagent
-  // les mêmes critères (chantier/fournisseur/n° commande/devis), pour ne pas
-  // avoir à retaper sa recherche en changeant d'onglet.
-  function synchroniserRechercheCommandes(valeur) {
-    ['commandes-recherche', 'commandes-ar-recherche', 'commandes-partielle-recherche', 'commandes-receptionnees-recherche'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el && el.value !== valeur) el.value = valeur;
+  // Recherche globale au-dessus des onglets : bascule entre les résultats
+  // (tous statuts confondus, avec badge de statut visible) et l'affichage
+  // normal des onglets selon qu'une recherche est en cours ou non.
+  function rechercherCommandesGlobal(valeur) {
+    const zoneResultats = document.getElementById('commandes-recherche-globale-resultats');
+    const zoneOnglets = document.getElementById('commandes-onglets-normaux');
+    const texte = (valeur || '').trim();
+    if (!texte) {
+      zoneResultats.style.display = 'none';
+      zoneOnglets.style.display = 'block';
+      return;
+    }
+    zoneOnglets.style.display = 'none';
+    zoneResultats.style.display = 'block';
+
+    const recherche = texte.toLowerCase();
+    const peutVoirPrix = _peutVoirPrixActuel;
+    const filtrees = _commandesCache.filter(r => {
+      const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
+      const fournisseur = (r['Fournisseur'] || '').toLowerCase();
+      const numero = (r['Numero commande'] || '').toLowerCase();
+      const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+      return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
     });
-    renderCommandesListe();
-    renderCommandesEnAttenteAR();
-    renderCommandesPartielles();
-    renderCommandesReceptionnees();
+    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    zoneResultats.innerHTML = triees.length
+      ? `<div style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px">${triees.length} résultat(s)</div>` + triees.map(r => renderCarteCommande(r, peutVoirPrix, 'recherche')).join('')
+      : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>';
   }
+
 
   function renderCommandesListe() {
     const resumeEl = document.getElementById('commandes-resume');
@@ -13036,6 +13058,14 @@
   <div style="padding:16px 16px 4px">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📦 Commandes fournisseurs</div>
   </div>
+  <div style="padding:0 16px 10px">
+    <input type="text" id="commandes-recherche-globale" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="rechercherCommandesGlobal(this.value)" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+  </div>
+
+  <!-- Résultats de la recherche globale (tous statuts confondus, avec badge de statut) -->
+  <div id="commandes-recherche-globale-resultats" style="display:none;padding:0 16px 80px"></div>
+
+  <div id="commandes-onglets-normaux">
   <div style="padding:8px 16px 0">
     <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px">
       <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
@@ -13051,32 +13081,26 @@
   <div id="commandes-vue-liste">
     <div style="padding:10px 16px 0">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="synchroniserRechercheCommandes(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-recherche" style="display:none" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue En attente AR -->
   <div id="commandes-vue-ar" style="display:none">
-    <div style="padding:10px 16px 0">
-      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="synchroniserRechercheCommandes(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
-    </div>
+    <input type="text" id="commandes-ar-recherche" style="display:none" />
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Réception partielle -->
   <div id="commandes-vue-partielle" style="display:none">
-    <div style="padding:10px 16px 0">
-      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="synchroniserRechercheCommandes(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
-    </div>
+    <input type="text" id="commandes-partielle-recherche" style="display:none" />
     <div id="commandes-partielle-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Réceptionnées -->
   <div id="commandes-vue-receptionnees" style="display:none">
-    <div style="padding:10px 16px 0">
-      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="synchroniserRechercheCommandes(this.value)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
-    </div>
+    <input type="text" id="commandes-receptionnees-recherche" style="display:none" />
     <div id="commandes-receptionnees-liste" style="padding:8px 16px 80px"></div>
   </div>
 
@@ -13094,6 +13118,7 @@
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (description, référence)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-articles-liste" style="padding:8px 16px 80px"></div>
+  </div>
   </div>
 </div>
 
