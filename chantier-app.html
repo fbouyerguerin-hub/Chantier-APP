@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1886,7 +1886,7 @@
   }
 
   function formatJoursRtt(n) {
-    return (Math.round(n * 10) / 10).toString().replace('.', ',');
+    return (n || 0).toFixed(2).replace('.', ',');
   }
 
   function heuresEnJoursRtt(h) { return h / HEURES_PAR_JOUR_RTT; }
@@ -2061,7 +2061,7 @@
   //    payées directement et ne sont donc pas comptabilisées dans le cumul)
   // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
   // cumul réel d'heures de la semaine qui détermine le nombre d'heures de RTT acquises (seuil : 35h).
-  function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId) {
+  function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId, inclureSemainesVides = false) {
     const annee = new Date().getFullYear();
     const totauxSemaine = {};
     saisies.forEach(r => {
@@ -2108,14 +2108,19 @@
         semainesRtt.set(lundiStr, rttSemaine);
         let heuresSup = 0, surplus = 0;
         if (totalHeures > HEURES_NORMALES_SEMAINE) {
-          // Heures sup entre 39h et 42.5h
+          // Heures sup entre 39h et 42.5h : payées directement, non comptabilisées dans le cumul
           heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
-          // Heures en plus au-delà de 42.5h
+          // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
           surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
-          heuresSupTotal += heuresSup + surplus;
+          heuresSupTotal += surplus;
         }
         // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
         detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus, rttSemaine });
+      } else if (inclureSemainesVides) {
+        // Semaine sans saisie suffisante (aucune heure, ou en dessous de 35h) et non couverte par
+        // une absence bloquante : affichée quand même avec des compteurs à 0, pour que l'admin
+        // repère les semaines sans saisie dans le détail du récapitulatif.
+        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: 0, surplus: 0, rttSemaine: 0, sansSaisie: !semaineBloquee && totalHeures === 0 });
       }
       lundi.setDate(lundi.getDate() + 7);
     }
@@ -2211,7 +2216,7 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
 
-      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id, true);
       const acquisSemaines = rttEtSup.rttAcquis;
       const heuresSupResult = rttEtSup.heuresSup;
       const semainesRtt = rttEtSup.semainesRtt;
@@ -2280,6 +2285,9 @@
                 const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
                 const label = lundi.toLocaleDateString('fr-FR') + ' au ' + vendredi.toLocaleDateString('fr-FR');
                 const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+                if (d.sansSaisie) {
+                  return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
+                }
                 return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
               }).join('')}
             </tbody>
@@ -2522,7 +2530,7 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
 
-      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId, true);
       const acquisSemaines = rttEtSup.rttAcquis;
       const heuresSupResult = rttEtSup.heuresSup;
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
@@ -2569,6 +2577,9 @@
             const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
             const label = lundi.toLocaleDateString('fr-FR') + ' – ' + vendredi.toLocaleDateString('fr-FR');
             const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+            if (d.sansSaisie) {
+              return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
+            }
                 return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '';
