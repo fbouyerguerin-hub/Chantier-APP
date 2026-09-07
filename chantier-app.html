@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12998,8 +12998,8 @@
   </div>
   <div style="padding:8px 16px 0">
     <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px">
-      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Liste</button>
       <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
+      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 En attente réception</button>
       <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
