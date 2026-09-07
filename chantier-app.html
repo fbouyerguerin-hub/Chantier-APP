@@ -6073,6 +6073,61 @@
     el.textContent = 'Semaine du ' + new Date(lundiStr + 'T12:00:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
     el.dataset.lundi = lundiStr;
     initSignaturePad();
+    chargerRecapSignature(lundiStr);
+  }
+
+  // Récapitulatif des heures saisies sur la semaine concernée, affiché dans la
+  // modale de signature avant que le collaborateur ne valide — pour lui
+  // permettre de vérifier ses heures avant blocage de la saisie.
+  async function chargerRecapSignature(lundiStr) {
+    const recapEl = document.getElementById('signature-recap');
+    if (!recapEl) return;
+    recapEl.innerHTML = '<div style="text-align:center;font-size:12px;color:#999;padding:10px">⏳ Chargement du récapitulatif…</div>';
+    try {
+      const lundi = new Date(lundiStr + 'T12:00:00');
+      const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+      const collabId = feuilleCollab?.id;
+      const saisies = await fetchSaisiesPeriodeRtt(dateYMD(lundi), dateYMD(vendredi), collabId);
+
+      const parJour = {};
+      let total = 0;
+      saisies.forEach(r => {
+        if (!r['Date']) return;
+        const dateStr = String(r['Date']).split('T')[0];
+        const heures = parseFloat(r['Heures Normales']) || 0;
+        const chantierNom = (r['Chantiers'] || r['Chantier'] || [])[0]?.value || '—';
+        if (!parJour[dateStr]) parJour[dateStr] = [];
+        parJour[dateStr].push({ chantier: chantierNom, heures });
+        total += heures;
+      });
+
+      const joursNoms = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+      const lignesHTML = joursNoms.map((nom, i) => {
+        const d = new Date(lundi); d.setDate(lundi.getDate() + i);
+        const dStr = dateYMD(d);
+        const entries = parJour[dStr] || [];
+        const totalJour = entries.reduce((s, e) => s + e.heures, 0);
+        const detail = entries.length
+          ? entries.map(e => `${e.chantier} (${formatJoursRtt(e.heures)} h)`).join(', ')
+          : 'Aucune saisie';
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:12px">
+          <span style="color:var(--gris)"><strong>${nom}</strong> — ${detail}</span>
+          <span style="font-weight:700;flex-shrink:0;color:${totalJour === 0 ? '#c0392b' : 'var(--gris)'}">${formatJoursRtt(totalJour)} h</span>
+        </div>`;
+      }).join('');
+
+      recapEl.innerHTML = `
+        <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">📋 Récapitulatif de la semaine — vérifiez avant de signer :</div>
+        <div style="background:#f7f7f7;border-radius:10px;padding:10px 12px">
+          ${lignesHTML}
+          <div style="display:flex;justify-content:space-between;padding-top:8px;margin-top:4px;border-top:2px solid #ddd;font-size:13px;font-weight:800;color:var(--vert)">
+            <span>Total semaine</span><span>${formatJoursRtt(total)} h</span>
+          </div>
+        </div>`;
+    } catch (e) {
+      console.error('Erreur récapitulatif signature', e);
+      recapEl.innerHTML = '<div style="font-size:12px;color:#c0392b">❌ Impossible de charger le récapitulatif des heures.</div>';
+    }
   }
 
   function initSignaturePad() {
@@ -12457,6 +12512,9 @@
       <div style="font-size:17px;font-weight:800;color:var(--gris)">Validation de la semaine</div>
       <div id="signature-semaine-label" style="font-size:13px;color:#888;margin-top:4px"></div>
     </div>
+
+    <!-- Récapitulatif des heures saisies pour la semaine -->
+    <div id="signature-recap" style="margin-bottom:16px"></div>
 
     <!-- Message légal -->
     <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:10px;padding:14px;margin-bottom:16px">
