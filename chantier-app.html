@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8517,6 +8517,7 @@
         ? Number(l['Deboursé HT']).toFixed(2) + ' € / ' + (l['Unite'] || 'unité') : '';
       const montant = (l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
         ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+      const fichierAR = (c['Accusé de réception'] || [])[0];
       return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
         <div style="font-size:12px;font-weight:700;color:var(--gris)">${[l['Categorie'], l['Description']].filter(Boolean).join(' — ')}</div>
         <div style="font-size:11px;color:#888;margin:2px 0">${c['Fournisseur'] || ''} · 🏗 ${chantierNom} · ${dateLabel}${c['Numero commande'] ? ' · ' + c['Numero commande'] : ''}</div>
@@ -8524,6 +8525,7 @@
           <span style="font-size:11px;color:#666">${qte !== '' ? `${qte}${l['Unite'] ? ' ' + l['Unite'] : ''}` : ''}${prixUnitaire ? ` · ${prixUnitaire}` : ''}</span>
           <span style="font-weight:700;font-size:13px;color:var(--vert)">${montant}</span>
         </div>
+        ${fichierAR ? `<a href="${fichierAR.url}" target="_blank" style="display:block;margin-top:6px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>` : ''}
       </div>`;
     }).join('') : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucun article trouvé.</div>';
   }
