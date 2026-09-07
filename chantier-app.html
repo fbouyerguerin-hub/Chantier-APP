@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2093,6 +2093,16 @@
     const aujourdHuiStr = dateYMD(new Date());
     let lundi = new Date(annee, 0, 1);
     while (lundi.getDay() !== 1) lundi.setDate(lundi.getDate() + 1);
+    // Date pivot exceptionnelle : les semaines avant cette date restent
+    // listées dans le détail (historique, grisé côté affichage) mais ne sont
+    // plus additionnées dans le cumul - couvertes par le solde initial saisi
+    // manuellement ("RTT solde initial (h)" / "Heures sup solde initial (h)").
+    let lundiPivotStr = null;
+    if (DATE_DEBUT_SUIVI_RTT) {
+      let lundiPivot = new Date(DATE_DEBUT_SUIVI_RTT + 'T12:00:00');
+      while (lundiPivot.getDay() !== 1) lundiPivot.setDate(lundiPivot.getDate() + 1);
+      lundiPivotStr = dateYMD(lundiPivot);
+    }
 
     let semainesCompletes = 0, heuresSupTotal = 0, rttTotal = 0;
     const detail = [];
@@ -2102,29 +2112,32 @@
       const vendrediStr = dateYMD(vendredi);
       if (vendrediStr > aujourdHuiStr) break; // semaine pas encore terminée
       const lundiStr = dateYMD(lundi);
+      const horsPeriode = lundiPivotStr !== null && lundiStr < lundiPivotStr;
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
       const totalHeures = totauxSemaine[lundiStr] || 0;
       if (!semaineBloquee && totalHeures >= HEURES_BASE_RTT) {
         // RTT = nombre d'heures réellement travaillées entre 35h et 39h (pas un forfait fixe)
-        semainesCompletes++;
         const rttSemaine = Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_BASE_RTT;
-        rttTotal += rttSemaine;
-        semainesRtt.set(lundiStr, rttSemaine);
         let heuresSup = 0, surplus = 0;
         if (totalHeures > HEURES_NORMALES_SEMAINE) {
           // Heures sup entre 39h et 42.5h : payées directement, non comptabilisées dans le cumul
           heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
           // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
           surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
+        }
+        if (!horsPeriode) {
+          semainesCompletes++;
+          rttTotal += rttSemaine;
+          semainesRtt.set(lundiStr, rttSemaine);
           heuresSupTotal += surplus;
         }
         // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
-        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus, rttSemaine });
+        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: heuresSup, surplus, rttSemaine, horsPeriode });
       } else if (inclureSemainesVides) {
         // Semaine sans saisie suffisante (aucune heure, ou en dessous de 35h) et non couverte par
         // une absence bloquante : affichée quand même avec des compteurs à 0, pour que l'admin
         // repère les semaines sans saisie dans le détail du récapitulatif.
-        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: 0, surplus: 0, rttSemaine: 0, sansSaisie: !semaineBloquee && totalHeures === 0 });
+        detail.push({ lundi: lundiStr, totalHeures, heuresPayees: 0, surplus: 0, rttSemaine: 0, sansSaisie: !semaineBloquee && totalHeures === 0, horsPeriode });
       }
       lundi.setDate(lundi.getDate() + 7);
     }
@@ -2158,6 +2171,14 @@
   const HEURES_BASE_RTT = 35;          // seuil déclencheur RTT
   const HEURES_NORMALES_SEMAINE = 39;  // seuil heures sup
   const HEURES_SEUIL_PAYEES = 42.5;   // seuil heures en plus
+
+  // Date pivot exceptionnelle : le calcul automatique du cumul RTT/heures sup
+  // ne prend en compte que les semaines à partir de celle-ci (les saisies
+  // antérieures restent visibles dans l'historique, mais ne sont plus
+  // recomptées - le solde jusqu'à cette date doit être renseigné manuellement
+  // par collaborateur via "RTT solde initial (h)" / "Heures sup solde initial (h)").
+  // Repasser à null pour revenir au calcul depuis le 1er janvier de l'année.
+  const DATE_DEBUT_SUIVI_RTT = '2026-08-30';
 
   // Synchronise le cumul d'heures supplémentaires dans Baserow (fiche Collaborateur), sans bloquer l'affichage.
   async function syncHeuresSupplementaires(collabId, valeur) {
@@ -2198,9 +2219,11 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
         const statut = r['Statut']?.value || 'En attente';
+        const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
+        const horsPeriodePivot = DATE_DEBUT_SUIVI_RTT && finStr && finStr < DATE_DEBUT_SUIVI_RTT;
         if (statut === 'Approuvé') {
+          if (horsPeriodePivot) return; // couvert par le solde initial, non recompté
           pris += jours; prisHeures += heures;
-          const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
           if (finStr && finStr < aujourdHuiStrPerso) prisHeuresPassees += heures;
           else prisHeuresAVenir += heures;
         }
@@ -2267,19 +2290,28 @@
             <tbody>
               ${validees.map(r => {
                 const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
-                const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+                const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
+                const fin = finStr ? new Date(finStr + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
                 const jours = joursRttDemande(r);
                 const heures = heuresRttDemande(r, saisiesCollab, feuilleCollab.id);
                 const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
-                return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td></tr>`;
+                const estPassee = finStr && finStr < dateYMD(new Date());
+                return estPassee
+                  ? `<tr style="background:#f2f2f2;color:#999"><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td></tr>`
+                  : `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(jours)} j</td><td class="valeur">${formatJoursRtt(heures)} h</td></tr>`;
               }).join('')}
             </tbody>
           </table>
         </div>
       ` : '';
 
+      const legendeHorsPeriode = heuresSupResult.detail.some(d => d.horsPeriode)
+        ? `<div style="font-size:11px;color:#999;margin:4px 0 8px;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;background:#f2f2f2;border:1px solid #ddd;border-radius:3px"></span> Période non prise en compte dans le cumul</div>`
+        : '';
+
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
+        ${legendeHorsPeriode}
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
@@ -2289,6 +2321,9 @@
                 const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
                 const label = lundi.toLocaleDateString('fr-FR') + ' au ' + vendredi.toLocaleDateString('fr-FR');
                 const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+                if (d.horsPeriode) {
+                  return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                }
                 if (d.sansSaisie) {
                   return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
                 }
@@ -2433,6 +2468,9 @@
             const jours = joursRttDemande(r);
             const heures = heuresRttDemande(r, toutesLesSaisies, c.id);
             const statut = r['Statut']?.value || 'En attente';
+            const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
+            const horsPeriodePivot = DATE_DEBUT_SUIVI_RTT && finStr && finStr < DATE_DEBUT_SUIVI_RTT;
+            if (horsPeriodePivot) return; // couvert par le solde initial, non recompté
             if (statut === 'Approuvé') { pris += jours; prisHeures += heures; }
             else if (statut === 'En attente') enAttente += jours;
           });
@@ -2512,9 +2550,11 @@
         const jours = joursRttDemande(r);
         const heures = heuresRttDemande(r, saisiesCollab, collabId);
         const statut = r['Statut']?.value || 'En attente';
+        const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
+        const horsPeriodePivot = DATE_DEBUT_SUIVI_RTT && finStr && finStr < DATE_DEBUT_SUIVI_RTT;
         if (statut === 'Approuvé') {
+          if (horsPeriodePivot) return; // couvert par le solde initial, non recompté
           pris += jours; prisHeures += heures;
-          const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
           if (finStr && finStr < aujourdHuiStrModal) prisHeuresPassees += heures;
           else prisHeuresAVenir += heures;
         }
@@ -2566,14 +2606,23 @@
           <thead><tr><th>Date</th><th>Jours</th><th>Heures</th></tr></thead>
           <tbody>${validees.map(r => {
             const debut = r['Date de début'] ? new Date(r['Date de début']).toLocaleDateString('fr-FR') : '—';
-            const fin = r['Date de fin journée (inclus)'] ? new Date(r['Date de fin journée (inclus)']).toLocaleDateString('fr-FR') : '—';
+            const finStr = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : (r['Date de début'] ? String(r['Date de début']).split('T')[0] : null);
+            const fin = finStr ? new Date(finStr + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
             const datesLabel = debut === fin ? debut : 'Du ' + debut + ' au ' + fin;
-            return `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(joursRttDemande(r))} j</td><td class="valeur">${formatJoursRtt(heuresRttDemande(r, saisiesCollab, collabId))} h</td></tr>`;
+            const estPassee = finStr && finStr < dateYMD(new Date());
+            return estPassee
+              ? `<tr style="background:#f2f2f2;color:#999"><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(joursRttDemande(r))} j</td><td class="valeur">${formatJoursRtt(heuresRttDemande(r, saisiesCollab, collabId))} h</td></tr>`
+              : `<tr><td>${datesLabel}</td><td class="valeur">${formatJoursRtt(joursRttDemande(r))} j</td><td class="valeur">${formatJoursRtt(heuresRttDemande(r, saisiesCollab, collabId))} h</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '';
 
+      const legendeHorsPeriode2 = heuresSupResult.detail.some(d => d.horsPeriode)
+        ? `<div style="font-size:11px;color:#999;margin:4px 0 8px;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;background:#f2f2f2;border:1px solid #ddd;border-radius:3px"></span> Période non prise en compte dans le cumul</div>`
+        : '';
+
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
+        ${legendeHorsPeriode2}
         <div class="rtt-table-wrap"><table class="rtt-table">
           <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
           <tbody>${heuresSupResult.detail.map(d => {
@@ -2581,6 +2630,9 @@
             const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
             const label = lundi.toLocaleDateString('fr-FR') + ' – ' + vendredi.toLocaleDateString('fr-FR');
             const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
+            if (d.horsPeriode) {
+              return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+            }
             if (d.sansSaisie) {
               return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
             }
