@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8378,6 +8378,7 @@
       _commandesCache = toutes;
       _commandesLignesCache = lignesParCommande;
       renderCommandesListe();
+      renderCommandesEnAttenteAR();
       renderCommandesParChantier();
       renderCommandesReceptionnees();
     } catch (e) {
@@ -8388,14 +8389,18 @@
 
   function switchCommandesVue(vue) {
     document.getElementById('commandes-vue-liste').style.display = vue === 'liste' ? 'block' : 'none';
+    document.getElementById('commandes-vue-ar').style.display = vue === 'ar' ? 'block' : 'none';
     document.getElementById('commandes-vue-receptionnees').style.display = vue === 'receptionnees' ? 'block' : 'none';
     document.getElementById('commandes-vue-chantier').style.display = vue === 'chantier' ? 'block' : 'none';
     document.getElementById('tab-commandes-liste').style.background = vue === 'liste' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-liste').style.color = vue === 'liste' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-commandes-ar').style.background = vue === 'ar' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-ar').style.color = vue === 'ar' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-receptionnees').style.background = vue === 'receptionnees' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-receptionnees').style.color = vue === 'receptionnees' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-chantier').style.background = vue === 'chantier' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-chantier').style.color = vue === 'chantier' ? '#fff' : 'var(--gris-moyen)';
+    if (vue === 'ar') renderCommandesEnAttenteAR();
     if (vue === 'receptionnees') renderCommandesReceptionnees();
   }
 
@@ -8482,7 +8487,10 @@
     const recherche = (document.getElementById('commandes-recherche')?.value || '').trim().toLowerCase();
     const peutVoirPrix = _peutVoirPrixActuel;
 
-    let filtrees = _commandesCache.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    let filtrees = _commandesCache.filter(r =>
+      !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')) &&
+      extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR'
+    );
     if (recherche) {
       filtrees = filtrees.filter(r => {
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
@@ -8505,6 +8513,27 @@
     const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('') ||
       '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>';
+  }
+
+  function renderCommandesEnAttenteAR() {
+    const listeEl = document.getElementById('commandes-ar-liste');
+    const recherche = (document.getElementById('commandes-ar-recherche')?.value || '').trim().toLowerCase();
+    const peutVoirPrix = _peutVoirPrixActuel;
+
+    let filtrees = _commandesCache.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') === 'En attente AR');
+    if (recherche) {
+      filtrees = filtrees.filter(r => {
+        const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
+        const fournisseur = (r['Fournisseur'] || '').toLowerCase();
+        const numero = (r['Numero commande'] || '').toLowerCase();
+        const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+      });
+    }
+
+    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'ar')).join('') ||
+      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande en attente d\'AR.</div>';
   }
 
   // Regroupe les lignes d'articles par catégorie consécutive (comme sur le
@@ -12685,19 +12714,28 @@
   </div>
   <div style="padding:8px 16px 0">
     <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px">
-      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Liste</button>
-      <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
-      <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
+      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 Liste</button>
+      <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
+      <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
+      <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
     </div>
   </div>
 
-  <!-- Vue Liste (commandes en cours uniquement) -->
+  <!-- Vue Liste (commandes validées AR, en attente de réception) -->
   <div id="commandes-vue-liste">
     <div style="padding:10px 16px 0">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="filtrerCommandesPage()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue En attente AR -->
+  <div id="commandes-vue-ar" style="display:none">
+    <div style="padding:10px 16px 0">
+      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher par chantier, fournisseur, n° commande ou devis…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
+    <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Réceptionnées -->
