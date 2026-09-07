@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -620,7 +620,15 @@
   // Postes pour lesquels les commandes encore en "En attente AR" (non
   // validées) sont masquées : ces équipes n'ont besoin de voir une commande
   // qu'une fois son AR confirmé.
-  const POSTES_SANS_VUE_AR = ['Pose', 'Fab Acier', 'Fab Bois'];
+  const POSTES_SANS_VUE_AR = ['Pose', 'Fab Acier', 'Fab Bois', 'Apprenti poseur', 'Apprenti atelier'];
+  // Postes assimilés à "Pose" pour le filtrage par semaine du planning (icône
+  // 📦, chantiers assignés) dans l'onglet Commandes/Mon planning.
+  const POSTES_ASSIMILES_POSE = ['Pose', 'Apprenti poseur'];
+  // Postes assimilés à "Fab Acier"/"Fab Bois" : accès à toutes les commandes
+  // (pas de restriction aux chantiers personnellement affectés).
+  const POSTES_ASSIMILES_FAB = ['Fab Acier', 'Fab Bois', 'Apprenti atelier'];
+  // Postes dont les RTT (35h→39h) sont majorées de 25% (apprentis).
+  const POSTES_RTT_MAJOREE_25 = ['Apprenti poseur', 'Apprenti atelier'];
 
   // ── Jours fériés français ────────────────────────────────────────────────
   const _joursFeriesCache = {};
@@ -2065,7 +2073,9 @@
   //    payées directement et ne sont donc pas comptabilisées dans le cumul)
   // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
   // cumul réel d'heures de la semaine qui détermine le nombre d'heures de RTT acquises (seuil : 35h).
-  function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId, inclureSemainesVides = false) {
+  // Pour les postes apprentis (POSTES_RTT_MAJOREE_25), la RTT (35h→39h) est majorée de 25%.
+  function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId, inclureSemainesVides = false, poste = '') {
+    const majorationRtt = POSTES_RTT_MAJOREE_25.includes(poste) ? 1.25 : 1;
     const annee = new Date().getFullYear();
     const totauxSemaine = {};
     saisies.forEach(r => {
@@ -2116,14 +2126,21 @@
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
       const totalHeures = totauxSemaine[lundiStr] || 0;
       if (!semaineBloquee && totalHeures >= HEURES_BASE_RTT) {
-        // RTT = nombre d'heures réellement travaillées entre 35h et 39h (pas un forfait fixe)
-        const rttSemaine = Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_BASE_RTT;
-        let heuresSup = 0, surplus = 0;
-        if (totalHeures > HEURES_NORMALES_SEMAINE) {
-          // Heures sup entre 39h et 42.5h : payées directement, non comptabilisées dans le cumul
-          heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
-          // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
-          surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
+        let rttSemaine, heuresSup = 0, surplus = 0;
+        if (majorationRtt !== 1) {
+          // Postes apprentis : pas de palier RTT (35-39h) / heures sup (39-42,5h) /
+          // heures en plus (>42,5h) - tout ce qui dépasse 35h compte comme RTT,
+          // majorée de 25%.
+          rttSemaine = (totalHeures - HEURES_BASE_RTT) * majorationRtt;
+        } else {
+          // RTT = nombre d'heures réellement travaillées entre 35h et 39h (pas un forfait fixe)
+          rttSemaine = Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_BASE_RTT;
+          if (totalHeures > HEURES_NORMALES_SEMAINE) {
+            // Heures sup entre 39h et 42.5h : payées directement, non comptabilisées dans le cumul
+            heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
+            // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
+            surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
+          }
         }
         if (!horsPeriode) {
           semainesCompletes++;
@@ -2236,14 +2253,18 @@
         return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
       });
 
-      const resCollabRow = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + feuilleCollab.id + '/?user_field_names=true', { headers: HEADERS });
-      const collabRow = await resCollabRow.json();
+      // Recherche par nom (via obtenirCollaborateurConnecte), plus fiable que
+      // feuilleCollab.id qui peut ne pas encore être résolu selon le moment
+      // où cette fonction est appelée (même correctif que pour les commandes).
+      const collabRow = await obtenirCollaborateurConnecte();
       const rttSoldeInitial = parseFloat(collabRow['RTT solde initial (h)']) || 0;
       const heuresSupSoldeInitial = parseFloat(collabRow['Heures sup solde initial (h)']) || 0;
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
+      const posteCollabConnecte = collabRow['Poste / Métier'] || '';
+      const HEURES_RTT_PAR_SEMAINE_EFF = POSTES_RTT_MAJOREE_25.includes(posteCollabConnecte) ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
 
-      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id, true);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id, true, posteCollabConnecte);
       const acquisSemaines = rttEtSup.rttAcquis;
       const heuresSupResult = rttEtSup.heuresSup;
       const semainesRtt = rttEtSup.semainesRtt;
@@ -2308,10 +2329,14 @@
       const legendeHorsPeriode = heuresSupResult.detail.some(d => d.horsPeriode)
         ? `<div style="font-size:11px;color:#999;margin:4px 0 8px;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;background:#f2f2f2;border:1px solid #ddd;border-radius:3px"></span> Période non prise en compte dans le cumul</div>`
         : '';
+      const legendeMajoration = POSTES_RTT_MAJOREE_25.includes(posteCollabConnecte)
+        ? `<div style="font-size:11px;color:#8a5fc2;margin:4px 0 8px;display:flex;align-items:center;gap:6px">⭐ Poste apprenti : toutes les heures au-delà de 35h comptent en RTT, majorées de 25% (pas de palier heures sup)</div>`
+        : '';
 
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
         ${legendeHorsPeriode}
+        ${legendeMajoration}
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
@@ -2325,9 +2350,11 @@
                   return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
                 }
                 if (d.sansSaisie) {
-                  return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
+                  return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF)} h</td></tr>`;
                 }
-                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                return POSTES_RTT_MAJOREE_25.includes(posteCollabConnecte)
+                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
+                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
               }).join('')}
             </tbody>
           </table>
@@ -2342,7 +2369,7 @@
       // effectivement travaillées) puis reprend la logique forfaitaire de 208h/an (4h/semaine) pour
       // projeter les semaines restantes non couvertes par une absence bloquante déjà validée (congé,
       // maladie, sans solde, accident) jusqu'au 31/12 — cohérent avec le graphique de solde.
-      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees);
+      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees);
       const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
       const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
       const rythmeIndicatif = semainesRestantesNonBloquees > 0 && restePrevisionnel > 0 ? restePrevisionnel / semainesRestantesNonBloquees : 0;
@@ -2354,13 +2381,13 @@
 
       const decompteurHtml = `
         <div class="rtt-table-title">⏳ Décompte de l'année ${anneeEnCours}</div>
-        <div class="rtt-legende" style="margin-top:0">ℹ️ Prévisionnel = solde actuel réellement acquis, projeté sur les ${semainesRestantesNonBloquees} semaine(s) restante(s) non couvertes par une absence à raison de ${HEURES_RTT_PAR_SEMAINE}h/semaine (soit l'équivalent du cumul indicatif de ${HEURES_PREVISIONNEL_ANNUEL_RTT}h/an), moins les RTT déjà validées à venir. Le solde de l'année précédente est indiqué à titre informatif et n'est pas inclus dans ce total.${semainesRestantes > semainesRestantesNonBloquees ? ` — ${semainesRestantes - semainesRestantesNonBloquees} semaine(s) exclue(s) car couvertes par un congé/absence déjà validé(e)` : ''}</div>
+        <div class="rtt-legende" style="margin-top:0">ℹ️ Prévisionnel = solde actuel réellement acquis, projeté sur les ${semainesRestantesNonBloquees} semaine(s) restante(s) non couvertes par une absence à raison de ${HEURES_RTT_PAR_SEMAINE_EFF}h/semaine${HEURES_RTT_PAR_SEMAINE_EFF !== HEURES_RTT_PAR_SEMAINE ? ' (majoré +25%, poste apprenti)' : ''} (soit l'équivalent du cumul indicatif de ${HEURES_PREVISIONNEL_ANNUEL_RTT}h/an), moins les RTT déjà validées à venir. Le solde de l'année précédente est indiqué à titre informatif et n'est pas inclus dans ce total.${semainesRestantes > semainesRestantesNonBloquees ? ` — ${semainesRestantes - semainesRestantesNonBloquees} semaine(s) exclue(s) car couvertes par un congé/absence déjà validé(e)` : ''}</div>
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <tbody>
               <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
               ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
-              <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
+              <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE_EFF}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
               <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)} h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>` : ''}</td></tr>
               <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
             </tbody>
@@ -2480,7 +2507,7 @@
             const statut = r['Statut']?.value || 'En attente';
             return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
-          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id);
+          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id, false, c['Poste / Métier'] || '');
           const acquisSemaines = rttEtSup.rttAcquis;
 
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
@@ -2494,7 +2521,8 @@
 
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
           const { semainesRestantesNonBloquees: semainesRestantesAdmin } = decompteAnneeRtt(absencesBloquantes);
-          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesAdmin);
+          const HEURES_RTT_PAR_SEMAINE_EFF_ADMIN = POSTES_RTT_MAJOREE_25.includes(c['Poste / Métier'] || '') ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
+          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF_ADMIN * semainesRestantesAdmin);
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
 
           return { collab: c, congesCollab, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente };
@@ -2573,8 +2601,10 @@
       const heuresSupSoldeInitial = parseFloat(collabRow['Heures sup solde initial (h)']) || 0;
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
+      const posteCollabModal = collabRow['Poste / Métier'] || '';
+      const HEURES_RTT_PAR_SEMAINE_EFF = POSTES_RTT_MAJOREE_25.includes(posteCollabModal) ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
 
-      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId, true);
+      const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId, true, posteCollabModal);
       const acquisSemaines = rttEtSup.rttAcquis;
       const heuresSupResult = rttEtSup.heuresSup;
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
@@ -2619,10 +2649,14 @@
       const legendeHorsPeriode2 = heuresSupResult.detail.some(d => d.horsPeriode)
         ? `<div style="font-size:11px;color:#999;margin:4px 0 8px;display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:12px;height:12px;background:#f2f2f2;border:1px solid #ddd;border-radius:3px"></span> Période non prise en compte dans le cumul</div>`
         : '';
+      const legendeMajoration2 = POSTES_RTT_MAJOREE_25.includes(posteCollabModal)
+        ? `<div style="font-size:11px;color:#8a5fc2;margin:4px 0 8px;display:flex;align-items:center;gap:6px">⭐ Poste apprenti : toutes les heures au-delà de 35h comptent en RTT, majorées de 25% (pas de palier heures sup)</div>`
+        : '';
 
       const listeHeuresSupHtml = heuresSupResult.detail.length ? `
         <div class="rtt-table-title">⚡ Détail des semaines travaillées (RTT et heures supplémentaires)</div>
         ${legendeHorsPeriode2}
+        ${legendeMajoration2}
         <div class="rtt-table-wrap"><table class="rtt-table">
           <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
           <tbody>${heuresSupResult.detail.map(d => {
@@ -2634,15 +2668,17 @@
               return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
             }
             if (d.sansSaisie) {
-              return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE)} h</td></tr>`;
+              return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="3">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF)} h</td></tr>`;
             }
-                return `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                return POSTES_RTT_MAJOREE_25.includes(posteCollabModal)
+                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
+                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h</td><td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '';
 
       const totalConsommePrevisionnel = prisHeures + soldeDeBasePrevisionnel;
       const { semainesRestantes, semainesRestantesNonBloquees } = decompteAnneeRtt(absencesBloquantes);
-      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees);
+      const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees);
       const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
       const pctAtteint = Math.min(100, Math.round((totalConsommePrevisionnel / previsionnelTotalDisponible) * 100));
       const pctPris = Math.min(100, (prisHeures / previsionnelTotalDisponible) * 100);
@@ -2664,7 +2700,7 @@
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
           <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h</td></tr>
           ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
-          <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
+          <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE_EFF}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
           <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)}h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)}h solde de base</span>` : ''}</td></tr>
           <tr><th>Solde prévisionnel restant</th><td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : ''}">${formatJoursRtt(restePrevisionnel)} h</td></tr>
         </tbody></table></div>
@@ -8452,7 +8488,7 @@
   async function obtenirChantierIdsAssignesUtilisateur() {
     if (!feuilleCollab || !feuilleCollab.id) return new Set();
     try {
-      const estPose = (await obtenirPosteCollaborateurConnecte()) === 'Pose';
+      const estPose = POSTES_ASSIMILES_POSE.includes(await obtenirPosteCollaborateurConnecte());
 
       let url = `https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200`;
       if (estPose) {
@@ -8487,7 +8523,7 @@
       // chantier au jour le jour) qui doivent voir toutes les commandes.
       if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
         const poste = await obtenirPosteCollaborateurConnecte();
-        if (!['Fab Acier', 'Fab Bois'].includes(poste)) {
+        if (!POSTES_ASSIMILES_FAB.includes(poste)) {
           const chantierIdsAssignes = await obtenirChantierIdsAssignesUtilisateur();
           toutes = toutes.filter(r => (r['Chantier'] || []).some(c => chantierIdsAssignes.has(c.id)));
         }
@@ -11020,7 +11056,7 @@
             const statut = r['Statut']?.value || 'En attente';
             return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
-          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id);
+          const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id, false, c['Poste / Métier'] || '');
           const acquisSemaines = rttEtSup.rttAcquis;
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
           const heuresSupSoldeInitial = parseFloat(c['Heures sup solde initial (h)']) || 0;
@@ -11029,7 +11065,8 @@
           const heuresSup = rttEtSup.heuresSup.total + heuresSupSoldeInitial;
           const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
           const { semainesRestantesNonBloquees: semainesRestantesExport } = decompteAnneeRtt(absencesBloquantes);
-          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE * semainesRestantesExport);
+          const HEURES_RTT_PAR_SEMAINE_EFF_EXPORT = POSTES_RTT_MAJOREE_25.includes(c['Poste / Métier'] || '') ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
+          const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF_EXPORT * semainesRestantesExport);
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisRttH) - soldeDeBasePrevisionnel;
 
           rowsRecap.push([
