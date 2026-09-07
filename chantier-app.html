@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12953,7 +12953,7 @@
 </script>
 <!-- Modal vue RTT d'un collaborateur (accès admin) -->
 <div id="modal-rtt-collab" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;align-items:flex-end;justify-content:center">
-  <div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:600px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+  <div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:900px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
       <div id="modal-rtt-collab-titre" style="font-size:15px;font-weight:700;color:var(--gris)"></div>
       <button onclick="fermerModalRTTCollab()" style="background:var(--beige-clair);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
