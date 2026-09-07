@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8899,8 +8899,14 @@
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
       ${(pdfSansPrix && !peutVoirPrix) ? `<a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a>` : ''}
-      ${(fichierAR && peutVoirPrix) ? `<a href="${fichierAR.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>` : ''}
-      ${documents.map(f => `<a href="${f.url}" target="_blank" style="display:block;margin-top:4px;font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a>`).join('')}
+      ${(fichierAR && peutVoirPrix) ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>
+        ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
+      </div>` : ''}
+      ${documents.map((f, i) => `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a>
+        ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerDocumentCommande(${r.id}, ${i}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
+      </div>`).join('')}
       <label style="display:flex;align-items:center;gap:6px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:11px;color:var(--gris-moyen);margin-top:8px">
         📎 Ajouter un document (bon de livraison, photo…)
         <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this, '${uid}')" />
@@ -8965,6 +8971,39 @@
       await rafraichirApresActionCommande();
     } catch (e) {
       console.error('Erreur suppression commande', e);
+      alert('Erreur lors de la suppression : ' + e.message);
+    }
+  }
+
+  async function supprimerAccuseReception(id, uid) {
+    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
+    if (!confirm('Supprimer l\'accusé de réception joint à cette commande ?')) return;
+    try {
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Accusé de réception': [] })
+      });
+      if (!rPatch.ok) throw new Error('Baserow a refusé la suppression (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
+    } catch (e) {
+      console.error('Erreur suppression accusé de réception', e);
+      alert('Erreur lors de la suppression : ' + e.message);
+    }
+  }
+
+  async function supprimerDocumentCommande(id, index, uid) {
+    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
+    if (!confirm('Supprimer ce document ?')) return;
+    try {
+      const commande = _commandesCache.find(r => r.id === id);
+      const existants = (commande?.['Documents'] || []).map(f => ({ name: f.name }));
+      existants.splice(index, 1);
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Documents': existants })
+      });
+      if (!rPatch.ok) throw new Error('Baserow a refusé la suppression (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
+    } catch (e) {
+      console.error('Erreur suppression document commande', e);
       alert('Erreur lors de la suppression : ' + e.message);
     }
   }
