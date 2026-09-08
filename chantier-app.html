@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1194,6 +1194,9 @@
   // ── FEUILLE D'HEURES ──
   let feuilleDate = new Date();
   let feuilleCollab = null;
+  // Affectations actuellement affichées dans "Mon planning" (Planning prévu), pour pouvoir en rouvrir
+  // une dans une fenêtre séparée (voir ouvrirAffectationFenetre) sans re-sérialiser ses données.
+  let _planningAffectationsPourFenetre = [];
 
   // Résoudre l'ID du collaborateur connecté (case-insensitive + fallback API)
   async function resolveFeuilleCollab() {
@@ -3169,6 +3172,10 @@
         </th>`;
       }).join('');
 
+      // Cache des affectations affichées, pour pouvoir les rouvrir dans une fenêtre séparée sans avoir
+      // à re-sérialiser leurs données (notes, fichiers…) dans un attribut onclick.
+      _planningAffectationsPourFenetre = [];
+
       const mkRow = (byDate, isSaisie) => jours.map(j => {
         const dateStr = dateYMD(j);
         const congeJour = conges.find(c => dateStr >= c['Date de début'] && dateStr <= finConge(c));
@@ -3181,12 +3188,17 @@
             // Le véhicule ne s'affiche que s'il est associé à CE chantier précis, ce jour-là
             const vehs = (!isSaisie && r.chantierId) ? (byDateVehicules[dateStr + '|' + r.chantierId] || []) : [];
             const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.join(' · ')}</div>` : '';
-            return `${vehHTML}<div class="planning-cell-chantier">🏗 ${r.chantier}
-              ${(r.chantierId && chantiersAvecCommandes.has(r.chantierId)) ? `<span onclick="event.stopPropagation();ouvrirCommandesChantier(${r.chantierId}, ${JSON.stringify(r.chantier).replace(/"/g, '&quot;')})" style="cursor:pointer;margin-left:4px" title="Voir les commandes">📦</span>` : ''}
+            let indexFenetre = -1;
+            if (!isSaisie) {
+              indexFenetre = _planningAffectationsPourFenetre.length;
+              _planningAffectationsPourFenetre.push({ ...r, dateStr });
+            }
+            return `${vehHTML}<div class="planning-cell-chantier"${indexFenetre >= 0 ? ` onclick="ouvrirAffectationFenetre(${indexFenetre})" style="cursor:pointer"` : ''}>🏗 ${r.chantier}
               ${r.periode ? `<div class="planning-cell-notes">⏰ ${r.periode}</div>` : ''}
               ${r.heures ? `<div class="planning-cell-notes">⏱ ${r.heures}h</div>` : ''}
               ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
-              ${(r.fichiers && r.fichiers.length) ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="planning-cell-notes" style="display:block;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
+              ${(r.fichiers && r.fichiers.length) ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="planning-cell-notes" onclick="event.stopPropagation()" style="display:block;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
+              ${(r.chantierId && chantiersAvecCommandes.has(r.chantierId)) ? `<div onclick="event.stopPropagation();ouvrirCommandesChantier(${r.chantierId}, ${JSON.stringify(r.chantier).replace(/"/g, '&quot;')})" style="cursor:pointer;margin:5px -7px -5px;padding:4px 7px;background:rgba(255,255,255,0.5);border-top:1px solid rgba(0,0,0,0.08);border-radius:0 0 5px 5px;font-size:10px;font-weight:700;text-align:center">📦 Commande</div>` : ''}
             </div>`;
           }).join('');
         } else if (ferie) {
@@ -3217,6 +3229,64 @@
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
       console.error(e);
+    }
+  }
+
+  // Ouvre l'affectation (chantier, période, heures, commentaire, fichiers, commandes) dans une vraie
+  // fenêtre de navigateur séparée, pour la garder ouverte à côté du planning. On construit le HTML ici
+  // (données déjà en mémoire + jeton API déjà disponible) et on l'injecte dans la nouvelle fenêtre :
+  // pas besoin de recharger toute l'appli ni de se reconnecter dans cette fenêtre.
+  async function ouvrirAffectationFenetre(index) {
+    const r = _planningAffectationsPourFenetre[index];
+    if (!r) return;
+    const win = window.open('', '_blank', 'width=480,height=640');
+    if (!win) { alert('La fenêtre a été bloquée par le navigateur. Autorise les pop-ups pour ce site.'); return; }
+
+    const dateLabel = new Date(r.dateStr + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    const fichiersHTML = (r.fichiers && r.fichiers.length)
+      ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="fichier">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('')
+      : '<div class="vide">Aucun fichier</div>';
+
+    win.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+      <title>${r.chantier} — ${dateLabel}</title>
+      <style>
+        body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#faf7f2;color:#3a3530;margin:0;padding:20px}
+        h1{font-size:18px;margin:0 0 4px}
+        .date{font-size:13px;color:#888;margin-bottom:18px;text-transform:capitalize}
+        .bloc{background:#fff;border:1px solid #e8e0d3;border-radius:10px;padding:14px 16px;margin-bottom:12px}
+        .label{font-size:10px;font-weight:700;color:#c8a96e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+        .valeur{font-size:14px;white-space:pre-wrap}
+        .fichier{display:block;color:#4a7c3f;text-decoration:underline;font-size:13px;margin-bottom:4px}
+        .vide{font-size:13px;color:#aaa}
+        .commande{border-top:1px solid #eee;padding:8px 0;font-size:13px}
+        .commande:first-child{border-top:none}
+        .commande b{display:block}
+      </style></head><body>
+      <h1>🏗 ${r.chantier}</h1>
+      <div class="date">${dateLabel}</div>
+      <div class="bloc"><div class="label">📝 Commentaire</div><div class="valeur">${r.notes || '—'}</div></div>
+      <div class="bloc"><div class="label">📎 Fichiers</div>${fichiersHTML}</div>
+      <div class="bloc"><div class="label">📦 Commandes</div><div id="commandes">Chargement…</div></div>
+      </body></html>`);
+    win.document.close();
+
+    if (r.chantierId) {
+      try {
+        const commandes = await chargerCommandesPourChantiers([r.chantierId]);
+        const zone = win.document.getElementById('commandes');
+        if (!zone) return; // fenêtre fermée entre-temps
+        if (!commandes.length) { zone.innerHTML = '<div class="vide">Aucune commande pour ce chantier</div>'; return; }
+        zone.innerHTML = commandes
+          .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''))
+          .map(c => `<div class="commande"><b>${c['Fournisseur'] || 'Fournisseur ?'} — ${c['Numero commande'] || ''}</b><div>${extraireValeurChamp(c['Statut'], '') || ''}${c['Date commande'] ? ' · ' + c['Date commande'] : ''}</div><div style="margin-top:3px;color:${c['Lieu de réception'] ? '#4a7c3f' : '#aaa'};font-weight:600">📍 ${c['Lieu de réception'] || 'Emplacement non renseigné'}</div></div>`)
+          .join('');
+      } catch(e) {
+        const zone = win.document.getElementById('commandes');
+        if (zone) zone.innerHTML = '<div class="vide">Erreur de chargement des commandes</div>';
+      }
+    } else {
+      const zone = win.document.getElementById('commandes');
+      if (zone) zone.innerHTML = '<div class="vide">—</div>';
     }
   }
 
