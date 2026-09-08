@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4098,12 +4098,12 @@
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
             <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${collabsPoste.length} pers.)</span></span>
           </div>
-          <div style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
+          <div class="charge-scroll-wrap" style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
                 <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Chantiers</th>
-                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:44px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                ${jourColonnes.map(jc => `<th data-today="${jc.estActuelle}" style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:44px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -4144,10 +4144,27 @@
 
       container.innerHTML = html;
       filtrerCapaciteChantier(document.getElementById('charge-capacite-recherche')?.value || '');
+      scrollChargeVersAujourdhui();
     } catch(e) {
       container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>';
       console.error(e);
     }
+  }
+
+  // Fait défiler horizontalement chaque tableau de l'onglet Charge/Capacité (vue mensuelle et annuelle)
+  // pour amener la colonne du jour en cours dans le champ de vision, sans action de l'utilisateur.
+  function scrollChargeVersAujourdhui() {
+    requestAnimationFrame(() => {
+      document.querySelectorAll('#charge-content .charge-scroll-wrap').forEach(wrap => {
+        const th = wrap.querySelector('th[data-today="true"]');
+        if (!th) return;
+        const wrapRect = wrap.getBoundingClientRect();
+        const thRect = th.getBoundingClientRect();
+        const offset = thRect.left - wrapRect.left + wrap.scrollLeft;
+        const cible = offset - (wrap.clientWidth / 2) + (thRect.width / 2);
+        wrap.scrollLeft = Math.max(0, cible);
+      });
+    });
   }
 
   // Construit la ligne "Cumul restant (semaine)" : une cellule fusionnée par semaine (colspan),
@@ -4411,12 +4428,12 @@
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center;background:${p.color}18">
             <span style="font-size:13px;font-weight:700;color:var(--gris)">${p.key} <span style="font-size:11px;font-weight:400;color:#aaa">(${detail.length} pers.)</span></span>
           </div>
-          <div style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
+          <div class="charge-scroll-wrap" style="overflow:auto;max-height:min(65vh,520px);-webkit-overflow-scrolling:touch">
           <table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead>
               <tr style="background:#f8f8f8">
                 <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Ressources / Chantiers</th>
-                ${jourColonnes.map(jc => `<th style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:52px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                ${jourColonnes.map(jc => `<th data-today="${jc.dateStr === todayStrCharge}" style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:52px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -4499,6 +4516,7 @@
       }
       container.innerHTML = html;
       filtrerCapaciteChantier(document.getElementById('charge-capacite-recherche')?.value || '');
+      scrollChargeVersAujourdhui();
 
       // Charger le suivi global des affaires après le rendu
       chargerSuiviAffaires(affaires, collabs);
