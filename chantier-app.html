@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3232,61 +3232,53 @@
     }
   }
 
-  // Ouvre l'affectation (chantier, période, heures, commentaire, fichiers, commandes) dans une vraie
-  // fenêtre de navigateur séparée, pour la garder ouverte à côté du planning. On construit le HTML ici
-  // (données déjà en mémoire + jeton API déjà disponible) et on l'injecte dans la nouvelle fenêtre :
-  // pas besoin de recharger toute l'appli ni de se reconnecter dans cette fenêtre.
+  // Affiche le détail de l'affectation (commentaire, fichiers, commandes) dans une modale à l'intérieur
+  // de l'appli, sur le même modèle que la modale "Commandes" (plutôt qu'une fenêtre séparée).
   async function ouvrirAffectationFenetre(index) {
     const r = _planningAffectationsPourFenetre[index];
     if (!r) return;
-    const win = window.open('', '_blank', 'width=480,height=640');
-    if (!win) { alert('La fenêtre a été bloquée par le navigateur. Autorise les pop-ups pour ce site.'); return; }
 
+    document.getElementById('modal-affectation-detail-titre').textContent = '🏗 ' + r.chantier;
     const dateLabel = new Date(r.dateStr + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    const fichiersHTML = (r.fichiers && r.fichiers.length)
-      ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="fichier">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('')
-      : '<div class="vide">Aucun fichier</div>';
+    document.getElementById('modal-affectation-detail-date').textContent = dateLabel;
 
-    win.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
-      <title>${r.chantier} — ${dateLabel}</title>
-      <style>
-        body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#faf7f2;color:#3a3530;margin:0;padding:20px}
-        h1{font-size:18px;margin:0 0 4px}
-        .date{font-size:13px;color:#888;margin-bottom:18px;text-transform:capitalize}
-        .bloc{background:#fff;border:1px solid #e8e0d3;border-radius:10px;padding:14px 16px;margin-bottom:12px}
-        .label{font-size:10px;font-weight:700;color:#c8a96e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
-        .valeur{font-size:14px;white-space:pre-wrap}
-        .fichier{display:block;color:#4a7c3f;text-decoration:underline;font-size:13px;margin-bottom:4px}
-        .vide{font-size:13px;color:#aaa}
-        .commande{border-top:1px solid #eee;padding:8px 0;font-size:13px}
-        .commande:first-child{border-top:none}
-        .commande b{display:block}
-      </style></head><body>
-      <h1>🏗 ${r.chantier}</h1>
-      <div class="date">${dateLabel}</div>
-      <div class="bloc"><div class="label">📝 Commentaire</div><div class="valeur">${r.notes || '—'}</div></div>
-      <div class="bloc"><div class="label">📎 Fichiers</div>${fichiersHTML}</div>
-      <div class="bloc"><div class="label">📦 Commandes</div><div id="commandes">Chargement…</div></div>
-      </body></html>`);
-    win.document.close();
+    const fichiersHTML = (r.fichiers && r.fichiers.length)
+      ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:block;color:var(--vert);text-decoration:underline;font-size:14px;margin-bottom:6px">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('')
+      : '<div style="font-size:13px;color:#aaa">Aucun fichier</div>';
+
+    const content = document.getElementById('modal-affectation-detail-content');
+    content.innerHTML = `
+      <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes || '—'}</div></div>
+      <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
+      <div class="bloc-detail-aff"><div class="label-detail-aff">📦 Commandes</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
+    `;
+    if (!document.getElementById('style-detail-aff')) {
+      const style = document.createElement('style');
+      style.id = 'style-detail-aff';
+      style.textContent = '.bloc-detail-aff{background:#fff;border:1px solid #f1ece3;border-radius:10px;padding:12px 14px;margin-bottom:10px}.label-detail-aff{font-size:10px;font-weight:700;color:#c8a96e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}';
+      document.head.appendChild(style);
+    }
+    document.getElementById('modal-affectation-detail').style.display = 'flex';
 
     if (r.chantierId) {
       try {
         const commandes = await chargerCommandesPourChantiers([r.chantierId]);
-        const zone = win.document.getElementById('commandes');
-        if (!zone) return; // fenêtre fermée entre-temps
-        if (!commandes.length) { zone.innerHTML = '<div class="vide">Aucune commande pour ce chantier</div>'; return; }
+        const zone = document.getElementById('modal-affectation-detail-commandes');
+        if (!zone) return;
+        if (!commandes.length) { zone.innerHTML = 'Aucune commande pour ce chantier'; return; }
         zone.innerHTML = commandes
           .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''))
-          .map(c => `<div class="commande"><b>${c['Fournisseur'] || 'Fournisseur ?'} — ${c['Numero commande'] || ''}</b><div>${extraireValeurChamp(c['Statut'], '') || ''}${c['Date commande'] ? ' · ' + c['Date commande'] : ''}</div><div style="margin-top:3px;color:${c['Lieu de réception'] ? '#4a7c3f' : '#aaa'};font-weight:600">📍 ${c['Lieu de réception'] || 'Emplacement non renseigné'}</div></div>`)
+          .map(c => `<div style="border-top:1px solid #eee;padding:8px 0;font-size:13px;color:#3a3530"><b style="display:block;font-size:13px">${c['Fournisseur'] || 'Fournisseur ?'} — ${c['Numero commande'] || ''}</b><div>${extraireValeurChamp(c['Statut'], '') || ''}${c['Date commande'] ? ' · ' + c['Date commande'] : ''}</div><div style="margin-top:3px;color:${c['Lieu de réception'] ? '#4a7c3f' : '#aaa'};font-weight:600">📍 ${c['Lieu de réception'] || 'Emplacement non renseigné'}</div></div>`)
           .join('');
+        // Retire la bordure du premier élément
+        const premier = zone.firstElementChild;
+        if (premier) premier.style.borderTop = 'none';
       } catch(e) {
-        const zone = win.document.getElementById('commandes');
-        if (zone) zone.innerHTML = '<div class="vide">Erreur de chargement des commandes</div>';
+        const zone = document.getElementById('modal-affectation-detail-commandes');
+        if (zone) zone.textContent = 'Erreur de chargement des commandes';
       }
     } else {
-      const zone = win.document.getElementById('commandes');
-      if (zone) zone.innerHTML = '<div class="vide">—</div>';
+      document.getElementById('modal-affectation-detail-commandes').textContent = '—';
     }
   }
 
@@ -13287,6 +13279,20 @@
       <button onclick="fermerModalRTTCollab()" style="background:var(--beige-clair);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
     </div>
     <div id="modal-rtt-collab-content" style="overflow-y:auto;padding:16px;flex:1"></div>
+  </div>
+</div>
+
+<!-- Modal Détail affectation (clic sur l'étiquette du planning) -->
+<div id="modal-affectation-detail" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;align-items:flex-end;justify-content:center">
+  <div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
+      <div>
+        <div id="modal-affectation-detail-titre" style="font-size:15px;font-weight:700;color:var(--gris)"></div>
+        <div id="modal-affectation-detail-date" style="font-size:12px;color:#aaa;margin-top:2px;text-transform:capitalize"></div>
+      </div>
+      <button onclick="document.getElementById('modal-affectation-detail').style.display='none'" style="background:var(--beige-clair);border:none;border-radius:50%;width:32px;height:32px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--gris)">×</button>
+    </div>
+    <div id="modal-affectation-detail-content" style="overflow-y:auto;padding:16px;flex:1"></div>
   </div>
 </div>
 
