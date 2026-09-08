@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -970,7 +970,7 @@
         const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
         // Si ce chantier n'a aucune tâche qui lui est spécifiquement rattachée, on ne retombe pas sur
         // TOUTES les tâches (y compris celles des autres chantiers) : uniquement les tâches globales
-        // (sans aucun chantier lié), du type Congés/RTT/Maladie.
+        // (sans aucun chantier lié dans Baserow).
         const globales = allRows.filter(opt => opt.chantiersIds.length === 0);
         let rows = linked.length > 0 ? linked : globales;
         if (key === 'SousTaches' && modalLigneId !== null) {
@@ -8355,6 +8355,37 @@
   // ── GESTION CHANTIERS ──
   let chantiersGestionCache = [];
 
+  // Diagnostic en lecture seule : pour chaque tâche/sous-tâche, indique si elle est globale (lien vers
+  // chantier vide → visible pour tous les chantiers sans tâche spécifique) ou rattachée à un chantier
+  // précis dans Baserow (donc invisible pour les autres, sauf si ce chantier n'a rien d'autre).
+  async function diagnostiquerTachesGlobales() {
+    try {
+      const [resTypes, resSousTaches] = await Promise.all([
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
+      ]);
+      const allTypes = (await resTypes.json()).results || [];
+      const allSousTaches = (await resSousTaches.json()).results || [];
+
+      const decrire = row => {
+        const chantiers = (row['lien vers chantier'] || []).map(c => c.value);
+        const exclus = (row['exclure chantier'] || []).map(c => c.value);
+        let s = chantiers.length ? '⛔ rattachée à : ' + chantiers.join(', ') : '✅ globale';
+        if (exclus.length) s += ' — exclue de : ' + exclus.join(', ');
+        return s;
+      };
+
+      let msg = 'Tâches (' + allTypes.length + ') :\n';
+      msg += allTypes.map(t => '• ' + (t['Libellé']||'#'+t.id) + ' — ' + decrire(t)).join('\n') || '(aucune)';
+      msg += '\n\nSous-tâches (' + allSousTaches.length + ') :\n';
+      msg += allSousTaches.map(st => '• ' + (st['Libellé']||'#'+st.id) + ' — ' + decrire(st)).join('\n') || '(aucune)';
+      msg += '\n\nRappel : un chantier voit ses tâches rattachées si il en a ; sinon il voit les tâches globales (non rattachées).';
+      alert(msg);
+    } catch(e) {
+      alert('Erreur : ' + e.message);
+    }
+  }
+
   async function loadChantiersGestion() {
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -9375,108 +9406,7 @@
     }
   }
 
-  // Applique automatiquement les tâches/sous-tâches marquées "Modèle standard" (case à cocher Baserow,
-  // à ajouter sur Type de tâche et Sous-tâche) à un chantier qui vient d'être créé : chaque modèle est
-  // DUPLIQUÉ en une ligne propre à ce chantier (le modèle lui-même n'est jamais lié à un chantier, il
-  // reste réutilisable pour les prochains). Garde-fou : si ce chantier a déjà la moindre tâche ou
-  // sous-tâche qui lui est spécifiquement rattachée (une action manuelle a eu lieu entre-temps), on ne
-  // touche à rien.
-  async function appliquerTachesStandardsChantier(chantierId) {
-    const chId = parseInt(chantierId);
-    try {
-      const [resTypes, resSousTaches] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
-      ]);
-      const allTypes = (await resTypes.json()).results || [];
-      const allSousTaches = (await resSousTaches.json()).results || [];
 
-      const dejaDesTaches = allTypes.some(t => (t['lien vers chantier'] || []).some(c => c.id === chId))
-        || allSousTaches.some(st => (st['lien vers chantier'] || []).some(c => c.id === chId));
-      if (dejaDesTaches) return;
-
-      const typesStandards = allTypes.filter(t => t['Modèle standard'] === true);
-      if (!typesStandards.length) return;
-
-      // 1) Duplique chaque type de tâche standard pour ce chantier
-      const mappingTypes = {}; // id du modèle -> id de la copie propre au chantier
-      for (const type of typesStandards) {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true',
-          { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': type['Libellé'] || '', 'lien vers chantier': [chId] }) });
-        if (!res.ok) throw new Error(await res.text());
-        const saved = await res.json();
-        mappingTypes[type.id] = saved.id;
-      }
-
-      // 2) Duplique chaque sous-tâche standard, rattachée aux copies de types créées ci-dessus
-      const sousTachesStandards = allSousTaches.filter(st => st['Modèle standard'] === true);
-      for (const st of sousTachesStandards) {
-        const typesModeles = (st['lien vers type de tache'] || []).map(t => t.id);
-        const nouveauxTypes = typesModeles.map(id => mappingTypes[id]).filter(Boolean);
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true',
-          { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': nouveauxTypes }) });
-        if (!res.ok) throw new Error(await res.text());
-      }
-    } catch(e) {
-      console.error('Erreur application des tâches standards :', e);
-      throw e;
-    }
-  }
-
-  // Applique rétroactivement les tâches/sous-tâches "Modèle standard" à TOUS les chantiers existants
-  // qui n'ont encore aucune tâche rattachée (le garde-fou dans appliquerTachesStandardsChantier protège
-  // automatiquement ceux déjà configurés manuellement). Utile pour les chantiers créés avant l'ajout
-  // de cette fonctionnalité, sans avoir à ouvrir chacun d'eux un par un.
-  async function appliquerTachesStandardsTousChantiers() {
-    const btn = document.getElementById('btn-appliquer-taches-standards-masse');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Vérification…'; }
-    try {
-      const [resTypes, resSousTaches] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
-      ]);
-      if (!resTypes.ok) throw new Error('Lecture Type de tâche : ' + resTypes.status + ' ' + (await resTypes.text()));
-      if (!resSousTaches.ok) throw new Error('Lecture Sous-tâche : ' + resSousTaches.status + ' ' + (await resSousTaches.text()));
-      const allTypes = (await resTypes.json()).results || [];
-      const allSousTaches = (await resSousTaches.json()).results || [];
-
-      // Diagnostic : le champ "Modèle standard" existe-t-il, et si oui est-il coché quelque part ?
-      const champPresent = allTypes.length > 0 && Object.prototype.hasOwnProperty.call(allTypes[0], 'Modèle standard');
-      if (allTypes.length > 0 && !champPresent) {
-        console.warn('Champs disponibles sur Type de tâche :', Object.keys(allTypes[0]));
-        alert('Le champ "Modèle standard" est introuvable sur la table Type de tâche.\nVérifie dans Baserow que la case à cocher a bien été créée avec ce nom exact (accent inclus), sur la table Type de tâche (id 1014444) ET Sous-tâche (id 1015608).');
-        return;
-      }
-      const typesStandards = allTypes.filter(t => t['Modèle standard'] === true);
-      const sousTachesStandards = allSousTaches.filter(st => st['Modèle standard'] === true);
-      if (!typesStandards.length && !sousTachesStandards.length) {
-        alert('Le champ "Modèle standard" existe mais aucune tâche ni sous-tâche n\u2019est cochée.\nOuvre la table Type de tâche (et Sous-tâche) dans Baserow et coche la case sur celles à appliquer par défaut, puis relance.');
-        return;
-      }
-
-      if (btn) { btn.textContent = '⏳ Application en cours…'; }
-      if (!confirm('Appliquer les tâches/sous-tâches "Modèle standard" (' + typesStandards.length + ' tâche(s), ' + sousTachesStandards.length + ' sous-tâche(s)) à tous les chantiers qui n\u2019en ont encore aucune ?\nLes chantiers déjà configurés (même partiellement) ne seront pas modifiés.')) return;
-
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const chantiers = (await res.json()).results || [];
-      let compteur = 0;
-      let erreurs = 0;
-      for (const c of chantiers) {
-        // On mesure l'état "avant" pour savoir si ce chantier a réellement été complété par cette passe
-        // (filtre client, les filtres URL Baserow rejettent les noms de champ avec espaces/accents)
-        const avaitDejaDesTaches = allTypes.some(t => (t['lien vers chantier'] || []).some(cc => cc.id === c.id));
-        try {
-          await appliquerTachesStandardsChantier(c.id);
-          if (!avaitDejaDesTaches) compteur++;
-        } catch(e) { erreurs++; }
-      }
-      alert('✅ Tâches standards appliquées à ' + compteur + ' chantier(s) sur ' + chantiers.length + '.' + (erreurs ? ('\n⚠️ ' + erreurs + ' erreur(s), voir la console.') : ''));
-    } catch(e) {
-      alert('Erreur : ' + e.message);
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '🪄 Appliquer les modèles standards'; }
-    }
-  }
 
   // Id du type de tâche actuellement sélectionné (puce active) dans l'onglet Tâches du chantier ouvert
   let _typeTacheSelectionneId = null;
@@ -9965,11 +9895,10 @@
         await chargerFichiersChantier(rowId);
         // En modification, on peut uploader
         document.getElementById('chantier-fichiers-liste').previousElementSibling && null;
-        // Charger les tâches/sous-tâches spécifiques à ce chantier — si ce chantier n'en a encore
-        // aucune (créé avant l'introduction des modèles standards, ou jamais complété), on applique
-        // rétroactivement les modèles standards avant de charger l'onglet.
+        // Charger les tâches/sous-tâches spécifiques à ce chantier (les tâches "Modèle standard"
+        // laissées sans chantier dans Baserow s'affichent automatiquement en repli tant qu'aucune
+        // tâche spécifique n'a été ajoutée à ce chantier — voir openModal)
         _typeTacheSelectionInitialisee = false;
-        await appliquerTachesStandardsChantier(rowId);
         await chargerTachesChantier(rowId);
       } catch(e) {}
       // Charger un éventuel plan de charge déjà existant pour ce chantier
@@ -10074,7 +10003,6 @@
         const lblUpload = document.querySelector('#chantier-tab-fichiers label');
         if (lblUpload) lblUpload.style.opacity = '1';
         document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
-        await appliquerTachesStandardsChantier(saved.id);
         await chargerTachesChantier(saved.id);
         switchChantierTab('fichiers');
         await loadChantiersGestion();
@@ -12394,7 +12322,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px;gap:8px;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
       <div style="display:flex;gap:8px">
-        <button id="btn-appliquer-taches-standards-masse" onclick="appliquerTachesStandardsTousChantiers()" title="Applique les tâches/sous-tâches 'Modèle standard' à tous les chantiers qui n'en ont encore aucune" style="background:#f1ece3;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🪄 Appliquer les modèles standards</button>
+        <button onclick="diagnostiquerTachesGlobales()" title="Vérifie l'état de chaque tâche/sous-tâche : globale ou rattachée à un chantier précis" style="background:#f1ece3;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🔍 Vérifier les tâches</button>
         <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
       </div>
     </div>
