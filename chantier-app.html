@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9373,8 +9373,10 @@
     const typesSpecifiques = allTypes
       .filter(t => (t['lien vers chantier'] || []).some(c => c.id === chId))
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
+    // "Disponibles" = uniquement les tâches globales (sans chantier associé, ex. Congés/RTT/Maladie).
+    // Une tâche créée pour un AUTRE chantier n'apparaît plus ici : elle reste propre à son chantier.
     const typesDisponibles = allTypes
-      .filter(t => !(t['lien vers chantier'] || []).some(c => c.id === chId))
+      .filter(t => !(t['lien vers chantier'] || []).length)
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
 
     if (!_typeTacheSelectionInitialisee) {
@@ -9438,20 +9440,17 @@
     return chip;
   }
 
-  // Puce d'une tâche pas encore affectée à ce chantier : un simple clic sur le texte l'affecte et la
-  // sélectionne directement ; le 🗑 la supprime définitivement de la base (tous chantiers confondus).
+  // Puce d'une tâche globale (entreprise, sans chantier associé — ex. Congés/RTT/Maladie) : un clic
+  // l'affecte à ce chantier. Les tâches créées pour un autre chantier n'apparaissent plus ici du tout.
   function creerChipTypeDisponible(type, chId) {
-    const wrap = document.createElement('span');
-    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#f1ece3;border:1.5px solid #ddd5c5;border-radius:20px;padding:6px 6px 6px 14px;white-space:nowrap';
-
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.textContent = type['Libellé'] || ('#' + type.id);
-    chip.style.cssText = 'background:none;border:none;padding:0;margin:0;font-size:12px;color:var(--gris);font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s';
+    chip.style.cssText = 'display:inline-flex;align-items:center;background:#f1ece3;border:1.5px solid #ddd5c5;border-radius:20px;padding:6px 14px;font-size:12px;color:var(--gris);font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s';
     chip.title = 'Cliquer pour affecter cette tâche à ce chantier';
     chip.onclick = async () => {
       chip.disabled = true;
-      wrap.style.opacity = '0.5';
+      chip.style.opacity = '0.5';
       try {
         await lierTacheExistante('TypeTaches', type.id, chId);
         _typeTacheSelectionneId = type.id;
@@ -9459,20 +9458,10 @@
       } catch(e) {
         alert('Erreur lors de la liaison : ' + e.message);
         chip.disabled = false;
-        wrap.style.opacity = '1';
+        chip.style.opacity = '1';
       }
     };
-    wrap.appendChild(chip);
-
-    const btnDel = document.createElement('button');
-    btnDel.type = 'button';
-    btnDel.textContent = '🗑';
-    btnDel.title = 'Retirer cette tâche de ce chantier (elle n\u2019est pas supprimée, juste dissociée)';
-    btnDel.style.cssText = 'background:rgba(192,57,43,0.15);border:none;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;cursor:pointer;font-size:10px;color:#c0392b;flex-shrink:0;padding:0';
-    btnDel.onclick = e => { e.stopPropagation(); supprimerTacheChantier('TypeTaches', type.id, chId); };
-    wrap.appendChild(btnDel);
-
-    return wrap;
+    return chip;
   }
 
 
@@ -9504,7 +9493,6 @@
     legende.style.cssText = 'font-size:10px;color:#999;margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:5px';
     legende.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c0392b"></span> affectée à cette tâche'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ddd5c5"></span> libre'
-      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#2E75B6"></span> affectée à cette tâche (autre chantier)'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#8e5aa6"></span> utilisée par une autre tâche de ce chantier';
     panel.appendChild(legende);
 
@@ -9515,9 +9503,11 @@
     ).sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
     const idsAffectes = new Set(sousTachesDuType.map(st => st.id));
 
-    // Toutes les autres sous-tâches restent proposables (libres, affectées ailleurs, ou sur une autre tâche de ce chantier)
+    // Proposables : libres (aucun chantier) ou déjà sur CE chantier via une autre tâche.
+    // Une sous-tâche qui appartient à un AUTRE chantier n'apparaît plus ici : elle reste propre à son chantier.
     const autresSousTaches = allSousTaches
       .filter(st => !idsAffectes.has(st.id))
+      .filter(st => !(st['lien vers chantier'] || []).length || (st['lien vers chantier'] || []).some(c => c.id === chId))
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
 
     // Affectées en premier, puis disponibles
@@ -9537,16 +9527,13 @@
             renderTachesTableChantier(chId);
           }));
         } else {
-          const typesLies = (st['lien vers type de tache'] || []).map(t => t.id);
           const dejaSurCeChantier = (st['lien vers chantier'] || []).some(c => c.id === chId);
-          let variant = 'defaut';
-          if (dejaSurCeChantier) variant = 'partagee';
-          else if (typesLies.includes(type.id)) variant = 'associee';
+          const variant = dejaSurCeChantier ? 'partagee' : 'defaut';
           liste.appendChild(creerPuceSousTacheToggle(label, false, variant, async () => {
             await lierSousTacheAuType(st.id, chId, type.id);
             afficherToastTache('✓ « ' + label + ' » affectée à « ' + (type['Libellé'] || 'cette tâche') + ' »');
             renderTachesTableChantier(chId);
-          }, () => supprimerTacheChantier('SousTaches', st.id, chId)));
+          }, dejaSurCeChantier ? (() => supprimerTacheChantier('SousTaches', st.id, chId)) : null));
         }
       });
     }
