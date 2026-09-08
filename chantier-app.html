@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -968,7 +968,11 @@
           typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
         })).filter(opt => !opt.excludeIds.includes(chantierId));
         const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
-        let rows = linked.length > 0 ? linked : allRows;
+        // Si ce chantier n'a aucune tâche qui lui est spécifiquement rattachée, on ne retombe pas sur
+        // TOUTES les tâches (y compris celles des autres chantiers) : uniquement les tâches globales
+        // (sans aucun chantier lié), du type Congés/RTT/Maladie.
+        const globales = allRows.filter(opt => opt.chantiersIds.length === 0);
+        let rows = linked.length > 0 ? linked : globales;
         if (key === 'SousTaches' && modalLigneId !== null) {
           const ligne = lignes.find(l => l.id === modalLigneId);
           if (ligne && ligne.typeTache) {
@@ -9434,17 +9438,20 @@
     return chip;
   }
 
-  // Puce d'une tâche pas encore affectée à ce chantier : un simple clic l'affecte et la sélectionne
-  // directement, sans passer par une case à cocher séparée.
+  // Puce d'une tâche pas encore affectée à ce chantier : un simple clic sur le texte l'affecte et la
+  // sélectionne directement ; le 🗑 la supprime définitivement de la base (tous chantiers confondus).
   function creerChipTypeDisponible(type, chId) {
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:#f1ece3;border:1.5px solid #ddd5c5;border-radius:20px;padding:6px 6px 6px 14px;white-space:nowrap';
+
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.textContent = type['Libellé'] || ('#' + type.id);
-    chip.style.cssText = 'display:inline-flex;align-items:center;background:#f1ece3;border:1.5px solid #ddd5c5;border-radius:20px;padding:6px 14px;font-size:12px;color:var(--gris);font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s';
+    chip.style.cssText = 'background:none;border:none;padding:0;margin:0;font-size:12px;color:var(--gris);font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s';
     chip.title = 'Cliquer pour affecter cette tâche à ce chantier';
     chip.onclick = async () => {
       chip.disabled = true;
-      chip.style.opacity = '0.5';
+      wrap.style.opacity = '0.5';
       try {
         await lierTacheExistante('TypeTaches', type.id, chId);
         _typeTacheSelectionneId = type.id;
@@ -9452,11 +9459,22 @@
       } catch(e) {
         alert('Erreur lors de la liaison : ' + e.message);
         chip.disabled = false;
-        chip.style.opacity = '1';
+        wrap.style.opacity = '1';
       }
     };
-    return chip;
+    wrap.appendChild(chip);
+
+    const btnDel = document.createElement('button');
+    btnDel.type = 'button';
+    btnDel.textContent = '🗑';
+    btnDel.title = 'Retirer cette tâche de ce chantier (elle n\u2019est pas supprimée, juste dissociée)';
+    btnDel.style.cssText = 'background:rgba(192,57,43,0.15);border:none;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;cursor:pointer;font-size:10px;color:#c0392b;flex-shrink:0;padding:0';
+    btnDel.onclick = e => { e.stopPropagation(); supprimerTacheChantier('TypeTaches', type.id, chId); };
+    wrap.appendChild(btnDel);
+
+    return wrap;
   }
+
 
   // Panneau de détail : sous-tâches de la tâche actuellement sélectionnée (puce active), propres à CETTE
   // tâche uniquement (chaque tâche a ses propres affectations). Liaison limitée aux sous-tâches compatibles
@@ -9528,7 +9546,7 @@
             await lierSousTacheAuType(st.id, chId, type.id);
             afficherToastTache('✓ « ' + label + ' » affectée à « ' + (type['Libellé'] || 'cette tâche') + ' »');
             renderTachesTableChantier(chId);
-          }));
+          }, () => supprimerTacheChantier('SousTaches', st.id, chId)));
         }
       });
     }
@@ -9586,7 +9604,9 @@
     toast._timeoutId = setTimeout(() => { toast.style.opacity = '0'; }, 1800);
   }
 
-  function creerPuceSousTacheToggle(label, actif, variant, onToggle) {
+  // onDelete est optionnel : quand fourni (uniquement pour les sous-tâches non affectées), un 🗑
+  // supplémentaire permet de la supprimer définitivement de la base plutôt que de simplement l'affecter.
+  function creerPuceSousTacheToggle(label, actif, variant, onToggle, onDelete) {
     // Mêmes couleurs que les points de la légende, pour un mapping direct et sans ambiguïté
     const COULEURS_POINT = {
       affectee: '#c0392b',
@@ -9595,9 +9615,13 @@
       defaut:   '#ddd5c5'
     };
     const couleurPoint = actif ? COULEURS_POINT.affectee : (COULEURS_POINT[variant] || COULEURS_POINT.defaut);
+
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:#fff;border:1.5px solid ' + (actif ? '#c0392b' : '#e3ded2') + ';border-radius:20px;padding:5px ' + (onDelete ? '5px' : '12px') + ' 5px 12px;white-space:nowrap;user-select:none;transition:opacity .15s';
+
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:7px;background:#fff;border:1.5px solid ' + (actif ? '#c0392b' : '#e3ded2') + ';border-radius:20px;padding:5px 12px;font-size:12px;color:var(--gris);font-weight:' + (actif ? '700' : '600') + ';cursor:pointer;white-space:nowrap;user-select:none;transition:opacity .15s';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:7px;background:none;border:none;padding:0;margin:0;font-size:12px;color:var(--gris);font-weight:' + (actif ? '700' : '600') + ';cursor:pointer;white-space:nowrap';
     const point = document.createElement('span');
     point.style.cssText = 'width:9px;height:9px;border-radius:50%;background:' + couleurPoint + ';flex-shrink:0';
     chip.appendChild(point);
@@ -9606,16 +9630,28 @@
     chip.appendChild(span);
     chip.onclick = async () => {
       chip.disabled = true;
-      chip.style.opacity = '0.55';
+      wrap.style.opacity = '0.55';
       try {
         await onToggle();
       } catch(e) {
         alert('Erreur : ' + e.message);
         chip.disabled = false;
-        chip.style.opacity = '1';
+        wrap.style.opacity = '1';
       }
     };
-    return chip;
+    wrap.appendChild(chip);
+
+    if (onDelete) {
+      const btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.textContent = '🗑';
+      btnDel.title = 'Retirer cette sous-tâche de ce chantier (elle n\u2019est pas supprimée, juste dissociée)';
+      btnDel.style.cssText = 'background:rgba(192,57,43,0.15);border:none;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;cursor:pointer;font-size:10px;color:#c0392b;flex-shrink:0;padding:0';
+      btnDel.onclick = e => { e.stopPropagation(); onDelete(); };
+      wrap.appendChild(btnDel);
+    }
+
+    return wrap;
   }
 
   // Retire une sous-tâche d'une tâche précise (retire uniquement le type, la sous-tâche n'est pas supprimée :
