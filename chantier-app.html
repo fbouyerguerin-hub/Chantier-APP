@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -963,14 +963,16 @@
         const chantierId = parseInt(chantierSelectionne.id);
         const allRows = (data.results || []).map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
+          chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
           excludeIds: (row['exclure chantier'] || []).map(c => c.id),
           typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
-        // Par défaut, toutes les tâches/sous-tâches sont visibles pour tous les chantiers, quel que soit
-        // leur lien dans Baserow ; seule une exclusion explicite (champ "exclure chantier", sur cette
-        // ligne précise) la masque pour un chantier donné. Les opérateurs voient donc toujours toutes
-        // les tâches, même sur un chantier qui n'a rien de spécifique.
         })).filter(opt => !opt.excludeIds.includes(chantierId));
-        let rows = allRows;
+        const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
+        // Si ce chantier n'a aucune tâche qui lui est spécifiquement rattachée, on ne retombe pas sur
+        // TOUTES les tâches (y compris celles des autres chantiers) : uniquement les tâches globales
+        // (sans aucun chantier lié), du type Congés/RTT/Maladie.
+        const globales = allRows.filter(opt => opt.chantiersIds.length === 0);
+        let rows = linked.length > 0 ? linked : globales;
         if (key === 'SousTaches' && modalLigneId !== null) {
           const ligne = lignes.find(l => l.id === modalLigneId);
           if (ligne && ligne.typeTache) {
@@ -8353,39 +8355,6 @@
   // ── GESTION CHANTIERS ──
   let chantiersGestionCache = [];
 
-  // Diagnostic en lecture seule : toutes les tâches/sous-tâches sont visibles par défaut sur tous les
-  // chantiers ; seul le champ "exclure chantier" (dans Baserow) peut en masquer une pour un chantier
-  // précis. Ce diagnostic liste celles qui ont une exclusion active.
-  async function diagnostiquerTachesGlobales() {
-    try {
-      const [resTypes, resSousTaches] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
-      ]);
-      const allTypes = (await resTypes.json()).results || [];
-      const allSousTaches = (await resSousTaches.json()).results || [];
-
-      const exclues = row => (row['exclure chantier'] || []).length > 0;
-      const typesExclus = allTypes.filter(exclues);
-      const sousTachesExclues = allSousTaches.filter(exclues);
-
-      if (!typesExclus.length && !sousTachesExclues.length) {
-        alert('✅ Aucune exclusion active : toutes les tâches (' + allTypes.length + ') et sous-tâches (' + allSousTaches.length + ') sont visibles pour tous les chantiers.');
-        return;
-      }
-
-      const decrire = row => '⛔ masquée pour : ' + (row['exclure chantier'] || []).map(c => c.value).join(', ');
-      let msg = 'Toutes les tâches sont visibles partout par défaut, sauf celles-ci :\n\n';
-      msg += 'Tâches avec exclusion (' + typesExclus.length + ') :\n';
-      msg += typesExclus.map(t => '• ' + (t['Libellé']||'#'+t.id) + ' — ' + decrire(t)).join('\n') || '(aucune)';
-      msg += '\n\nSous-tâches avec exclusion (' + sousTachesExclues.length + ') :\n';
-      msg += sousTachesExclues.map(st => '• ' + (st['Libellé']||'#'+st.id) + ' — ' + decrire(st)).join('\n') || '(aucune)';
-      alert(msg);
-    } catch(e) {
-      alert('Erreur : ' + e.message);
-    }
-  }
-
   async function loadChantiersGestion() {
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -9895,9 +9864,7 @@
         await chargerFichiersChantier(rowId);
         // En modification, on peut uploader
         document.getElementById('chantier-fichiers-liste').previousElementSibling && null;
-        // Charger les tâches/sous-tâches spécifiques à ce chantier (les tâches "Modèle standard"
-        // laissées sans chantier dans Baserow s'affichent automatiquement en repli tant qu'aucune
-        // tâche spécifique n'a été ajoutée à ce chantier — voir openModal)
+        // Charger les tâches/sous-tâches spécifiques à ce chantier
         _typeTacheSelectionInitialisee = false;
         await chargerTachesChantier(rowId);
       } catch(e) {}
@@ -12319,12 +12286,9 @@
 
   <!-- CHANTIERS -->
   <div id="gestion-chantiers" style="display:none">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
-      <div style="display:flex;gap:8px">
-        <button onclick="diagnostiquerTachesGlobales()" title="Liste les tâches/sous-tâches ayant une exclusion active pour certains chantiers" style="background:#f1ece3;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🔍 Vérifier les exclusions</button>
-        <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
-      </div>
+      <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
     <div style="margin:0 16px 10px">
       <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none" />
