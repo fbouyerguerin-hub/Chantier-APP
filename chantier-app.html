@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -963,18 +963,14 @@
         const chantierId = parseInt(chantierSelectionne.id);
         const allRows = (data.results || []).map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
-          chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
           excludeIds: (row['exclure chantier'] || []).map(c => c.id),
           typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
+        // Par défaut, toutes les tâches/sous-tâches sont visibles pour tous les chantiers, quel que soit
+        // leur lien dans Baserow ; seule une exclusion explicite (champ "exclure chantier", sur cette
+        // ligne précise) la masque pour un chantier donné. Les opérateurs voient donc toujours toutes
+        // les tâches, même sur un chantier qui n'a rien de spécifique.
         })).filter(opt => !opt.excludeIds.includes(chantierId));
-        const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
-        // Règle d'origine (celle qui isole correctement le chantier "Absence") : un chantier qui a ses
-        // propres tâches rattachées ne voit QUE celles-ci. Un chantier sans aucune tâche rattachée voit
-        // les tâches globales (sans aucun chantier lié) — c'est là qu'il faut vérifier dans Baserow que
-        // les tâches "génériques" (Étude, Fabrication, Pose…) sont bien SANS chantier lié, sans quoi
-        // elles restent piégées sur le seul chantier auquel elles ont été rattachées par erreur.
-        const globales = allRows.filter(opt => opt.chantiersIds.length === 0);
-        let rows = linked.length > 0 ? linked : globales;
+        let rows = allRows;
         if (key === 'SousTaches' && modalLigneId !== null) {
           const ligne = lignes.find(l => l.id === modalLigneId);
           if (ligne && ligne.typeTache) {
@@ -8357,10 +8353,9 @@
   // ── GESTION CHANTIERS ──
   let chantiersGestionCache = [];
 
-  // Diagnostic en lecture seule : pour chaque tâche/sous-tâche, indique si elle est globale (lien vers
-  // chantier vide → visible pour tout chantier sans tâche spécifique, comme le repli déjà en place pour
-  // "Absence") ou rattachée à un chantier précis dans Baserow (donc réservée à lui, invisible ailleurs
-  // tant que ce chantier a au moins une tâche rattachée).
+  // Diagnostic en lecture seule : toutes les tâches/sous-tâches sont visibles par défaut sur tous les
+  // chantiers ; seul le champ "exclure chantier" (dans Baserow) peut en masquer une pour un chantier
+  // précis. Ce diagnostic liste celles qui ont une exclusion active.
   async function diagnostiquerTachesGlobales() {
     try {
       const [resTypes, resSousTaches] = await Promise.all([
@@ -8370,19 +8365,21 @@
       const allTypes = (await resTypes.json()).results || [];
       const allSousTaches = (await resSousTaches.json()).results || [];
 
-      const decrire = row => {
-        const chantiers = (row['lien vers chantier'] || []).map(c => c.value);
-        const exclus = (row['exclure chantier'] || []).map(c => c.value);
-        let s = chantiers.length ? '⛔ rattachée à : ' + chantiers.join(', ') : '✅ globale';
-        if (exclus.length) s += ' — exclue de : ' + exclus.join(', ');
-        return s;
-      };
+      const exclues = row => (row['exclure chantier'] || []).length > 0;
+      const typesExclus = allTypes.filter(exclues);
+      const sousTachesExclues = allSousTaches.filter(exclues);
 
-      let msg = 'Tâches (' + allTypes.length + ') :\n';
-      msg += allTypes.map(t => '• ' + (t['Libellé']||'#'+t.id) + ' — ' + decrire(t)).join('\n') || '(aucune)';
-      msg += '\n\nSous-tâches (' + allSousTaches.length + ') :\n';
-      msg += allSousTaches.map(st => '• ' + (st['Libellé']||'#'+st.id) + ' — ' + decrire(st)).join('\n') || '(aucune)';
-      msg += '\n\nRappel : un chantier voit ses tâches rattachées si il en a ; sinon il voit les tâches globales. Vide "lien vers chantier" sur une tâche pour la rendre à nouveau accessible à tous.';
+      if (!typesExclus.length && !sousTachesExclues.length) {
+        alert('✅ Aucune exclusion active : toutes les tâches (' + allTypes.length + ') et sous-tâches (' + allSousTaches.length + ') sont visibles pour tous les chantiers.');
+        return;
+      }
+
+      const decrire = row => '⛔ masquée pour : ' + (row['exclure chantier'] || []).map(c => c.value).join(', ');
+      let msg = 'Toutes les tâches sont visibles partout par défaut, sauf celles-ci :\n\n';
+      msg += 'Tâches avec exclusion (' + typesExclus.length + ') :\n';
+      msg += typesExclus.map(t => '• ' + (t['Libellé']||'#'+t.id) + ' — ' + decrire(t)).join('\n') || '(aucune)';
+      msg += '\n\nSous-tâches avec exclusion (' + sousTachesExclues.length + ') :\n';
+      msg += sousTachesExclues.map(st => '• ' + (st['Libellé']||'#'+st.id) + ' — ' + decrire(st)).join('\n') || '(aucune)';
       alert(msg);
     } catch(e) {
       alert('Erreur : ' + e.message);
@@ -12325,7 +12322,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px;gap:8px;flex-wrap:wrap">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
       <div style="display:flex;gap:8px">
-        <button onclick="diagnostiquerTachesGlobales()" title="Vérifie l'état de chaque tâche/sous-tâche : globale ou rattachée à un chantier précis" style="background:#f1ece3;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🔍 Vérifier les tâches</button>
+        <button onclick="diagnostiquerTachesGlobales()" title="Liste les tâches/sous-tâches ayant une exclusion active pour certains chantiers" style="background:#f1ece3;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🔍 Vérifier les exclusions</button>
         <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
       </div>
     </div>
