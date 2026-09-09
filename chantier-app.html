@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -627,7 +627,7 @@
   // Postes assimilés à "Fab Acier"/"Fab Bois" : accès à toutes les commandes
   // (pas de restriction aux chantiers personnellement affectés).
   const POSTES_ASSIMILES_FAB = ['Fab Acier', 'Fab Bois', 'Apprenti atelier'];
-  // Postes dont les RTT (35h→39h) sont majorées de 25% (apprentis).
+  // Postes dont les RTT (36h→40h) sont majorées de 25% (apprentis).
   const POSTES_RTT_MAJOREE_25 = ['Apprenti poseur', 'Apprenti atelier'];
 
   // ── Jours fériés français ────────────────────────────────────────────────
@@ -2045,7 +2045,7 @@
   }
 
   // Calcule le nombre d'heures de RTT acquises sur l'année civile en cours :
-  // le nombre d'heures réellement travaillées entre 35h et 39h chaque semaine (plafonné à 4h),
+  // le nombre d'heures réellement travaillées entre 36h et 40h chaque semaine (plafonné à 4h),
   // hors semaine couverte par une absence bloquante — même règle que calculerRttEtHeuresSup,
   // via la Map semainesRtt (lundiStr → heures RTT de cette semaine) qu'elle retourne.
   function calculerDonneesGraphRtt(semainesRtt, heuresSupResult, rttSoldeInitial, heuresSupSoldeInitial) {
@@ -2076,14 +2076,14 @@
   }
 
   // Calcule en une seule passe, pour l'année civile en cours :
-  //  - le nombre d'heures de RTT acquises : le nombre réel d'heures travaillées entre 35h et 39h
+  //  - le nombre d'heures de RTT acquises : le nombre réel d'heures travaillées entre 36h et 40h
   //    chaque semaine (plafonné à 4h/semaine), hors semaine couverte par une absence bloquante
   //    (congé payé, maladie, sans solde, accident)
-  //  - le cumul d'heures supplémentaires (au-delà de 42,5h/semaine ; les heures entre 39h et 42,5h sont
+  //  - le cumul d'heures supplémentaires (au-delà de 42,5h/semaine ; les heures entre 35h et 36h, et entre 40h et 42,5h, sont
   //    payées directement et ne sont donc pas comptabilisées dans le cumul)
   // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
   // cumul réel d'heures de la semaine qui détermine le nombre d'heures de RTT acquises (seuil : 35h).
-  // Pour les postes apprentis (POSTES_RTT_MAJOREE_25), la RTT (35h→39h) est majorée de 25%.
+  // Pour les postes apprentis (POSTES_RTT_MAJOREE_25), la RTT (36h→40h) est majorée de 25%.
   function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId, inclureSemainesVides = false, poste = '') {
     const majorationRtt = POSTES_RTT_MAJOREE_25.includes(poste) ? 1.25 : 1;
     const annee = new Date().getFullYear();
@@ -2138,16 +2138,19 @@
       if (!semaineBloquee && totalHeures >= HEURES_BASE_RTT) {
         let rttSemaine, heuresSup = 0, surplus = 0;
         if (majorationRtt !== 1) {
-          // Postes apprentis : pas de palier RTT (35-39h) / heures sup (39-42,5h) /
+          // Postes apprentis : pas de palier RTT (36-40h) / heures sup (35-36h et 40-42,5h) /
           // heures en plus (>42,5h) - tout ce qui dépasse 35h compte comme RTT,
           // majorée de 25%.
           rttSemaine = (totalHeures - HEURES_BASE_RTT) * majorationRtt;
         } else {
-          // RTT = nombre d'heures réellement travaillées entre 35h et 39h (pas un forfait fixe)
-          rttSemaine = Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_BASE_RTT;
+          // Heures sup entre 35h et 36h : payées directement, non comptabilisées dans le cumul
+          const heuresSup1 = Math.min(totalHeures, HEURES_SUP1_FIN) - HEURES_BASE_RTT;
+          // RTT = nombre d'heures réellement travaillées entre 36h et 40h (pas un forfait fixe)
+          rttSemaine = Math.max(0, Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_SUP1_FIN);
+          heuresSup = heuresSup1;
           if (totalHeures > HEURES_NORMALES_SEMAINE) {
-            // Heures sup entre 39h et 42.5h : payées directement, non comptabilisées dans le cumul
-            heuresSup = Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
+            // Heures sup entre 40h et 42.5h : payées directement, non comptabilisées dans le cumul
+            heuresSup += Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
             // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
             surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
           }
@@ -2192,11 +2195,13 @@
 
   // Seuils hebdomadaires :
   //  0 → 35h  : heures normales
-  // 35 → 39h  : génère de la RTT au prorata des heures réellement travaillées (4h max) (HEURES_BASE_RTT → HEURES_NORMALES_SEMAINE)
-  // 39 → 42.5h: heures supplémentaires (HEURES_NORMALES_SEMAINE → HEURES_SEUIL_PAYEES)
+  // 35 → 36h  : heures supplémentaires (HEURES_BASE_RTT → HEURES_SUP1_FIN)
+  // 36 → 40h  : génère de la RTT au prorata des heures réellement travaillées (4h max) (HEURES_SUP1_FIN → HEURES_NORMALES_SEMAINE)
+  // 40 → 42.5h: heures supplémentaires (HEURES_NORMALES_SEMAINE → HEURES_SEUIL_PAYEES)
   // > 42.5h   : heures en plus (surplus)
-  const HEURES_BASE_RTT = 35;          // seuil déclencheur RTT
-  const HEURES_NORMALES_SEMAINE = 39;  // seuil heures sup
+  const HEURES_BASE_RTT = 35;          // seuil déclencheur (début 1er palier heures sup)
+  const HEURES_SUP1_FIN = 36;          // fin du 1er palier heures sup / début palier RTT
+  const HEURES_NORMALES_SEMAINE = 40;  // fin palier RTT / début 2e palier heures sup
   const HEURES_SEUIL_PAYEES = 42.5;   // seuil heures en plus
 
   // Date pivot exceptionnelle : le calcul automatique du cumul RTT/heures sup
@@ -2349,7 +2354,7 @@
         ${legendeMajoration}
         <div class="rtt-table-wrap">
           <table class="rtt-table">
-            <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
+            <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (36-40h)</th><th>H.sup (35-36h/40-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
             <tbody>
               ${heuresSupResult.detail.map(d => {
                 const lundi = new Date(d.lundi + 'T12:00:00');
@@ -2462,7 +2467,7 @@
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
-          <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile</div>
+          <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 36h et 40h (plafonné à 4h/semaine, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 35h et 36h et entre 40h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile</div>
           ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
 
@@ -2668,7 +2673,7 @@
         ${legendeHorsPeriode2}
         ${legendeMajoration2}
         <div class="rtt-table-wrap"><table class="rtt-table">
-          <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (35-39h)</th><th>H.sup (39-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
+          <thead><tr><th>Semaine</th><th>Travaillées</th><th>RTT (36-40h)</th><th>H.sup (35-36h/40-42,5h)</th><th>H.en plus (&gt;42,5h)</th></tr></thead>
           <tbody>${heuresSupResult.detail.map(d => {
             const lundi = new Date(d.lundi + 'T12:00:00');
             const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
@@ -2752,7 +2757,7 @@
         </tr>`;
       }).join('');
 
-    area.innerHTML = `<div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 35h et 39h (plafonné à 4h/semaine, dès 35h atteintes, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 39h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
+    area.innerHTML = `<div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 36h et 40h (plafonné à 4h/semaine, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 35h et 36h et entre 40h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile, remise à zéro au 1ᵉʳ janvier</div>
       <div class="rtt-note-annuelle">📌 Le solde prévisionnel restant part du solde actuel réellement acquis par chacun, puis projette les semaines restantes de l'année au rythme forfaitaire de ${HEURES_RTT_PAR_SEMAINE}h/semaine (soit l'équivalent d'un cumul indicatif de ${HEURES_PREVISIONNEL_ANNUEL_RTT}h/an).</div>` +
       (lignes ? `<div class="rtt-table-wrap"><table class="rtt-table">
         <thead><tr><th>Collaborateur</th><th>Acquis</th><th>Pris</th><th>Solde prévisionnel restant</th><th>Attente</th></tr></thead>
