@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7004,12 +7004,17 @@
     if (idxOld !== -1) planningCollectifData.splice(idxOld, 1);
 
     const collabObj = COLLABORATEURS_ADMIN.find(c => c.nom === collab.collabNom);
+    const notesBackup = backup?.['Notes'] || '';
+    const fichiersBackup = backup?.['Fichiers'] || [];
+    const heuresBackup = backup?.['heures'] || backup?.['Heures'] || '';
     const tempRow = {
       id: 'temp-' + Date.now(),
       Date: newDateStr,
       Chantier: [{ id: newChantier.id, value: newChantier.nom }],
       Collaborateurs: [{ id: collabObj?.collabId, value: collab.collabNom }],
-      Notes: ''
+      Notes: notesBackup,
+      Fichiers: fichiersBackup,
+      heures: heuresBackup
     };
     planningCollectifData.push(tempRow);
     renderPlanningCollectifGrid();
@@ -7017,7 +7022,7 @@
     try {
       await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + collab.affId + '/', { method: 'DELETE', headers: HEADERS });
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs: [collabObj?.collabId], Chantier: [parseInt(newChantier.id)], Date: newDateStr, Notes: '' }) });
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ Collaborateurs: [collabObj?.collabId], Chantier: [parseInt(newChantier.id)], Date: newDateStr, Notes: notesBackup, Fichiers: fichiersBackup.map(f => ({ name: f.name })) }) });
       if (!res.ok) throw new Error(await res.text());
       const real = await res.json();
       const idxTemp = planningCollectifData.indexOf(tempRow);
