@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6627,11 +6627,11 @@
     const [resP, congesResultats, resVeh] = await Promise.all([
       fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
       fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200'),
-      vehiculesCollectif.length ? Promise.resolve(null) : fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200', { headers: HEADERS })
+      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200', { headers: HEADERS })
     ]);
     planningCollectifData = (await resP.json()).results || [];
     congesCollectifData = congesResultats.filter(r => r['Statut']?.value !== 'Refusé');
-    if (resVeh) { vehiculesCollectif = ((await resVeh.json()).results || []).map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id })); }
+    vehiculesCollectif = ((await resVeh.json()).results || []).map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id }));
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
     // Semaine passée → saisies réelles (on compare le vendredi, pas le lundi)
