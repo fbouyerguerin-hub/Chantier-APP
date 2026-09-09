@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -5718,10 +5718,29 @@
     ).join('');
   }
 
+  function afficherLienDevisChantier(fichiers, boxId) {
+    const box = document.getElementById(boxId || 'chantier-charge-lien-devis');
+    const pdfs = (fichiers || []).filter(f => /\.pdf$/i.test(f.visible_name || f.name || ''));
+    if (!pdfs.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    box.innerHTML = pdfs.map(f => '<a href="' + f.url + '" target="_blank" style="display:flex;align-items:center;gap:8px;background:#fff3cd;border:1.5px solid #c8a96e;border-radius:8px;padding:9px 12px;font-size:13px;font-weight:700;color:#7a5c1e;text-decoration:none;margin-bottom:6px">📄 ' +
+      (f.visible_name || f.name || 'PDF') + '</a>').join('');
+  }
+
+  async function chargerLienDevisPourChantierId(chantierId) {
+    if (!chantierId) { afficherLienDevisChantier(null, 'charge-lien-devis'); return; }
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantierId + '/?user_field_names=true', { headers: HEADERS });
+      const c = await res.json();
+      afficherLienDevisChantier(c['Fichiers'] || [], 'charge-lien-devis');
+    } catch(e) { afficherLienDevisChantier(null, 'charge-lien-devis'); }
+  }
+
   function selectionnerChantierCharge(id, nom) {
     document.getElementById('charge-chantier').value = id;
     document.getElementById('charge-chantier-search').value = nom;
     document.getElementById('charge-chantier-liste').style.display = 'none';
+    chargerLienDevisPourChantierId(id);
   }
 
   async function ouvrirFormCharge(rowId) {
@@ -5731,6 +5750,7 @@
     document.getElementById('charge-chantier').value = '';
     document.getElementById('charge-chantier-search').value = '';
     document.getElementById('charge-chantier-liste').style.display = 'none';
+    afficherLienDevisChantier(null, 'charge-lien-devis');
     ['charge-h-etude','charge-h-fab-bois','charge-h-fab-acier','charge-h-pose',
      'charge-p-etude','charge-p-fab-bois','charge-p-fab-acier','charge-p-pose'].forEach(id => document.getElementById(id).value = '');
     try {
@@ -5767,6 +5787,7 @@
         if (chantierId) {
           document.getElementById('charge-chantier').value = chantierId;
           document.getElementById('charge-chantier-search').value = chantierNom;
+          chargerLienDevisPourChantierId(chantierId);
         }
         document.getElementById('charge-date-livraison').value = r['Date livraison'] || '';
         document.getElementById('charge-h-etude').value = r['Heures études'] || '';
@@ -9378,6 +9399,7 @@
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
       const data = await res.json();
       const fichiers = data['Fichiers'] || [];
+      afficherLienDevisChantier(fichiers);
       if (!fichiers.length) {
         liste.innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
         return;
@@ -9410,6 +9432,7 @@
               { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Fichiers: nouveauxFichiers }) });
             if (!r3.ok) throw new Error(await r3.text());
             row.remove();
+            afficherLienDevisChantier(d2['Fichiers'].filter(ff => ff.name !== f.name));
             // Afficher message si plus de fichiers
             if (!liste.children.length) {
               liste.innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:20px">Aucun fichier</div>';
@@ -9929,6 +9952,7 @@
     document.getElementById('chantier-date-debut').value = '';
     document.getElementById('chantier-date-fin').value = '';
     document.getElementById('chantier-statue').value = 'En cours';
+    afficherLienDevisChantier(null);
     // Réinitialiser l'onglet Plan de charge
     document.getElementById('chantier-charge-row-id').value = '';
     document.getElementById('chantier-charge-date-livraison').value = '';
@@ -9949,6 +9973,7 @@
         document.getElementById('chantier-date-debut').value = c['Date début'] ? c['Date début'].split('T')[0] : '';
         document.getElementById('chantier-date-fin').value = c['Date fin'] ? c['Date fin'].split('T')[0] : '';
         document.getElementById('chantier-statue').value = c['Statue']?.value || c['Statue'] || 'En cours';
+        afficherLienDevisChantier(c['Fichiers'] || []);
         // Charger les fichiers
         document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:10px">⏳ Chargement…</div>';
         await chargerFichiersChantier(rowId);
@@ -12753,6 +12778,7 @@
     <!-- Onglet Plan de charge -->
     <div id="chantier-tab-charge" style="padding:0 20px;overflow-y:auto;flex:1;display:none">
       <input type="hidden" id="chantier-charge-row-id" value="">
+      <div id="chantier-charge-lien-devis" style="display:none;margin-bottom:14px"></div>
       <div class="field">
         <label>🔨 Date de pose (début de la phase Pose)</label>
         <input type="date" id="chantier-charge-date-livraison" oninput="mettreAJourApercuChargeChantier()" />
@@ -13042,6 +13068,7 @@
       <div id="charge-chantier-liste" style="max-height:160px;overflow-y:auto;border:1px solid #ddd;border-top:none;border-radius:0 0 8px 8px;display:none;background:#fff;box-shadow:0 4px 8px rgba(0,0,0,0.1)"></div>
       <input type="hidden" id="charge-chantier" value="">
     </div>
+    <div id="charge-lien-devis" style="display:none;margin-bottom:12px"></div>
     <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">🔨 Date de pose (début de la phase Pose)</label>
       <input type="date" id="charge-date-livraison" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" oninput="mettreAJourApercuCharge()">
