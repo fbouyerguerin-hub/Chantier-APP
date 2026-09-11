@@ -607,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9057,7 +9057,10 @@
         <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0 8px">🏗 ${chantierNom}</div>
-      ${nbFlagged ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;padding:4px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;font-weight:700;color:#c0392b">🔄 ${nbFlagged} article(s) en retour${signalePar ? ` · signalé par ${signalePar}` : ''}${dateRetour ? ` (${new Date(dateRetour + 'T12:00:00').toLocaleDateString('fr-FR')})` : ''}</div>` : ''}
+      ${nbFlagged ? `<div style="margin-bottom:8px;padding:6px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;color:#c0392b">
+        <div style="display:flex;align-items:center;gap:4px;font-weight:700">🔄 ${nbFlagged} article(s) en retour${signalePar ? ` · signalé par ${signalePar}` : ''}${dateRetour ? ` (${new Date(dateRetour + 'T12:00:00').toLocaleDateString('fr-FR')})` : ''}</div>
+        <ul style="margin:4px 0 0;padding-left:16px">${lignes.filter(l => l['Retour chantier']).map(l => `<li>${l['Description'] || 'Article sans description'}</li>`).join('')}</ul>
+      </div>` : ''}
       ${renderFormRetourArticles(r, uid)}
       ${pjHTML}
     </div>`;
@@ -9406,7 +9409,10 @@
         <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
         ${peutVoirPrix ? `<span style="font-weight:700;font-size:12px;color:var(--gris)">${montantHT.toFixed(2)} € HT</span>` : ''}
       </div>
-      ${nbRetour ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;font-weight:700;color:#c0392b">🔄 ${nbRetour} article(s) en retour</div>` : ''}
+      ${nbRetour ? `<div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;color:#c0392b">
+        <div style="display:flex;align-items:center;gap:4px;font-weight:700">🔄 ${nbRetour} article(s) en retour</div>
+        <ul style="margin:4px 0 0;padding-left:16px">${(_commandesLignesCache[r.id] || []).filter(l => l['Retour chantier']).map(l => `<li>${l['Description'] || 'Article sans description'}</li>`).join('')}</ul>
+      </div>` : ''}
       ${(statut === 'Réception partielle' && nbManquant) ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;margin-left:6px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:11px;font-weight:700;color:#a5761f">🔶 ${nbManquant} article(s) manquant(s)</div>` : ''}
       ${detailsHTML}
       ${detailsRetourHTML}
@@ -13545,26 +13551,32 @@
   <div id="commandes-vue-liste">
     <div style="padding:10px 16px 0">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-recherche" style="display:none" />
+      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue En attente AR -->
   <div id="commandes-vue-ar" style="display:none">
-    <input type="text" id="commandes-ar-recherche" style="display:none" />
+    <div style="padding:10px 16px 0">
+      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Réception partielle -->
   <div id="commandes-vue-partielle" style="display:none">
-    <input type="text" id="commandes-partielle-recherche" style="display:none" />
+    <div style="padding:10px 16px 0">
+      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesPartielles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
     <div id="commandes-partielle-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Réceptionnées -->
   <div id="commandes-vue-receptionnees" style="display:none">
-    <input type="text" id="commandes-receptionnees-recherche" style="display:none" />
+    <div style="padding:10px 16px 0">
+      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
     <div id="commandes-receptionnees-liste" style="padding:8px 16px 80px"></div>
   </div>
 
