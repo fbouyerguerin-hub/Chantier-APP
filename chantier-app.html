@@ -630,7 +630,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11492,9 +11492,11 @@
     ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 280, height: 60 } });
   }
 
-  function buildSummarySheetCh(wb, data, chantiers) {
+  function buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix) {
     const ws = wb.addWorksheet('RÉSUMÉ');
-    ws.mergeCells('A4:F4');
+    const nbCols = peutVoirPrix ? 5 : 4;
+    const lastCol = String.fromCharCode(64 + nbCols);
+    ws.mergeCells(`A4:${lastCol}4`);
     const c = ws.getCell('A4');
     c.value = 'ANALYSE DES TEMPS DE CHANTIER';
     c.font = { name: 'Arial', bold: true, size: 14, color: { argb: CH_WHITE } };
@@ -11504,7 +11506,7 @@
 
     const dates = data.map(r => r.date).filter(Boolean).sort();
     if (dates.length) {
-      ws.mergeCells('A5:F5');
+      ws.mergeCells(`A5:${lastCol}5`);
       const c2 = ws.getCell('A5');
       c2.value = `Période : du ${fmtDateFRCh(dates[0])} au ${fmtDateFRCh(dates[dates.length - 1])}`;
       c2.font = { name: 'Arial', italic: true, size: 10, color: { argb: CH_WHITE } };
@@ -11513,8 +11515,14 @@
       ws.getRow(5).height = 18;
     }
 
+    const headers = ['Chantier', 'Nb Saisies', 'Heures Totales'];
+    if (peutVoirPrix) headers.push('Commandes HT');
+    headers.push('Feuille');
+    const idxFeuille = headers.length - 1;
+    const idxMontant = peutVoirPrix ? headers.length - 2 : -1;
+
     const headerRow = ws.getRow(6);
-    ['Chantier', 'Nb Saisies', 'Heures Totales', 'Nb Tâches', 'Nb Collaborateurs', 'Feuille'].forEach((h, i) => {
+    headers.forEach((h, i) => {
       const cell = headerRow.getCell(i + 1);
       cell.value = h;
       cell.font = { name: 'Arial', bold: true, color: { argb: CH_WHITE } };
@@ -11529,17 +11537,17 @@
       const sn = safeSheetNameCh(chantier);
       const row = ws.getRow(rowIdx);
       const totalHeures = round2Ch(sub.reduce((s, r) => s + r.heures, 0));
-      const nbTaches = new Set(sub.map(r => r.tache)).size;
-      const nbCollabs = new Set(sub.map(r => r.collaborateur)).size;
-      const vals = [chantier, sub.length, totalHeures, nbTaches, nbCollabs, sn];
+      const vals = [chantier, sub.length, totalHeures];
+      if (peutVoirPrix) vals.push(round2Ch((commandesParChantier[chantier] || []).reduce((s, cmd) => s + cmd.montant, 0)));
+      vals.push(sn);
       vals.forEach((val, i) => {
         const cell = row.getCell(i + 1);
         cell.value = val;
         cell.font = { name: 'Arial', size: 10 };
         cell.alignment = { horizontal: i === 0 ? 'left' : 'center' };
         cell.border = CH_BORDER_THIN;
-        if (i === 2) cell.numFmt = '0.00';
-        if (i === 5) {
+        if (i === 2 || i === idxMontant) cell.numFmt = '0.00';
+        if (i === idxFeuille) {
           const snEsc = sn.replace(/'/g, "''"); // Excel exige le doublement des apostrophes dans une référence de feuille entre quotes
           cell.value = { text: sn, hyperlink: `#'${snEsc}'!A1`, tooltip: sn };
           cell.font = { name: 'Arial', size: 10, color: { argb: 'FF0563C1' }, underline: true };
@@ -11549,23 +11557,30 @@
     });
 
     const totalGenHeures = round2Ch(data.reduce((s, r) => s + r.heures, 0));
+    const totalGenMontant = round2Ch(Object.values(commandesParChantier).flat().reduce((s, cmd) => s + cmd.montant, 0));
+    const totalVals = ['TOTAL GÉNÉRAL', data.length, totalGenHeures];
+    if (peutVoirPrix) totalVals.push(totalGenMontant);
+    totalVals.push('');
     const totalRow = ws.getRow(rowIdx);
-    ['TOTAL GÉNÉRAL', data.length, totalGenHeures, '', '', ''].forEach((val, i) => {
+    totalVals.forEach((val, i) => {
       const cell = totalRow.getCell(i + 1);
       cell.value = val;
       cell.font = { name: 'Arial', bold: true, color: { argb: CH_WHITE } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_GRAND_TOTAL } };
       cell.alignment = { horizontal: 'center' };
       cell.border = CH_BORDER_THIN;
-      if (i === 2) cell.numFmt = '0.00';
+      if (i === 2 || i === idxMontant) cell.numFmt = '0.00';
     });
 
-    [45, 12, 15, 12, 18, 35].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    const widths = [45, 12, 15];
+    if (peutVoirPrix) widths.push(16);
+    widths.push(35);
+    widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     ws.views = [{ state: 'frozen', ySplit: 6 }];
     addLogoToSheetCh(ws, wb);
   }
 
-  function buildChantierSheetCh(wb, data, chantier) {
+  function buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix) {
     const sub = data.filter(r => r.chantier === chantier);
     const sn = safeSheetNameCh(chantier);
     const ws = wb.addWorksheet(sn);
@@ -11680,6 +11695,65 @@
     cgc.numFmt = '0.00'; cgc.alignment = { horizontal: 'center' }; cgc.border = CH_BORDER_THIN;
     cr += 2;
 
+    // Commandes fournisseurs passées pour ce chantier (analyse globale temps/achats)
+    const commandes = (commandesParChantier[chantier] || []).slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    if (commandes.length) {
+      const nbColsCmd = peutVoirPrix ? 5 : 4;
+      const lastColCmd = String.fromCharCode(64 + nbColsCmd);
+      ws.mergeCells(`A${cr}:${lastColCmd}${cr}`);
+      const cmdHeader = ws.getCell(cr, 1);
+      cmdHeader.value = 'COMMANDES FOURNISSEURS';
+      cmdHeader.font = { name: 'Arial', bold: true, size: 11, color: { argb: CH_WHITE } };
+      cmdHeader.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_HEADER } };
+      cmdHeader.alignment = { horizontal: 'left', vertical: 'middle' };
+      ws.getRow(cr).height = 22;
+      cmdHeader.border = CH_BORDER_THIN;
+      cr++;
+
+      const headersCmd = ['Date', 'Fournisseur', 'N° commande', 'Statut'];
+      if (peutVoirPrix) headersCmd.push('Montant HT');
+      headersCmd.forEach((h, i) => {
+        const cell = ws.getCell(cr, i + 1);
+        cell.value = h;
+        cell.font = { name: 'Arial', bold: true, size: 9, color: { argb: CH_WHITE } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_COL_HEADER } };
+        cell.alignment = { horizontal: 'center' };
+        cell.border = CH_BORDER_THIN;
+      });
+      cr++;
+
+      commandes.forEach(cmd => {
+        const vals = [fmtDateFRCh(cmd.date), cmd.fournisseur, cmd.numero, cmd.statut];
+        if (peutVoirPrix) vals.push(round2Ch(cmd.montant));
+        vals.forEach((val, i) => {
+          const cell = ws.getCell(cr, i + 1);
+          cell.value = val;
+          cell.font = { name: 'Arial', size: 9 };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_DETAIL_ROW } };
+          cell.border = CH_BORDER_THIN;
+          cell.alignment = { horizontal: i === 1 ? 'left' : 'center' };
+          if (peutVoirPrix && i === 4) cell.numFmt = '0.00';
+        });
+        cr++;
+      });
+
+      ws.mergeCells(`A${cr}:D${cr}`);
+      const cmdTotLabel = ws.getCell(cr, 1);
+      cmdTotLabel.value = peutVoirPrix ? 'TOTAL COMMANDES' : `TOTAL COMMANDES (${commandes.length})`;
+      cmdTotLabel.font = { name: 'Arial', bold: true, size: 10 };
+      cmdTotLabel.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TOTAL_ROW } };
+      cmdTotLabel.alignment = { horizontal: 'right' };
+      cmdTotLabel.border = CH_BORDER_THIN;
+      if (peutVoirPrix) {
+        const cmdTotVal = ws.getCell(cr, 5);
+        cmdTotVal.value = round2Ch(commandes.reduce((s, cmd) => s + cmd.montant, 0));
+        cmdTotVal.font = { name: 'Arial', bold: true };
+        cmdTotVal.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TOTAL_ROW } };
+        cmdTotVal.numFmt = '0.00'; cmdTotVal.alignment = { horizontal: 'center' }; cmdTotVal.border = CH_BORDER_THIN;
+      }
+      cr += 2;
+    }
+
     const back = ws.getCell(cr, 6);
     back.value = { text: '⬅ Retour au résumé', hyperlink: "#'RÉSUMÉ'!A1", tooltip: 'Retour au résumé' };
     back.font = { name: 'Arial', bold: true, size: 9, color: { argb: CH_WHITE }, underline: true };
@@ -11688,15 +11762,15 @@
     back.border = CH_BORDER_THIN;
     ws.getRow(cr).height = 18;
 
-    [14, 22, 22, 12, 20, 12].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    [14, 22, 22, 16, 20, 12].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     addLogoToSheetCh(ws, wb);
   }
 
-  async function genererClasseurAnalyseChantier(data) {
+  async function genererClasseurAnalyseChantier(data, commandesParChantier, peutVoirPrix) {
     const wb = new ExcelJS.Workbook();
     const chantiers = [...new Set(data.map(r => r.chantier))].filter(Boolean).sort();
-    buildSummarySheetCh(wb, data, chantiers);
-    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier));
+    buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix);
+    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix));
     return wb;
   }
 
@@ -12531,7 +12605,32 @@
         return { date, chantier, collaborateur: collab, poste, tache, sousTache, heures, notes };
       });
 
-      const wb = await genererClasseurAnalyseChantier(dataAnalyse);
+      // Commandes fournisseurs passées pour les chantiers concernés, pour
+      // permettre une analyse globale temps passé / commandes fournisseurs.
+      // Sur les exports datés (semaine/mois/année), on ne garde que les
+      // commandes passées sur la même période ; sur "tout", on garde tout
+      // l'historique des commandes de ces chantiers.
+      const peutVoirPrixExport = await peutVoirPrixCommandes();
+      const chantiersConcernes = new Set(dataAnalyse.map(r => r.chantier));
+      const toutesCommandesExport = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200');
+      const commandesParChantier = {};
+      toutesCommandesExport.forEach(r => {
+        const chantierNom = (r['Chantier'] || [])[0]?.value;
+        if (!chantierNom || !chantiersConcernes.has(chantierNom)) return;
+        const dateCmd = (r['Date commande'] || '').split('T')[0];
+        if (dateDebut && dateCmd && dateCmd < dateDebut) return;
+        if (dateFin && dateCmd && dateCmd > dateFin) return;
+        if (!commandesParChantier[chantierNom]) commandesParChantier[chantierNom] = [];
+        commandesParChantier[chantierNom].push({
+          date: dateCmd,
+          fournisseur: r['Fournisseur'] || '',
+          numero: r['Numero commande'] || '',
+          statut: extraireValeurChamp(r['Statut'], 'En attente AR'),
+          montant: Number(r['Montant total HT']) || 0
+        });
+      });
+
+      const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesParChantier, peutVoirPrixExport);
       const buffer = await wb.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/octet-stream' });
       const a = document.createElement('a');
@@ -12880,7 +12979,7 @@
       <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;overflow:hidden">
         <div style="padding:12px 16px;font-size:12px;font-weight:700;color:var(--gris);border-bottom:1px solid #f1ece3;background:#f8fafc;display:flex;align-items:center;gap:8px">
           <span>📊</span><span>Saisies des temps</span>
-          <span style="font-size:10px;color:#aaa;margin-left:auto">Excel — analyse par chantier</span>
+          <span style="font-size:10px;color:#aaa;margin-left:auto">Excel — analyse par chantier + commandes</span>
         </div>
         <button onclick="exportFeuilleHeures('semaine')" style="width:100%;background:none;border:none;border-bottom:1px solid #f1f5f9;padding:12px 16px;font-size:13px;text-align:left;cursor:pointer;color:var(--gris);display:flex;align-items:center;gap:10px">
           <span>📅</span><span>Semaine courante</span>
