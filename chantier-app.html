@@ -220,6 +220,10 @@
     /* IMPRESSION */
     .btn-print { background: rgba(255,255,255,0.15); border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: #fff; font-weight: 600; }
     .btn-print-green { background: var(--vert-clair); border: none; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: var(--vert); font-weight: 600; margin: 8px 16px 0; display: block; width: calc(100% - 32px); text-align: center; }
+    @page {
+      size: A4;
+      margin: 0;
+    }
     @media print {
       .header, .bottom-nav, .planning-header .planning-nav, .btn-print,
       .btn-print-green, .mois-selector, .tabs, .semaine-nav,
@@ -227,10 +231,14 @@
       .planning-header { border-radius: 0; margin: 0; box-shadow: none; }
       .planning-grid { margin: 0; box-shadow: none; }
       .planning-table { min-width: 100% !important; font-size: 11px; }
-      body { padding-bottom: 0 !important; background: #fff; }
+      body { padding: 15mm 10mm !important; background: #fff; box-sizing: border-box; }
       .page { display: none !important; }
       .page.active { display: none !important; }
       .page.print-active { display: block !important; }
+      #page-commandes-print { padding: 0; }
+      #page-commandes-print table { break-inside: auto; }
+      #page-commandes-print tr { break-inside: avoid; }
+      #page-commandes-print .print-title { font-size: 15px; font-weight: 800; color: #222; margin-bottom: 10px; }
       .semaine-block { break-inside: avoid; }
       .demande-card { break-inside: avoid; }
       * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -622,7 +630,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
