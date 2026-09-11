@@ -607,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3271,7 +3271,7 @@
 
     const content = document.getElementById('modal-affectation-detail-content');
     content.innerHTML = `
-      <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes || '—'}</div></div>
+      <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes ? linkifierTexteNote(r.notes) : '—'}</div></div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📦 Commandes</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
     `;
