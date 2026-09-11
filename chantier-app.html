@@ -607,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6733,7 +6733,7 @@
     thead.style.cssText = 'position:sticky;top:0;z-index:3';
     const trH = document.createElement('tr');
     const thC = document.createElement('th');
-    thC.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;left:0;z-index:4';
+    thC.style.cssText = 'background:#2c2c2c;color:#fff;padding:6px 8px;font-size:11px;text-align:left;min-width:80px;position:sticky;top:0;left:0;z-index:4';
     thC.textContent = 'Chantier (' + chantiersAffiches.length + ')';
     trH.appendChild(thC);
     jours.forEach((j, i) => {
