@@ -77,6 +77,11 @@
     .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: var(--gris); gap: 10px; }
     .modal-option.selected { background: var(--vert-clair); color: var(--vert); font-weight: 600; }
     .modal-option .check { margin-left: auto; color: var(--vert); font-size: 18px; }
+    /* Affectations Collectif (personnes / véhicules) : rendu un peu plus gris, moins vert vif */
+    #liste-collab-jour .modal-option.selected,
+    #liste-veh-case .modal-option.selected { background: #e6e6e2; color: #5a5a5a; }
+    #liste-collab-jour .modal-option.selected .check,
+    #liste-veh-case .modal-option.selected .check { color: #7a7a75; }
     .btn-validate { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 12px; padding: 15px; font-size: 15px; font-weight: 700; cursor: pointer; margin: 14px 16px; width: calc(100% - 32px); }
 
     /* PAGE RESUME */
@@ -630,7 +635,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7143,10 +7148,12 @@
     const d = new Date(dateStr + 'T12:00:00');
     document.getElementById('modal-collab-jour-title').textContent = '👷 ' + chantier.nom + ' · ' + d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});
     document.getElementById('liste-collab-jour').innerHTML = collaborateursFiltre.length > 0
-      ? collaborateursFiltre.map(c => {
+      ? [...collaborateursFiltre].map(c => {
           const conge = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
           const chantierAilleurs = chantierParCollabId[c.collabId];
           const indispo = !!conge || !!chantierAilleurs;
+          return { c, conge, chantierAilleurs, indispo };
+        }).sort((a, b) => (a.indispo === b.indispo) ? 0 : (a.indispo ? 1 : -1)).map(({ c, conge, chantierAilleurs, indispo }) => {
           const selectionne = sel.has(c.collabId);
           let badge = '';
           if (conge) badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:11px;font-weight:700;white-space:nowrap">🏖️ ${conge['Type de demande']?.value || 'Absent'}</span>`;
@@ -7691,9 +7698,11 @@
         (p['Véhicule'] || []).forEach(v => { vehChantierAilleurs[v.id] = chNom; });
       });
     const vehPrisAilleurs = new Set(Object.keys(vehChantierAilleurs).map(Number));
-    document.getElementById('liste-veh-case').innerHTML = vehiculesCollectif.map(v => {
+    document.getElementById('liste-veh-case').innerHTML = [...vehiculesCollectif].map(v => {
       const selectionne = vehActuels.includes(v.id);
       const pris = vehPrisAilleurs.has(v.id) && !selectionne;
+      return { v, selectionne, pris };
+    }).sort((a, b) => (a.pris === b.pris) ? 0 : (a.pris ? 1 : -1)).map(({ v, selectionne, pris }) => {
       const badgePris = pris ? `<div style="display:inline-block;margin-top:4px;padding:3px 9px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:12px;font-weight:700;width:fit-content">🚧 Affecté à ${vehChantierAilleurs[v.id]}</div>` : '';
       return '<div class="modal-option ' + (selectionne ? 'selected' : '') + '" '
         + (pris ? 'style="gap:10px;background:#fafafa;cursor:default;pointer-events:none"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
