@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6573,7 +6573,7 @@
   let filtreStatutCollectif = 'En cours'; // 'En cours' | 'En pause' | 'Terminé' | 'tous'
   let collaborateursFiltre = []; // liste filtrée selon poste
   let inactifsCollabIdsCollectif = new Set(); // IDs collaborateurs inactifs, pour masquer aussi leurs affectations déjà enregistrées
-  let postesSelectionnes = new Set(['Pose', 'Apprenti']);
+  let postesSelectionnes = new Set(['Pose', 'Apprenti poseur']);
   let postesDisponibles = [];
   let collabsSelectionnesParJour = {};
   let collabDeplace = null; // { affId, collabNom, chantier, dateStr, el }
