@@ -607,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6827,13 +6827,26 @@
           statutWrap.appendChild(badge);
         }
         tdNom.appendChild(statutWrap);
-        fichiers.forEach(f => {
-          const a = document.createElement('a');
-          a.href = f.url; a.target = '_blank';
-          a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
-          a.textContent = '📎 ' + (f.visible_name||f.name||'Fichier');
-          tdNom.appendChild(a);
-        });
+        if (fichiers.length) {
+          const pjId = 'pj-chantier-' + chantier.id;
+          const pjToggle = document.createElement('div');
+          pjToggle.style.cssText = 'margin-top:2px;cursor:pointer;font-size:8px;color:var(--vert);font-weight:700;background:rgba(11,60,30,0.08);border-radius:4px;padding:2px 4px;white-space:nowrap';
+          pjToggle.textContent = '📎 ' + fichiers.length + ' fichier' + (fichiers.length > 1 ? 's' : '') + ' ▾';
+          pjToggle.onclick = e => { e.stopPropagation(); toggleAbsents(pjId); };
+          tdNom.appendChild(pjToggle);
+          const pjListe = document.createElement('div');
+          pjListe.id = pjId;
+          pjListe.style.cssText = 'display:none;margin-top:2px';
+          fichiers.forEach(f => {
+            const a = document.createElement('a');
+            a.href = f.url; a.target = '_blank';
+            a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
+            a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
+            a.onclick = e => e.stopPropagation();
+            pjListe.appendChild(a);
+          });
+          tdNom.appendChild(pjListe);
+        }
         if (isGestAdmin) {
           const btnPJ = document.createElement('button');
           btnPJ.textContent = '+ 📎';
@@ -7628,17 +7641,21 @@
   function ouvrirModalVehiculeCase(chantier, dateStr, ligneExistante) {
     currentVehCase = { chantier, dateStr, ligneId: ligneExistante?.id || null };
     const vehActuels = ligneExistante ? (ligneExistante['Véhicule'] || []).map(v => v.id) : [];
-    // Véhicules déjà affectés ailleurs ce jour (autres chantiers)
-    const vehPrisAilleurs = new Set(
-      planningCollectifData
-        .filter(p => p['Date'] === dateStr && !(p['Chantier']||p['Chantiers']||[]).some(ch => ch.id === chantier.id))
-        .flatMap(p => (p['Véhicule'] || []).map(v => v.id))
-    );
+    // Véhicules déjà affectés ailleurs ce jour (autres chantiers), avec le nom
+    // du chantier concerné pour l'afficher dans la liste plutôt qu'une mention générique.
+    const vehChantierAilleurs = {};
+    planningCollectifData
+      .filter(p => p['Date'] === dateStr && !(p['Chantier']||p['Chantiers']||[]).some(ch => ch.id === chantier.id))
+      .forEach(p => {
+        const chNom = (p['Chantier']||p['Chantiers']||[])[0]?.value || '?';
+        (p['Véhicule'] || []).forEach(v => { vehChantierAilleurs[v.id] = chNom; });
+      });
+    const vehPrisAilleurs = new Set(Object.keys(vehChantierAilleurs).map(Number));
     document.getElementById('liste-veh-case').innerHTML = vehiculesCollectif.map(v => {
       const pris = vehPrisAilleurs.has(v.id) && !vehActuels.includes(v.id);
       return '<div class="modal-option ' + (vehActuels.includes(v.id) ? 'selected' : '') + '" '
         + (pris ? 'style="opacity:0.35;pointer-events:none;gap:10px"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
-        + '<span style="flex:1">🚐 ' + v.immat + (pris ? ' <span style="font-size:8px;color:#c0392b">(déjà affecté)</span>' : '') + '</span>'
+        + '<span style="flex:1">🚐 ' + v.immat + (pris ? ' <span style="font-size:8px;color:#c0392b">(affecté à ' + vehChantierAilleurs[v.id] + ')</span>' : '') + '</span>'
         + (vehActuels.includes(v.id) ? '<span class="check">✓</span>' : '')
         + '</div>';
     }).join('');
