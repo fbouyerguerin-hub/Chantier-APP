@@ -607,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7107,18 +7107,34 @@
   }
 
   function ouvrirModalCollabCase(chantier, dateStr) {
-    const affectesJour = planningCollectifData.filter(p => p['Date'] === dateStr).map(p => (p['Collaborateurs']||p['Collaborateur']||[])[0]?.id).filter(Boolean);
-    const collabsDispo = collaborateursFiltre.filter(c => {
-      const absent = congesCollectifData.some(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
-      return !absent && !affectesJour.includes(c.collabId);
+    // Chantier où chaque collaborateur est déjà affecté ce jour-là (s'il y en a un),
+    // pour l'afficher en badge plutôt que de simplement masquer la personne.
+    const chantierParCollabId = {};
+    planningCollectifData.filter(p => p['Date'] === dateStr).forEach(p => {
+      const cId = (p['Collaborateurs']||p['Collaborateur']||[])[0]?.id;
+      if (!cId) return;
+      chantierParCollabId[cId] = (p['Chantier']||p['Chantiers']||[])[0]?.value || '?';
     });
     if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
     const sel = collabsSelectionnesParJour[dateStr];
     const d = new Date(dateStr + 'T12:00:00');
     document.getElementById('modal-collab-jour-title').textContent = '👷 ' + chantier.nom + ' · ' + d.toLocaleDateString('fr-FR',{weekday:'short',day:'numeric',month:'short'});
-    document.getElementById('liste-collab-jour').innerHTML = collabsDispo.length > 0
-      ? collabsDispo.map(c => '<div class="modal-option ' + (sel.has(c.collabId)?'selected':'') + '" onclick="toggleCollabCase(' + c.collabId + ',this)" style="gap:10px"><span style="flex:1">' + c.nom + '</span>' + (sel.has(c.collabId)?'<span class="check">✓</span>':'') + '</div>').join('')
-      : '<div style="padding:20px;text-align:center;color:#aaa">Tous déjà affectés ce jour</div>';
+    document.getElementById('liste-collab-jour').innerHTML = collaborateursFiltre.length > 0
+      ? collaborateursFiltre.map(c => {
+          const conge = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
+          const chantierAilleurs = chantierParCollabId[c.collabId];
+          const indispo = !!conge || !!chantierAilleurs;
+          const selectionne = sel.has(c.collabId);
+          let badge = '';
+          if (conge) badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:11px;font-weight:700;white-space:nowrap">🏖️ ${conge['Type de demande']?.value || 'Absent'}</span>`;
+          else if (chantierAilleurs) badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:11px;font-weight:700;white-space:nowrap">🚧 Affecté à ${chantierAilleurs}</span>`;
+          return '<div class="modal-option ' + (selectionne ? 'selected' : '') + '" '
+            + (indispo ? 'style="gap:10px;background:#fafafa;cursor:default;pointer-events:none"' : 'onclick="toggleCollabCase(' + c.collabId + ',this)" style="gap:10px"') + '>'
+            + '<span style="flex:1;display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;gap:0;' + (indispo ? 'opacity:0.7' : '') + '"><span style="font-size:' + (indispo ? '12px' : '15px') + ';font-weight:' + (indispo ? '400' : '700') + '">' + c.nom + '</span>' + badge + '</span>'
+            + (selectionne ? '<span class="check" style="font-size:22px">✓</span>' : '')
+            + '</div>';
+        }).join('')
+      : '<div style="padding:20px;text-align:center;color:#aaa">Aucun collaborateur</div>';
     document.getElementById('modal-collab-jour').dataset.chantier = JSON.stringify(chantier);
     document.getElementById('modal-collab-jour').dataset.date = dateStr;
     document.getElementById('modal-collab-jour').classList.add('open');
@@ -7132,7 +7148,7 @@
     if (!liste) return;
     const items = liste.querySelectorAll('.modal-option');
     items.forEach(el => {
-      const nom = el.querySelector('span:nth-child(2)')?.textContent || el.textContent;
+      const nom = el.querySelector('span')?.textContent || el.textContent;
       el.style.display = q && !nom.toLowerCase().includes(q.toLowerCase()) ? 'none' : '';
     });
   }
@@ -7169,7 +7185,7 @@
     if (!collabsSelectionnesParJour[dateStr]) collabsSelectionnesParJour[dateStr] = new Set();
     const sel = collabsSelectionnesParJour[dateStr];
     if (sel.has(collabId)) { sel.delete(collabId); el.classList.remove('selected'); el.querySelector('.check')?.remove(); }
-    else { sel.add(collabId); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className='check'; c.textContent='✓'; el.appendChild(c); } }
+    else { sel.add(collabId); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className='check'; c.style.fontSize='22px'; c.textContent='✓'; el.appendChild(c); } }
   }
 
   async function confirmerCollabCase() {
@@ -7234,19 +7250,20 @@
     const d = new Date(dateStr + 'T12:00:00');
     document.getElementById('modal-collab-jour-title').textContent = '👷 ' + d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'short'});
     document.getElementById('liste-collab-jour').innerHTML = collabs.map(c =>
-      '<div class="modal-option ' + (sel.has(c.id)?'selected':'') + '" onclick="toggleCollabJour(' + c.id + ',this)" style="gap:10px"><span style="flex:1">' + c.nom + '</span>' + (sel.has(c.id)?'<span class="check">✓</span>':'') + '</div>').join('');
+      '<div class="modal-option ' + (sel.has(c.id)?'selected':'') + '" onclick="toggleCollabJour(' + c.id + ',this)" style="gap:10px"><span style="flex:1;font-weight:' + (sel.has(c.id) ? '700' : '400') + '">' + c.nom + '</span>' + (sel.has(c.id)?'<span class="check" style="font-size:22px">✓</span>':'') + '</div>').join('');
     document.getElementById('modal-collab-jour').classList.add('open');
   }
 
   function toggleCollabJour(collabId, el) {
     const sel = collabsSelectionnesParJour[currentDateCollab];
-    if (sel.has(collabId)) { sel.delete(collabId); el.classList.remove('selected'); el.querySelector('.check')?.remove(); }
-    else { sel.add(collabId); el.classList.add('selected'); if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className='check'; c.textContent='✓'; el.appendChild(c); } }
+    const nomSpan = el.querySelector('span');
+    if (sel.has(collabId)) { sel.delete(collabId); el.classList.remove('selected'); el.querySelector('.check')?.remove(); if (nomSpan) nomSpan.style.fontWeight = '400'; }
+    else { sel.add(collabId); el.classList.add('selected'); if (nomSpan) nomSpan.style.fontWeight = '700'; if (!el.querySelector('.check')) { const c = document.createElement('span'); c.className='check'; c.style.fontSize='22px'; c.textContent='✓'; el.appendChild(c); } }
   }
 
   function resetCollabJour() {
     if (currentDateCollab) collabsSelectionnesParJour[currentDateCollab] = new Set();
-    document.querySelectorAll('#liste-collab-jour .modal-option').forEach(el => { el.classList.remove('selected'); el.querySelector('.check')?.remove(); });
+    document.querySelectorAll('#liste-collab-jour .modal-option').forEach(el => { el.classList.remove('selected'); el.querySelector('.check')?.remove(); const nomSpan = el.querySelector('span'); if (nomSpan) nomSpan.style.fontWeight = '400'; });
   }
 
   function fermerModalCollabJour(e) {
@@ -7652,11 +7669,13 @@
       });
     const vehPrisAilleurs = new Set(Object.keys(vehChantierAilleurs).map(Number));
     document.getElementById('liste-veh-case').innerHTML = vehiculesCollectif.map(v => {
-      const pris = vehPrisAilleurs.has(v.id) && !vehActuels.includes(v.id);
-      return '<div class="modal-option ' + (vehActuels.includes(v.id) ? 'selected' : '') + '" '
-        + (pris ? 'style="opacity:0.35;pointer-events:none;gap:10px"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
-        + '<span style="flex:1">🚐 ' + v.immat + (pris ? ' <span style="font-size:8px;color:#c0392b">(affecté à ' + vehChantierAilleurs[v.id] + ')</span>' : '') + '</span>'
-        + (vehActuels.includes(v.id) ? '<span class="check">✓</span>' : '')
+      const selectionne = vehActuels.includes(v.id);
+      const pris = vehPrisAilleurs.has(v.id) && !selectionne;
+      const badgePris = pris ? `<div style="display:inline-block;margin-top:4px;padding:3px 9px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:12px;font-weight:700;width:fit-content">🚧 Affecté à ${vehChantierAilleurs[v.id]}</div>` : '';
+      return '<div class="modal-option ' + (selectionne ? 'selected' : '') + '" '
+        + (pris ? 'style="gap:10px;background:#fafafa;cursor:default;pointer-events:none"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
+        + '<span style="flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:0;' + (pris ? 'opacity:0.7' : '') + '"><span style="font-size:15px;font-weight:' + (selectionne ? '700' : '400') + '">🚐 ' + v.immat + '</span>' + badgePris + '</span>'
+        + (selectionne ? '<span class="check" style="font-size:22px">✓</span>' : '')
         + '</div>';
     }).join('');
     const d = new Date(dateStr + 'T12:00:00');
