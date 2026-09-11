@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9290,7 +9290,7 @@
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
     const contenuDetails = `
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
-      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 Réceptionné par : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
+      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Réceptionné partiellement par' : 'Réceptionné par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
       ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}${dateEnvoiChantier ? ` (${formaterDate(dateEnvoiChantier)})` : ''}</div>` : ''}
       ${lignesHTML}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
