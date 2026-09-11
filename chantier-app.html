@@ -606,7 +606,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -616,7 +616,24 @@
   // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
   // dans une section repliée pour ne pas polluer la vue principale, aussi
   // bien dans l'onglet Commandes que dans la fenêtre "Commandes" de Mon planning.
-  const STATUTS_COMMANDE_RECEPTIONNEE = ['Réceptionné en atelier', 'Réceptionné sur chantier', 'Envoyé sur chantier'];
+  const STATUTS_COMMANDE_RECEPTIONNEE = ['Réceptionné en atelier', 'Réceptionné sur chantier', 'Envoyé sur chantier', 'Livrée', 'Facturée'];
+  // Comparaison robuste (accents/casse/espaces/accord au féminin ignorés) : une
+  // commande dont le statut Baserow est stocké sous une forme légèrement
+  // différente (ex. "Réceptionnée en atelier", espace en trop…) doit quand
+  // même être reconnue comme réceptionnée, plutôt que de rester coincée dans
+  // "En attente réception" faute de correspondance exacte.
+  function normaliserTexteStatut(s) {
+    return (s || '').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+  function estStatutCommandeReceptionne(statutBrut) {
+    const s = normaliserTexteStatut(statutBrut);
+    if (!s) return false;
+    if (s.startsWith('receptionne')) return true; // couvre les variantes de "Réceptionné(e) en atelier / sur chantier"
+    if (s.startsWith('envoye sur chantier')) return true;
+    if (s.startsWith('livree')) return true;
+    if (s.startsWith('facturee')) return true;
+    return STATUTS_COMMANDE_RECEPTIONNEE.map(normaliserTexteStatut).includes(s);
+  }
   // Postes pour lesquels les commandes encore en "En attente AR" (non
   // validées) sont masquées : ces équipes n'ont besoin de voir une commande
   // qu'une fois son AR confirmé.
@@ -2955,8 +2972,8 @@
       return;
     }
 
-    const enCours = commandes.filter(r => !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
-    const receptionnees = commandes.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const enCours = commandes.filter(r => !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const receptionnees = commandes.filter(r => estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
 
     const trier = (liste) => [...liste].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
@@ -8690,6 +8707,7 @@
       renderCommandesPartielles();
       renderCommandesParChantier();
       renderCommandesReceptionnees();
+      renderCommandesRetour();
       const rechercheGlobaleEl = document.getElementById('commandes-recherche-globale');
       if (rechercheGlobaleEl && rechercheGlobaleEl.value.trim()) rechercherCommandesGlobal(rechercheGlobaleEl.value);
     } catch (e) {
@@ -8705,6 +8723,7 @@
     document.getElementById('commandes-vue-receptionnees').style.display = vue === 'receptionnees' ? 'block' : 'none';
     document.getElementById('commandes-vue-chantier').style.display = vue === 'chantier' ? 'block' : 'none';
     document.getElementById('commandes-vue-articles').style.display = vue === 'articles' ? 'block' : 'none';
+    document.getElementById('commandes-vue-retour').style.display = vue === 'retour' ? 'block' : 'none';
     document.getElementById('tab-commandes-liste').style.background = vue === 'liste' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-liste').style.color = vue === 'liste' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-ar').style.background = vue === 'ar' ? 'var(--vert)' : 'none';
@@ -8717,10 +8736,13 @@
     document.getElementById('tab-commandes-chantier').style.color = vue === 'chantier' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-articles').style.background = vue === 'articles' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-articles').style.color = vue === 'articles' ? '#fff' : 'var(--gris-moyen)';
+    document.getElementById('tab-commandes-retour').style.background = vue === 'retour' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-retour').style.color = vue === 'retour' ? '#fff' : 'var(--gris-moyen)';
     if (vue === 'ar') renderCommandesEnAttenteAR();
     if (vue === 'partielle') renderCommandesPartielles();
     if (vue === 'receptionnees') renderCommandesReceptionnees();
     if (vue === 'articles') renderCommandesArticles();
+    if (vue === 'retour') renderCommandesRetour();
   }
 
   // Recherche d'article tous chantiers/fournisseurs confondus, pour consulter
@@ -8782,7 +8804,7 @@
     const recherche = (document.getElementById('commandes-receptionnees-recherche')?.value || '').trim().toLowerCase();
     const peutVoirPrix = _peutVoirPrixActuel;
 
-    let filtrees = _commandesCache.filter(r => STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    let filtrees = _commandesCache.filter(r => estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (recherche) {
       filtrees = filtrees.filter(r => {
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
@@ -8850,6 +8872,181 @@
     if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
   }
 
+  // ── Vue "Retour chantier" ──
+  // Permet de rechercher une commande et de cocher, article par article, ceux
+  // concernés par un retour chantier. L'info est stockée sur les lignes elles-
+  // mêmes (case "Retour chantier") et un contexte (note/date/auteur) sur la
+  // commande. Sans recherche en cours, la vue liste les commandes ayant déjà
+  // au moins un article marqué, pour pouvoir les consulter/modifier.
+  function renderCommandesRetour() {
+    const listeEl = document.getElementById('commandes-retour-liste');
+    const resumeEl = document.getElementById('retour-resume');
+    if (!listeEl) return;
+    const recherche = (document.getElementById('commandes-retour-recherche')?.value || '').trim().toLowerCase();
+
+    const idsAvecRetour = new Set(
+      Object.keys(_commandesLignesCache)
+        .filter(cid => (_commandesLignesCache[cid] || []).some(l => l['Retour chantier']))
+        .map(Number)
+    );
+
+    let candidates;
+    if (recherche) {
+      candidates = _commandesCache.filter(r => {
+        if (!estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR'))) return false;
+        const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
+        const fournisseur = (r['Fournisseur'] || '').toLowerCase();
+        const numero = (r['Numero commande'] || '').toLowerCase();
+        const numeroDevis = (r['Numero devis'] || '').toLowerCase();
+        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+      });
+    } else {
+      candidates = _commandesCache.filter(r => idsAvecRetour.has(r.id));
+    }
+
+    const triees = [...candidates].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+
+    if (resumeEl) {
+      resumeEl.textContent = recherche
+        ? `${triees.length} commande(s) réceptionnée(s) trouvée(s)`
+        : (idsAvecRetour.size ? `${idsAvecRetour.size} commande(s) avec retour signalé` : 'Recherchez une commande réceptionnée ci-dessous pour signaler un retour chantier.');
+    }
+
+    listeEl.innerHTML = triees.map(r => renderCarteRetourCommande(r)).join('') ||
+      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande réceptionnée trouvée (seules les commandes réceptionnées peuvent faire l\'objet d\'un retour chantier).</div>';
+  }
+
+  // Formulaire partagé (liste d'articles à cocher + motif + bouton d'enregistrement)
+  // utilisé à la fois dans l'onglet dédié "Retour chantier" et directement dans
+  // chaque carte commande (onglet Commandes et statut, "Par chantier", et la
+  // fenêtre "Commandes" de Mon planning), pour que tout utilisateur puisse
+  // signaler un retour sans passer par un onglet séparé.
+  function renderFormRetourArticles(r, uid) {
+    const lignes = _commandesLignesCache[r.id] || [];
+    const noteRetour = r['Note retour chantier'] || '';
+    const lignesHTML = lignes.length ? lignes.map(l => {
+      const checked = !!l['Retour chantier'];
+      const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
+      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-bottom:1px dotted #eee;font-size:12px;color:${checked ? '#c0392b' : '#555'};cursor:pointer;${checked ? 'background:#fdf0ef' : ''}">
+        <input type="checkbox" data-ligne-id="${l.id}" class="retour-ligne-check-${uid}" ${checked ? 'checked' : ''} style="margin-top:2px;width:16px;height:16px;accent-color:#c0392b;cursor:pointer;flex-shrink:0" />
+        <span>
+          <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
+          ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
+          ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
+        </span>
+      </label>`;
+    }).join('') : '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucun article détaillé sur cette commande.</div>';
+
+    return `<div>${lignesHTML}</div>
+      <textarea id="retour-note-${uid}" placeholder="Motif du retour (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-top:8px;margin-bottom:6px;resize:vertical;min-height:40px;font-family:inherit">${noteRetour}</textarea>
+      <button onclick="enregistrerRetourChantier(${r.id}, '${uid}')" id="retour-btn-${uid}" style="width:100%;background:#c0392b;color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">💾 Enregistrer le retour</button>`;
+  }
+
+  // Formulaire de sélection des articles NON réceptionnés (livraison partielle),
+  // même principe que renderFormRetourArticles : une checklist d'articles avec
+  // une légende explicite sur ce qu'il faut cocher.
+  function renderFormArticlesManquants(r, uid) {
+    const lignes = _commandesLignesCache[r.id] || [];
+    const lignesHTML = lignes.length ? lignes.map(l => {
+      const checked = !!l['Non réceptionné'];
+      const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
+      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-bottom:1px dotted #eee;font-size:12px;color:${checked ? '#a5761f' : '#555'};cursor:pointer;${checked ? 'background:#fdf3e0' : ''}">
+        <input type="checkbox" data-ligne-id="${l.id}" class="manquant-ligne-check-${uid}" ${checked ? 'checked' : ''} style="margin-top:2px;width:16px;height:16px;accent-color:#e07b1f;cursor:pointer;flex-shrink:0" />
+        <span>
+          <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
+          ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
+          ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
+        </span>
+      </label>`;
+    }).join('') : '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucun article détaillé sur cette commande — précisez ce qui manque dans la note ci-dessous.</div>';
+
+    return `<div style="font-size:11px;color:#a5761f;font-weight:700;margin-bottom:4px">☑️ Cochez uniquement les articles NON réceptionnés (manquants)</div>
+      <div>${lignesHTML}</div>`;
+  }
+
+  function renderCarteRetourCommande(r) {
+    const uid = r.id + '-retour';
+    const peutVoirPrix = _peutVoirPrixActuel;
+    const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
+    const chantierNom = (r['Chantier'] || [])[0]?.value || '—';
+    const lignes = _commandesLignesCache[r.id] || [];
+    const nbFlagged = lignes.filter(l => l['Retour chantier']).length;
+    const dateRetour = r['Date retour chantier'] || '';
+    const signalePar = r['Retour signale par'] || '';
+    const pdf = (r['PDF'] || [])[0];
+    const pdfSansPrix = (r['PDF sans prix'] || [])[0];
+    const fichierAR = (r['Accusé de réception'] || [])[0];
+    const documents = r['Documents'] || [];
+
+    const pjHTML = `
+      ${(pdf && peutVoirPrix) ? `<div style="margin-top:4px"><a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a></div>` : ''}
+      ${(pdfSansPrix && !peutVoirPrix) ? `<div style="margin-top:4px"><a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a></div>` : ''}
+      ${(fichierAR && peutVoirPrix) ? `<div style="margin-top:4px"><a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a></div>` : ''}
+      ${documents.map(f => `<div style="margin-top:4px"><a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a></div>`).join('')}
+    `;
+
+    return `<div style="background:#fff;border:1px solid ${nbFlagged ? '#e5b8b8' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
+        <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
+        <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
+      </div>
+      <div style="font-size:11px;color:#888;margin:2px 0 8px">🏗 ${chantierNom}</div>
+      ${nbFlagged ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-bottom:8px;padding:4px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;font-weight:700;color:#c0392b">🔄 ${nbFlagged} article(s) en retour${signalePar ? ` · signalé par ${signalePar}` : ''}${dateRetour ? ` (${new Date(dateRetour + 'T12:00:00').toLocaleDateString('fr-FR')})` : ''}</div>` : ''}
+      ${renderFormRetourArticles(r, uid)}
+      ${pjHTML}
+    </div>`;
+  }
+
+  async function enregistrerRetourChantier(id, uid) {
+    const btn = document.getElementById('retour-btn-' + uid);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; }
+    try {
+      const checks = document.querySelectorAll('.retour-ligne-check-' + uid);
+      const lignes = _commandesLignesCache[id] || [];
+      const misesAJour = [];
+      checks.forEach(cb => {
+        const ligneId = Number(cb.dataset.ligneId);
+        const ligne = lignes.find(l => l.id === ligneId);
+        if (ligne && !!ligne['Retour chantier'] !== cb.checked) misesAJour.push({ ligneId, nouvelEtat: cb.checked });
+      });
+
+      const resultats = await Promise.all(misesAJour.map(({ ligneId, nouvelEtat }) =>
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${ligneId}/?user_field_names=true`, {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Retour chantier': nouvelEtat })
+        })
+      ));
+      const echec = resultats.find(r => !r.ok);
+      if (echec) throw new Error('Baserow a refusé la mise à jour (' + echec.status + ') : ' + (await echec.text()));
+
+      const nbCoche = [...checks].filter(cb => cb.checked).length;
+      const noteInput = document.getElementById('retour-note-' + uid);
+      const note = noteInput ? noteInput.value.trim() : '';
+      const payloadCommande = { 'Note retour chantier': note };
+      payloadCommande['Retour signale par'] = nbCoche > 0 ? (connectedCollab || '') : '';
+      payloadCommande['Date retour chantier'] = nbCoche > 0 ? dateYMD(new Date()) : null;
+
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payloadCommande)
+      });
+      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+
+      // Mise à jour du cache local pour un ré-affichage immédiat, sans refetch complet
+      lignes.forEach(l => {
+        const cb = document.querySelector(`.retour-ligne-check-${uid}[data-ligne-id="${l.id}"]`);
+        if (cb) l['Retour chantier'] = cb.checked;
+      });
+      const commande = _commandesCache.find(r => r.id === id);
+      if (commande) Object.assign(commande, payloadCommande);
+
+      await rafraichirApresActionCommande();
+      renderCommandesRetour();
+    } catch (e) {
+      console.error('Erreur enregistrement retour chantier', e);
+      alert('Erreur lors de l\'enregistrement : ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = '💾 Enregistrer le retour'; }
+    }
+  }
+
   // Recherche globale au-dessus des onglets : bascule entre les résultats
   // (tous statuts confondus, avec badge de statut visible) et l'affichage
   // normal des onglets selon qu'une recherche est en cours ou non.
@@ -8888,7 +9085,7 @@
     const peutVoirPrix = _peutVoirPrixActuel;
 
     let filtrees = _commandesCache.filter(r =>
-      !STATUTS_COMMANDE_RECEPTIONNEE.includes(extraireValeurChamp(r['Statut'], 'En attente AR')) &&
+      !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')) &&
       extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR' &&
       extraireValeurChamp(r['Statut'], 'En attente AR') !== 'Réception partielle'
     );
@@ -9035,6 +9232,10 @@
 
     const nbArticles = (_commandesLignesCache[r.id] || []).length;
     const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix);
+    const nbRetour = (_commandesLignesCache[r.id] || []).filter(l => l['Retour chantier']).length;
+    const nbManquant = (_commandesLignesCache[r.id] || []).filter(l => l['Non réceptionné']).length;
+    const peutSignalerRetour = estStatutCommandeReceptionne(statut);
+    const uidRetour = uid + '-ret';
 
     let actionsHTML = '';
     if (statut === 'En attente AR') {
@@ -9065,6 +9266,7 @@
             <input type="checkbox" id="reception-partielle-${uid}" onchange="toggleReceptionNoteObligatoire('${uid}')" />
             🔶 Réception partielle (il manque des articles)
           </label>
+          <div id="reception-manquants-${uid}" style="display:none;margin-bottom:6px">${renderFormArticlesManquants(r, uid)}</div>
           <textarea id="reception-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
           <button onclick="validerReception('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider la réception</button>
         </div>`;
@@ -9118,6 +9320,14 @@
       <div id="details-${uid}" style="display:none">${contenuDetails}</div>
     `;
 
+    const detailsRetourHTML = peutSignalerRetour ? `
+      <div onclick="toggleDetailsCommande('${uidRetour}')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:5px 8px;background:#fdf5f4;border-radius:6px;font-size:10px;font-weight:700;color:#c0392b">
+        <span>🔄 Retour chantier${nbRetour ? ` (${nbRetour})` : ''}</span>
+        <span id="details-chevron-${uidRetour}">▸</span>
+      </div>
+      <div id="details-${uidRetour}" style="display:none">${renderFormRetourArticles(r, uidRetour)}</div>
+    ` : '';
+
     return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
         <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
@@ -9125,12 +9335,15 @@
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
-      ${(dateReceptionPrevue && !STATUTS_COMMANDE_RECEPTIONNEE.includes(statut)) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
+      ${(dateReceptionPrevue && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
         ${peutVoirPrix ? `<span style="font-weight:700;font-size:12px;color:var(--gris)">${montantHT.toFixed(2)} € HT</span>` : ''}
       </div>
+      ${nbRetour ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;font-weight:700;color:#c0392b">🔄 ${nbRetour} article(s) en retour</div>` : ''}
+      ${(statut === 'Réception partielle' && nbManquant) ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;margin-left:6px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:11px;font-weight:700;color:#a5761f">🔶 ${nbManquant} article(s) manquant(s)</div>` : ''}
       ${detailsHTML}
+      ${detailsRetourHTML}
     </div>`;
   }
 
@@ -9301,7 +9514,9 @@
   function toggleReceptionNoteObligatoire(uid) {
     const partielle = document.getElementById('reception-partielle-' + uid)?.checked;
     const noteInput = document.getElementById('reception-note-' + uid);
-    if (noteInput) noteInput.placeholder = partielle ? 'Précisez ce qui manque (obligatoire)…' : 'Note (facultatif)…';
+    if (noteInput) noteInput.placeholder = partielle ? 'Précisions complémentaires (facultatif)…' : 'Note (facultatif)…';
+    const manquantsDiv = document.getElementById('reception-manquants-' + uid);
+    if (manquantsDiv) manquantsDiv.style.display = partielle ? 'block' : 'none';
   }
 
   async function validerReception(uid, id) {
@@ -9313,11 +9528,33 @@
     const partielle = document.getElementById('reception-partielle-' + uid)?.checked;
     const noteInput = document.getElementById('reception-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
-    if (partielle && !note) { alert('Merci de préciser ce qui manque (note obligatoire pour une réception partielle).'); return; }
+    const lignes = _commandesLignesCache[id] || [];
+    const checksManquants = document.querySelectorAll('.manquant-ligne-check-' + uid);
+    const nbCocheManquant = [...checksManquants].filter(cb => cb.checked).length;
+    if (partielle && lignes.length && !nbCocheManquant) { alert('Merci de cocher au moins un article non réceptionné (ou de préciser ce qui manque en note si aucun article détaillé n\'est disponible).'); return; }
+    if (partielle && !lignes.length && !note) { alert('Merci de préciser ce qui manque (note obligatoire, aucun article détaillé sur cette commande).'); return; }
     const statutCible = partielle ? 'Réception partielle' : (type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier');
     const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateYMD(new Date()) };
     if (note) payload['Note statut'] = note;
     try {
+      // Met à jour, article par article, l'indicateur "Non réceptionné" : coché =
+      // toujours manquant, décoché = arrivé. En réception complète (non
+      // partielle), on réinitialise tout le monde à "reçu".
+      const misesAJourLignes = lignes.map(l => {
+        const cb = partielle ? document.querySelector(`.manquant-ligne-check-${uid}[data-ligne-id="${l.id}"]`) : null;
+        const nouvelEtat = partielle ? !!cb?.checked : false;
+        return !!l['Non réceptionné'] !== nouvelEtat ? { ligne: l, nouvelEtat } : null;
+      }).filter(Boolean);
+
+      const resultatsLignes = await Promise.all(misesAJourLignes.map(({ ligne, nouvelEtat }) =>
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${ligne.id}/?user_field_names=true`, {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Non réceptionné': nouvelEtat })
+        })
+      ));
+      const echecLigne = resultatsLignes.find(r => !r.ok);
+      if (echecLigne) throw new Error('Baserow a refusé la mise à jour d\'un article (' + echecLigne.status + ') : ' + (await echecLigne.text()));
+      misesAJourLignes.forEach(({ ligne, nouvelEtat }) => { ligne['Non réceptionné'] = nouvelEtat; });
+
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
@@ -13234,6 +13471,7 @@
       <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
+      <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
     </div>
   </div>
 
@@ -13278,6 +13516,15 @@
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (description, référence)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-articles-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue Retour chantier : marquer les articles d'une commande concernés par un retour -->
+  <div id="commandes-vue-retour" style="display:none">
+    <div style="padding:10px 16px 0">
+      <div id="retour-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
+      <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+    </div>
+    <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
   </div>
   </div>
 </div>
