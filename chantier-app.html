@@ -537,7 +537,8 @@
     <div style="padding:16px 20px;overflow-y:auto">
       <div class="field">
         <label>Note (visible uniquement ce jour-là dans le planning du collaborateur)</label>
-        <textarea id="modal-note-collab-texte" placeholder="Écrire une note…" style="min-height:80px"></textarea>
+        <textarea id="modal-note-collab-texte" placeholder="Écrire une note… (un lien Google Maps sera cliquable)" style="min-height:80px" oninput="mettreAJourApercuNoteCollab()"></textarea>
+        <div id="modal-note-collab-apercu" style="display:none;font-size:12px;color:var(--gris);background:#f7f5f0;border-radius:8px;padding:8px 10px;margin-top:6px;line-height:1.4"></div>
       </div>
       <div class="field">
         <label>Pièces jointes</label>
@@ -606,7 +607,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8299,6 +8300,34 @@
   // ── NOTE SUR L'AFFECTATION DU JOUR (visible uniquement ce jour-là dans le planning du collaborateur) ──
   let currentNoteCollab = null;
 
+  // Transforme les URL présentes dans une note (ex. lien Google Maps pour un
+  // point GPS de chantier) en liens cliquables, ouverts dans un nouvel onglet.
+  function echapperHtmlNote(s) {
+    return (s || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function linkifierTexteNote(texte) {
+    const echappe = echapperHtmlNote(texte);
+    return echappe.replace(/((https?:\/\/|www\.)[^\s<]+)/gi, (m) => {
+      const decoupe = m.match(/^(.*?)([.,;:!?)]*)$/);
+      const brut = decoupe ? decoupe[1] : m;
+      const suffixe = decoupe ? decoupe[2] : '';
+      const href = /^https?:\/\//i.test(brut) ? brut : 'https://' + brut;
+      return `<a href="${href}" target="_blank" rel="noopener" style="color:var(--vert);text-decoration:underline;word-break:break-all">${brut}</a>${suffixe}`;
+    }).replace(/\n/g, '<br>');
+  }
+  function mettreAJourApercuNoteCollab() {
+    const texte = document.getElementById('modal-note-collab-texte')?.value || '';
+    const apercu = document.getElementById('modal-note-collab-apercu');
+    if (!apercu) return;
+    if (/(https?:\/\/|www\.)/i.test(texte)) {
+      apercu.innerHTML = '🔗 ' + linkifierTexteNote(texte);
+      apercu.style.display = 'block';
+    } else {
+      apercu.style.display = 'none';
+      apercu.innerHTML = '';
+    }
+  }
+
   function ouvrirModalNoteCollab(affId, collabNom, noteActuelle, fichiersActuels, e) {
     if (e) e.stopPropagation();
     currentNoteCollab = { affId, fichiers: fichiersActuels || [] };
@@ -8307,6 +8336,7 @@
     document.getElementById('btn-suppr-note-collab').style.display = noteActuelle ? '' : 'none';
     document.getElementById('note-collab-pj-input').value = '';
     document.getElementById('note-collab-pj-preview').innerHTML = '';
+    mettreAJourApercuNoteCollab();
     renderNoteCollabPJListe();
     document.getElementById('modal-note-collab').classList.add('open');
   }
