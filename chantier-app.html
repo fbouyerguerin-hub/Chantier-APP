@@ -635,7 +635,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9399,10 +9399,11 @@
         const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
         const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
           ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+        const ligneBaserowId = l['id'] || l.id;
         const actionsAdmin = estAdmin ? `
           <td style="padding:3px 4px;border-bottom:1px dotted #eee;text-align:center;white-space:nowrap">
-            <button onclick="editerLigneArticle(${l.id})" style="background:#e8f0e7;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:var(--vert);margin-right:3px" title="Modifier">✏️</button>
-            <button onclick="supprimerLigneArticle(${l.id})" style="background:#fde8e8;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">🗑️</button>
+            <button onclick="editerLigneArticle(${ligneBaserowId})" style="background:#e8f0e7;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:var(--vert);margin-right:3px" title="Modifier">✏️</button>
+            <button onclick="supprimerLigneArticle(${ligneBaserowId})" style="background:#fde8e8;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">🗑️</button>
           </td>` : '';
         return `<tr>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
@@ -9483,7 +9484,10 @@
       status.style.color = '#2e7d32';
       status.style.border = '1px solid #a5d6a7';
       status.textContent = `✅ Sync terminée — ${nbCrees} créée(s), ${nbMaj} mise(s) à jour${nbErreurs > 0 ? ', ' + nbErreurs + ' erreur(s)' : ''}`;
-      if (typeof chargerCommandesFournisseurs === 'function') chargerCommandesFournisseurs();
+      // Vider le cache pour forcer le rechargement complet
+      if (typeof _commandesCache !== 'undefined') _commandesCache = [];
+      if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
+      if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
 
     } catch (e) {
       status.style.background = '#fdecea';
@@ -9511,7 +9515,7 @@
       );
       if (r.ok || r.status === 204) {
         alert('✅ Ligne supprimée');
-        chargerCommandesFournisseurs();
+        chargerCommandesPage();
       } else {
         alert('❌ Erreur lors de la suppression');
       }
@@ -9558,7 +9562,7 @@
       );
       if (r.ok) {
         alert('✅ Ligne mise à jour');
-        chargerCommandesFournisseurs();
+        chargerCommandesPage();
       } else {
         alert('❌ Erreur lors de la mise à jour');
       }
