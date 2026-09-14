@@ -9367,6 +9367,7 @@
   // Qté·Unité / Montant alignés), plutôt qu'une liste à puces plate.
   function renderLignesArticlesGroupees(lignes, peutVoirPrix) {
     if (!lignes.length) return '';
+    const estAdmin = connectedDroit === 'Administrateur';
     const groupes = [];
     let categorieCourante;
     let groupeCourant = null;
@@ -9380,13 +9381,14 @@
       groupeCourant.items.push(l);
     });
 
-    const nbColonnes = peutVoirPrix ? 5 : 4;
+    const nbColonnes = peutVoirPrix ? (estAdmin ? 6 : 5) : (estAdmin ? 5 : 4);
     const entetes = `<tr style="background:#f5f5f5">
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Réf.</th>
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Description</th>
       <th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Qté</th>
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Unité</th>
       ${peutVoirPrix ? '<th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Montant HT</th>' : ''}
+      ${estAdmin ? '<th style="padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;text-align:center">Actions</th>' : ''}
     </tr>`;
 
     const corps = groupes.map(g => {
@@ -9397,18 +9399,172 @@
         const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
         const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
           ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+        const actionsAdmin = estAdmin ? `
+          <td style="padding:3px 4px;border-bottom:1px dotted #eee;text-align:center;white-space:nowrap">
+            <button onclick="editerLigneArticle(${l.id})" style="background:#e8f0e7;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:var(--vert);margin-right:3px" title="Modifier">✏️</button>
+            <button onclick="supprimerLigneArticle(${l.id})" style="background:#fde8e8;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">🗑️</button>
+          </td>` : '';
         return `<tr>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
+          ${actionsAdmin}
         </tr>`;
       }).join('');
       return entete + lignesGroupe;
     }).join('');
 
     return `<table style="width:100%;border-collapse:collapse;margin-top:6px">${entetes}${corps}</table>`;
+  }
+
+  // ============================================================
+  // SYNC EBP → BASEROW (une commande à la fois)
+  // ============================================================
+  const EBP_WORKER = 'https://guerin-ebp-proxy.f-bouyer-guerin.workers.dev';
+
+  async function syncEBP() {
+    const btn    = document.getElementById('btn-sync-ebp');
+    const icon   = document.getElementById('sync-icon');
+    const label  = document.getElementById('sync-label');
+    const status = document.getElementById('sync-ebp-status');
+
+    btn.disabled = true;
+    label.textContent = 'Sync…';
+    status.style.display = 'none';
+
+    if (!document.getElementById('sync-spin-style')) {
+      const s = document.createElement('style');
+      s.id = 'sync-spin-style';
+      s.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+      document.head.appendChild(s);
+    }
+    icon.style.animation = 'spin 1s linear infinite';
+
+    let nbCrees = 0, nbMaj = 0, nbErreurs = 0;
+
+    try {
+      const listeResp = await fetch(`${EBP_WORKER}/liste-modifiees`);
+      const listeData = await listeResp.json();
+      const commandes = listeData.commandes || [];
+
+      if (commandes.length === 0) {
+        status.style.background = '#e8f5e9';
+        status.style.color = '#2e7d32';
+        status.style.border = '1px solid #a5d6a7';
+        status.textContent = '✅ Aucune nouvelle commande à synchroniser';
+        status.style.display = 'block';
+        btn.disabled = false;
+        icon.style.animation = '';
+        label.textContent = 'Sync EBP';
+        return;
+      }
+
+      for (let i = 0; i < commandes.length; i++) {
+        const cmd = commandes[i];
+        label.textContent = `${i + 1}/${commandes.length}`;
+        try {
+          const r    = await fetch(`${EBP_WORKER}/sync-one?num=${encodeURIComponent(cmd.num)}`);
+          const data = await r.json();
+          if (data.status === 'ok') {
+            if (data.action === 'cree') nbCrees++;
+            else nbMaj++;
+          } else {
+            nbErreurs++;
+          }
+        } catch(e) {
+          nbErreurs++;
+        }
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      status.style.background = '#e8f5e9';
+      status.style.color = '#2e7d32';
+      status.style.border = '1px solid #a5d6a7';
+      status.textContent = `✅ Sync terminée — ${nbCrees} créée(s), ${nbMaj} mise(s) à jour${nbErreurs > 0 ? ', ' + nbErreurs + ' erreur(s)' : ''}`;
+      if (typeof chargerCommandesFournisseurs === 'function') chargerCommandesFournisseurs();
+
+    } catch (e) {
+      status.style.background = '#fdecea';
+      status.style.color = '#c62828';
+      status.style.border = '1px solid #ef9a9a';
+      status.textContent = '❌ Erreur : ' + e.message;
+    }
+
+    btn.disabled = false;
+    icon.style.animation = '';
+    label.textContent = 'Sync EBP';
+    status.style.display = 'block';
+    setTimeout(() => { status.style.display = 'none'; }, 10000);
+  }
+
+  // ============================================================
+  // ÉDITION / SUPPRESSION LIGNE ARTICLE (Admin uniquement)
+  // ============================================================
+  async function supprimerLigneArticle(ligneId) {
+    if (!confirm('Supprimer cette ligne article ?')) return;
+    try {
+      const r = await fetch(
+        `https://api.baserow.io/api/database/rows/table/1179061/${ligneId}/`,
+        { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }
+      );
+      if (r.ok || r.status === 204) {
+        alert('✅ Ligne supprimée');
+        chargerCommandesFournisseurs();
+      } else {
+        alert('❌ Erreur lors de la suppression');
+      }
+    } catch(e) {
+      alert('❌ Erreur : ' + e.message);
+    }
+  }
+
+  async function editerLigneArticle(ligneId) {
+    let ligne = {};
+    try {
+      const r = await fetch(
+        `https://api.baserow.io/api/database/rows/table/1179061/${ligneId}/?user_field_names=true`,
+        { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }
+      );
+      if (r.ok) ligne = await r.json();
+    } catch(e) {}
+
+    const ref   = prompt('Référence fournisseur :', ligne['Reference fournisseur'] || '');
+    if (ref === null) return;
+    const desc  = prompt('Description :', ligne['Description'] || '');
+    if (desc === null) return;
+    const qte   = prompt('Quantité :', ligne['Quantite'] || '');
+    if (qte === null) return;
+    const unite = prompt('Unité :', ligne['Unite'] || '');
+    if (unite === null) return;
+    const ht    = prompt('Montant HT :', ligne['Montant HT'] || '');
+    if (ht === null) return;
+
+    try {
+      const r = await fetch(
+        `https://api.baserow.io/api/database/rows/table/1179061/${ligneId}/?user_field_names=true`,
+        {
+          method: 'PATCH',
+          headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            'Reference fournisseur': ref,
+            'Description':           desc,
+            'Quantite':              parseFloat(qte) || 0,
+            'Unite':                 unite,
+            'Montant HT':            parseFloat(ht) || 0,
+          })
+        }
+      );
+      if (r.ok) {
+        alert('✅ Ligne mise à jour');
+        chargerCommandesFournisseurs();
+      } else {
+        alert('❌ Erreur lors de la mise à jour');
+      }
+    } catch(e) {
+      alert('❌ Erreur : ' + e.message);
+    }
   }
 
   function renderCarteCommande(r, peutVoirPrix, contexte) {
@@ -13762,8 +13918,14 @@
 <div id="page-commandes" class="page" style="display:none">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📦 Commandes fournisseurs</div>
-    <button onclick="ouvrirImpressionCommandes()" title="Imprimer" style="background:var(--vert-clair);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:var(--vert)">🖨️</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button onclick="syncEBP()" id="btn-sync-ebp" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
+        <span id="sync-icon">🔄</span><span id="sync-label">Sync EBP</span>
+      </button>
+      <button onclick="ouvrirImpressionCommandes()" title="Imprimer" style="background:var(--vert-clair);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:var(--vert)">🖨️</button>
+    </div>
   </div>
+  <div id="sync-ebp-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
     <input type="text" id="commandes-recherche-globale" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="rechercherCommandesGlobal(this.value)" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
