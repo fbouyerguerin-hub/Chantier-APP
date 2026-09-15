@@ -635,7 +635,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8954,6 +8954,7 @@
       listeEl.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Tapez au moins un mot pour rechercher un article.</div>';
       return;
     }
+    const mots = recherche.split(/\s+/).filter(Boolean);
 
     const commandesParId = {};
     _commandesCache.forEach(r => { commandesParId[r.id] = r; });
@@ -8966,7 +8967,8 @@
         const desc = (l['Description'] || '').toLowerCase();
         const cat = (l['Categorie'] || '').toLowerCase();
         const ref = (l['Reference fournisseur'] || '').toLowerCase();
-        if (desc.includes(recherche) || cat.includes(recherche) || ref.includes(recherche)) {
+        const texte = `${desc} ${cat} ${ref}`;
+        if (mots.every(m => texte.includes(m))) {
           resultats.push({ ligne: l, commande });
         }
       });
