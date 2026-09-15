@@ -635,7 +635,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9479,6 +9479,10 @@
         }
         await new Promise(r => setTimeout(r, 300));
       }
+
+      // Mettre à jour la date de sync APRÈS avoir tout traité
+      const now = new Date().toISOString();
+      await fetch(`${EBP_WORKER}/set-date?date=${encodeURIComponent(now)}`);
 
       status.style.background = '#e8f5e9';
       status.style.color = '#2e7d32';
