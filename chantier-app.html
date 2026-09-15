@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9458,7 +9458,7 @@
 
       let data = null;
       try {
-        const resp = await fetch(`${EBP_WORKER}/sync`, { cache: 'no-store', signal: controller.signal });
+        const resp = await fetch(`${EBP_WORKER}/sync?updateDate=0`, { cache: 'no-store', signal: controller.signal });
         clearTimeout(timeoutId);
         data = await resp.json();
       } catch(fetchErr) {
