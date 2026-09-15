@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9469,7 +9469,7 @@
       status.style.background = '#e8f5e9';
       status.style.color = '#2e7d32';
       status.style.border = '1px solid #a5d6a7';
-      const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+      const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} maj, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj, ${data.lignes_suppr || 0} supprimée(s)${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
       status.textContent = msg;
       // Attendre 3s que Baserow soit à jour puis recharger
       await new Promise(r => setTimeout(r, 3000));
