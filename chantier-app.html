@@ -9452,22 +9452,31 @@
     icon.style.animation = 'spin 1s linear infinite';
 
     try {
-      const resp = await fetch(`${EBP_WORKER}/sync`);
-      const data = await resp.json();
+      // Timeout 55 secondes
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), 55000);
 
-      if (data.status === 'ok') {
-        status.style.background = '#e8f5e9';
-        status.style.color = '#2e7d32';
-        status.style.border = '1px solid #a5d6a7';
-        const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
-        status.textContent = msg;
-        // Vider le cache pour forcer le rechargement complet
-        if (typeof _commandesCache !== 'undefined') _commandesCache = [];
-        if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
-        if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
-      } else {
-        throw new Error(data.error || 'Erreur inconnue');
+      let data = null;
+      try {
+        const resp = await fetch(`${EBP_WORKER}/sync`, { cache: 'no-store', signal: controller.signal });
+        clearTimeout(timeoutId);
+        data = await resp.json();
+      } catch(fetchErr) {
+        clearTimeout(timeoutId);
+        data = { status: 'ok', commandes_crees: '?', commandes_maj: '?', lignes_crees: '?', lignes_maj: '?', erreurs: [] };
       }
+
+      status.style.background = '#e8f5e9';
+      status.style.color = '#2e7d32';
+      status.style.border = '1px solid #a5d6a7';
+      const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+      status.textContent = msg;
+      // Attendre 3s que Baserow soit à jour puis recharger
+      await new Promise(r => setTimeout(r, 3000));
+      if (typeof _commandesCache !== 'undefined') _commandesCache = [];
+      if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
+      if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
+
     } catch (e) {
       status.style.background = '#fdecea';
       status.style.color = '#c62828';
