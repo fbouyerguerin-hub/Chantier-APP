@@ -635,7 +635,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9443,56 +9443,23 @@
     }
     icon.style.animation = 'spin 1s linear infinite';
 
-    let nbCrees = 0, nbMaj = 0, nbErreurs = 0;
-
     try {
-      const listeResp = await fetch(`${EBP_WORKER}/liste-modifiees`);
-      const listeData = await listeResp.json();
-      const commandes = listeData.commandes || [];
+      const resp = await fetch(`${EBP_WORKER}/sync`);
+      const data = await resp.json();
 
-      if (commandes.length === 0) {
+      if (data.status === 'ok') {
         status.style.background = '#e8f5e9';
         status.style.color = '#2e7d32';
         status.style.border = '1px solid #a5d6a7';
-        status.textContent = '✅ Aucune nouvelle commande à synchroniser';
-        status.style.display = 'block';
-        btn.disabled = false;
-        icon.style.animation = '';
-        label.textContent = 'Sync EBP';
-        return;
+        const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+        status.textContent = msg;
+        // Vider le cache pour forcer le rechargement complet
+        if (typeof _commandesCache !== 'undefined') _commandesCache = [];
+        if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
+        if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
+      } else {
+        throw new Error(data.error || 'Erreur inconnue');
       }
-
-      for (let i = 0; i < commandes.length; i++) {
-        const cmd = commandes[i];
-        label.textContent = `${i + 1}/${commandes.length}`;
-        try {
-          const r    = await fetch(`${EBP_WORKER}/sync-one?num=${encodeURIComponent(cmd.num)}`);
-          const data = await r.json();
-          if (data.status === 'ok') {
-            if (data.action === 'cree') nbCrees++;
-            else nbMaj++;
-          } else {
-            nbErreurs++;
-          }
-        } catch(e) {
-          nbErreurs++;
-        }
-        await new Promise(r => setTimeout(r, 300));
-      }
-
-      // Mettre à jour la date de sync APRÈS avoir tout traité
-      const now = new Date().toISOString();
-      await fetch(`${EBP_WORKER}/set-date?date=${encodeURIComponent(now)}`);
-
-      status.style.background = '#e8f5e9';
-      status.style.color = '#2e7d32';
-      status.style.border = '1px solid #a5d6a7';
-      status.textContent = `✅ Sync terminée — ${nbCrees} créée(s), ${nbMaj} mise(s) à jour${nbErreurs > 0 ? ', ' + nbErreurs + ' erreur(s)' : ''}`;
-      // Vider le cache pour forcer le rechargement complet
-      if (typeof _commandesCache !== 'undefined') _commandesCache = [];
-      if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
-      if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
-
     } catch (e) {
       status.style.background = '#fdecea';
       status.style.color = '#c62828';
