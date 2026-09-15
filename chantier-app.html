@@ -82,6 +82,11 @@
     #liste-veh-case .modal-option.selected { background: #e6e6e2; color: #5a5a5a; }
     #liste-collab-jour .modal-option.selected .check,
     #liste-veh-case .modal-option.selected .check { color: #7a7a75; }
+    /* Onglets Commandes : défilement horizontal avec barre visible sur mobile comme sur desktop */
+    #commandes-tabs-scroll { scrollbar-width: thin; scrollbar-color: #c9c9c0 transparent; }
+    #commandes-tabs-scroll::-webkit-scrollbar { height: 5px; }
+    #commandes-tabs-scroll::-webkit-scrollbar-thumb { background: #c9c9c0; border-radius: 4px; }
+    #commandes-tabs-scroll::-webkit-scrollbar-track { background: transparent; }
     .btn-validate { width: 100%; background: linear-gradient(135deg, var(--vert) 0%, #3a6331 100%); color: #fff; border: none; border-radius: 12px; padding: 15px; font-size: 15px; font-weight: 700; cursor: pointer; margin: 14px 16px; width: calc(100% - 32px); }
 
     /* PAGE RESUME */
@@ -635,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6901,6 +6906,7 @@
           const vehActuels = ligneVeh ? (ligneVeh['Véhicule'] || []) : [];
           if (isGestAdmin && !isPasseCollectif) {
             const vehBloc = document.createElement('div');
+            vehBloc.className = 'veh-bloc';
             vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700;max-width:calc(100% - 48px);box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
             vehBloc.innerHTML = vehActuels.length ? '🚐 ' + vehActuels.map(v => v.value).join(' · ') : '🚐 <span style="font-weight:400">+ véhicule</span>';
             vehBloc.title = vehActuels.length ? vehActuels.map(v => v.value).join(' · ') : '';
@@ -6999,17 +7005,17 @@
             let touchMoved = false;
             td.addEventListener('touchstart', e => {
               touchMoved = false;
-              if (e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) touchMoved = true;
+              if (e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab') || e.target.closest('.veh-bloc')) touchMoved = true;
             }, { passive: true });
             td.addEventListener('touchmove', () => { touchMoved = true; }, { passive: true });
             td.addEventListener('touchend', e => {
               if (touchMoved) return;
-              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) return;
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab') || e.target.closest('.veh-bloc')) return;
               e.preventDefault();
               if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
             }, { passive: false });
             td.onclick = e => {
-              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab')) return;
+              if (e.target.closest('.aff-tag') || e.target.classList.contains('btn-del-aff') || e.target.closest('.btn-dup-equipe') || e.target.closest('.btn-clear-all-collab') || e.target.closest('.veh-bloc')) return;
               if (collabDeplace) { deplacerCollab(collabDeplace, chantier, dateStr); } else { ouvrirModalCollabCase(chantier, dateStr); }
             };
           }
@@ -8954,6 +8960,7 @@
       listeEl.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Tapez au moins un mot pour rechercher un article.</div>';
       return;
     }
+    const mots = recherche.split(/\s+/).filter(Boolean);
 
     const commandesParId = {};
     _commandesCache.forEach(r => { commandesParId[r.id] = r; });
@@ -8966,7 +8973,8 @@
         const desc = (l['Description'] || '').toLowerCase();
         const cat = (l['Categorie'] || '').toLowerCase();
         const ref = (l['Reference fournisseur'] || '').toLowerCase();
-        if (desc.includes(recherche) || cat.includes(recherche) || ref.includes(recherche)) {
+        const texte = `${desc} ${cat} ${ref}`;
+        if (mots.every(m => texte.includes(m))) {
           resultats.push({ ligne: l, commande });
         }
       });
@@ -9444,33 +9452,22 @@
     icon.style.animation = 'spin 1s linear infinite';
 
     try {
-      // Lancer la sync — timeout 55 secondes
-      const controller = new AbortController();
-      const timeoutId  = setTimeout(() => controller.abort(), 55000);
+      const resp = await fetch(`${EBP_WORKER}/sync`);
+      const data = await resp.json();
 
-      let data = null;
-      try {
-        const resp = await fetch(`${EBP_WORKER}/sync?quick=1`, { cache: 'no-store', signal: controller.signal });
-        clearTimeout(timeoutId);
-        data = await resp.json();
-      } catch(fetchErr) {
-        // Timeout ou erreur réseau — la sync tourne encore en arrière-plan
-        clearTimeout(timeoutId);
-        data = { status: 'ok', commandes_crees: '?', commandes_maj: '?', lignes_crees: '?', lignes_maj: '?', erreurs: [] };
+      if (data.status === 'ok') {
+        status.style.background = '#e8f5e9';
+        status.style.color = '#2e7d32';
+        status.style.border = '1px solid #a5d6a7';
+        const msg = `✅ Sync terminée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+        status.textContent = msg;
+        // Vider le cache pour forcer le rechargement complet
+        if (typeof _commandesCache !== 'undefined') _commandesCache = [];
+        if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
+        if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
+      } else {
+        throw new Error(data.error || 'Erreur inconnue');
       }
-
-      status.style.background = '#e8f5e9';
-      status.style.color = '#2e7d32';
-      status.style.border = '1px solid #a5d6a7';
-      const msg = `✅ Sync lancée — ${data.commandes_crees} créée(s), ${data.commandes_maj} mise(s) à jour, ${data.lignes_crees} ligne(s) créée(s), ${data.lignes_maj} ligne(s) maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
-      status.textContent = msg;
-
-      // Attendre 3 secondes que Baserow soit à jour puis recharger
-      await new Promise(r => setTimeout(r, 3000));
-      if (typeof _commandesCache !== 'undefined') _commandesCache = [];
-      if (typeof _commandesLignesCache !== 'undefined') _commandesLignesCache = {};
-      if (typeof chargerCommandesPage === 'function') await chargerCommandesPage();
-
     } catch (e) {
       status.style.background = '#fdecea';
       status.style.color = '#c62828';
@@ -13921,14 +13918,14 @@
 
   <div id="commandes-onglets-normaux">
   <div style="padding:8px 16px 0">
-    <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px">
-      <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
-      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 En attente réception</button>
-      <button id="tab-commandes-partielle" onclick="switchCommandesVue('partielle')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔶 Partielle</button>
-      <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
-      <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
-      <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
-      <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
+    <div id="commandes-tabs-scroll" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:2px">
+      <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
+      <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 En attente réception</button>
+      <button id="tab-commandes-partielle" onclick="switchCommandesVue('partielle')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔶 Partielle</button>
+      <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
+      <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
+      <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
+      <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
     </div>
   </div>
 
