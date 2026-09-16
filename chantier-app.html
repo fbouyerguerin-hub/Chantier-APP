@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -10744,10 +10744,26 @@
     }
   }
 
+  let usersTabActif = 'actifs';
+
+  function switchUsersTab(tab) {
+    usersTabActif = tab;
+    document.getElementById('tab-users-actifs').style.background  = tab === 'actifs'   ? 'var(--vert)'       : 'var(--beige-clair)';
+    document.getElementById('tab-users-actifs').style.color       = tab === 'actifs'   ? '#fff'              : 'var(--gris)';
+    document.getElementById('tab-users-inactifs').style.background = tab === 'inactifs' ? '#c0392b'          : 'var(--beige-clair)';
+    document.getElementById('tab-users-inactifs').style.color      = tab === 'inactifs' ? '#fff'             : 'var(--gris)';
+    renderUsersListe(usersCache);
+  }
+
   function renderUsersListe(users) {
     const container = document.getElementById('liste-utilisateurs');
-    if (!users.length) { container.innerHTML = '<div class="feuille-empty">Aucun résultat</div>'; return; }
-    container.innerHTML = users.map(u => {
+    // Filtrer selon l'onglet actif
+    const filtres = users.filter(u => {
+      const actif = u['Actif'] !== false;
+      return usersTabActif === 'actifs' ? actif : !actif;
+    });
+    if (!filtres.length) { container.innerHTML = '<div class="feuille-empty">Aucun ' + (usersTabActif === 'actifs' ? 'collaborateur actif' : 'collaborateur inactif') + '</div>'; return; }
+    container.innerHTML = filtres.map(u => {
         const actif = u['Actif'] !== false;
         const droit = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         const vueId = (u['Vue ID']||'').toString();
@@ -13088,6 +13104,10 @@
     <div style="margin:0 16px 12px">
       <input id="search-users" type="text" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerUsers(this.value)"
         style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
+    </div>
+    <div style="display:flex;gap:8px;margin:0 16px 12px">
+      <button id="tab-users-actifs" onclick="switchUsersTab('actifs')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">✅ Actifs</button>
+      <button id="tab-users-inactifs" onclick="switchUsersTab('inactifs')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">❌ Inactifs</button>
     </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
