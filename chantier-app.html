@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9376,10 +9376,12 @@
   function renderLignesArticlesGroupees(lignes, peutVoirPrix) {
     if (!lignes.length) return '';
     const estAdmin = connectedDroit === 'Administrateur';
+    // Trier par Ordre EBP (LineOrder)
+    const lignesTri = [...lignes].sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
     const groupes = [];
     let categorieCourante;
     let groupeCourant = null;
-    lignes.forEach(l => {
+    lignesTri.forEach(l => {
       const cat = l['Categorie'] || '';
       if (groupeCourant === null || cat !== categorieCourante) {
         groupeCourant = { categorie: cat, items: [] };
@@ -9405,8 +9407,9 @@
         : '';
       const lignesGroupe = g.items.map(l => {
         const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
-        const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
-          ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+        const montantHtVal = Number(l['Montant HT'] || 0);
+        const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '' && montantHtVal !== 0)
+          ? montantHtVal.toFixed(2) + ' €' : '';
         const ligneBaserowId = l['id'] || l.id;
         const actionsAdmin = estAdmin ? `
           <td style="padding:3px 4px;border-bottom:1px dotted #eee;text-align:center;white-space:nowrap">
@@ -9581,7 +9584,7 @@
     const dateEnvoiChantier = r['Date envoi chantier'] || '';
     const dateReceptionPrevue = r['Date reception prevue'] || '';
     const referenceComplete = r['Reference complete'] || '';
-    const envoyeParMail = r['Envoye par mail'] || false;
+    const envoyeParMail = r['Envoye par mail'] === true;
 
     const formaterDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
 
