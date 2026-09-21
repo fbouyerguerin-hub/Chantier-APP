@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1016,13 +1016,14 @@
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
           excludeIds: (row['exclure chantier'] || []).map(c => c.id),
-          typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id)
+          typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id),
+          modeleStandard: !!row['Modèle standard']
         })).filter(opt => !opt.excludeIds.includes(chantierId));
         const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
         // Si ce chantier n'a aucune tâche qui lui est spécifiquement rattachée, on ne retombe pas sur
-        // TOUTES les tâches (y compris celles des autres chantiers) : uniquement les tâches globales
-        // (sans aucun chantier lié), du type Congés/RTT/Maladie.
-        const globales = allRows.filter(opt => opt.chantiersIds.length === 0);
+        // TOUTES les tâches sans chantier : uniquement celles cochées "Modèle standard" (ex. Congés/RTT/
+        // Maladie). Une tâche sans chantier et non cochée "Modèle standard" n'apparaît jamais dans les choix.
+        const globales = allRows.filter(opt => opt.chantiersIds.length === 0 && opt.modeleStandard);
         let rows = linked.length > 0 ? linked : globales;
         if (key === 'SousTaches' && modalLigneId !== null) {
           const ligne = lignes.find(l => l.id === modalLigneId);
