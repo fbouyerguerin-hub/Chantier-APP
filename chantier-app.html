@@ -640,13 +640,27 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
   const TABLE_SIGNATURES = '1099211';
   const TABLE_COMMANDES_FOURNISSEURS = '1179060';
   const TABLE_COMMANDES_FOURNISSEURS_LIGNES = '1179061';
+  // ⚠️ Table Baserow "Commandes clients" (alimentée par la future route du Worker EBP, ex. /sync-clients).
+  const TABLE_COMMANDES_CLIENTS = '1210899';
+  // ⚠️ À CRÉER dans Baserow : table "Commandes clients lignes", structure attendue (miroir de
+  // TABLE_COMMANDES_FOURNISSEURS_LIGNES) :
+  //   - Commande        : lien vers la table "Commandes clients" (une ligne = une commande)
+  //   - Ordre           : nombre (ordre EBP de la ligne, pour un tri fidèle au devis/à la commande)
+  //   - Reference       : texte (référence article)
+  //   - Description     : texte
+  //   - Quantite        : nombre
+  //   - Unite           : texte
+  //   - Prix unitaire HT: nombre décimal
+  //   - Montant HT      : nombre décimal
+  // Remplacer l'ID ci-dessous une fois la table créée.
+  const TABLE_COMMANDES_CLIENTS_LIGNES = '1210908';
   // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
   // dans une section repliée pour ne pas polluer la vue principale, aussi
   // bien dans l'onglet Commandes que dans la fenêtre "Commandes" de Mon planning.
@@ -830,6 +844,8 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     const navCommandes = document.getElementById('nav-commandes');
     if (navCommandes) navCommandes.style.display = 'flex'; // Visible pour tous : réception atelier/chantier
+    const navCommandesClients = document.getElementById('nav-commandes-clients');
+    if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const tabCommandesChantier = document.getElementById('tab-commandes-chantier');
     if (tabCommandesChantier) tabCommandesChantier.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
     peutVoirPrixCommandes().then(peutVoir => {
@@ -1240,6 +1256,11 @@
       rechercherCommandesGlobal('');
       switchCommandesVue('liste');
       chargerCommandesPage();
+    } else if (nav === 'commandes-clients') {
+      showPage('page-commandes-clients');
+      const rechercheClients = document.getElementById('commandes-clients-recherche');
+      if (rechercheClients) rechercheClients.value = '';
+      chargerCommandesClientsPage();
     }
   }
 
@@ -9496,6 +9517,151 @@
   }
 
   // ============================================================
+  // COMMANDES CLIENTS (EBP — ventes) — Administrateur/Gestionnaire uniquement
+  // Même principe que la synchronisation des commandes fournisseurs, mais sur
+  // une table Baserow séparée (TABLE_COMMANDES_CLIENTS) et une route Worker dédiée.
+  // ⚠️ Champs supposés sur la table Baserow (à ajuster si les noms réels diffèrent) :
+  // 'Numero commande', 'Date commande', 'Client', 'Montant HT', 'Statut'.
+  // ============================================================
+  let _commandesClientsCache = [];
+  let _commandesClientsLignesCache = {};
+  let _commandesClientsDetailOuvert = new Set();
+
+  async function chargerCommandesClientsPage() {
+    const resumeEl = document.getElementById('commandes-clients-resume');
+    const listeEl = document.getElementById('commandes-clients-liste');
+    if (resumeEl) resumeEl.textContent = 'Chargement…';
+    try {
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/?user_field_names=true&size=200`;
+      const rows = await fetchToutesLesPages(url);
+      _commandesClientsCache = rows.sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+
+      _commandesClientsLignesCache = {};
+      if (TABLE_COMMANDES_CLIENTS_LIGNES && TABLE_COMMANDES_CLIENTS_LIGNES !== 'A_COMPLETER') {
+        const idsCommandes = _commandesClientsCache.map(r => r.id);
+        const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS_LIGNES}/?user_field_names=true&size=200`;
+        const toutesLignes = await fetchToutesLesPages(urlLignes);
+        toutesLignes.forEach(l => {
+          const cid = (l['Commande'] || [])[0]?.id;
+          if (!cid || !idsCommandes.includes(cid)) return;
+          if (!_commandesClientsLignesCache[cid]) _commandesClientsLignesCache[cid] = [];
+          _commandesClientsLignesCache[cid].push(l);
+        });
+      }
+      renderCommandesClientsListe();
+    } catch(e) {
+      if (resumeEl) resumeEl.textContent = '';
+      if (listeEl) listeEl.innerHTML = '<div style="color:#c0392b;font-size:12px;text-align:center;padding:10px">Erreur de chargement des commandes clients.</div>';
+    }
+  }
+
+  // Affiche les lignes d'une commande client (lecture seule) : triées par "Ordre" EBP.
+  function renderLignesCommandeClient(lignes) {
+    if (!lignes || !lignes.length) return '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucune ligne de détail sur cette commande.</div>';
+    const tri = [...lignes].sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
+    const lignesHtml = tri.map(l => {
+      const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
+      const montant = (l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
+        ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
+      return `<tr>
+        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;color:#999">${l['Reference'] || ''}</td>
+        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px">${l['Description'] || ''}</td>
+        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;text-align:right;white-space:nowrap">${qte}${l['Unite'] ? ' ' + l['Unite'] : ''}</td>
+        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;text-align:right;white-space:nowrap;font-weight:700;color:var(--vert)">${montant}</td>
+      </tr>`;
+    }).join('');
+    return `<table style="width:100%;border-collapse:collapse;margin-top:6px">
+      <tr style="background:#f5f5f5">
+        <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Réf.</th>
+        <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Description</th>
+        <th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Qté</th>
+        <th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Montant HT</th>
+      </tr>
+      ${lignesHtml}
+    </table>`;
+  }
+
+  function toggleDetailCommandeClient(id) {
+    if (_commandesClientsDetailOuvert.has(id)) _commandesClientsDetailOuvert.delete(id);
+    else _commandesClientsDetailOuvert.add(id);
+    renderCommandesClientsListe();
+  }
+
+  function renderCommandesClientsListe() {
+    const listeEl = document.getElementById('commandes-clients-liste');
+    const resumeEl = document.getElementById('commandes-clients-resume');
+    if (!listeEl) return;
+    const recherche = (document.getElementById('commandes-clients-recherche')?.value || '').trim().toLowerCase();
+    const mots = recherche.split(/\s+/).filter(Boolean);
+    const resultats = _commandesClientsCache.filter(r => {
+      const client = (r['Client'] || '').toLowerCase();
+      const numero = String(r['Numero commande'] || '').toLowerCase();
+      const texte = `${client} ${numero}`;
+      return mots.every(m => texte.includes(m));
+    });
+    if (resumeEl) resumeEl.textContent = resultats.length + ' commande(s) client';
+    listeEl.innerHTML = resultats.length ? resultats.map(r => {
+      const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
+      const montant = (r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '')
+        ? Number(r['Montant HT']).toFixed(2) + ' € HT' : '';
+      const statut = extraireValeurChamp(r['Statut'], '');
+      const lignes = _commandesClientsLignesCache[r.id] || [];
+      const ouvert = _commandesClientsDetailOuvert.has(r.id);
+      return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700;color:var(--gris)">${r['Client'] || '—'}</div>
+        <div style="font-size:11px;color:#888;margin:2px 0">${r['Numero commande'] ? 'N° ' + r['Numero commande'] + ' · ' : ''}${dateLabel}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+          ${statut ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleurStatutCommande(statut)}20;color:${couleurStatutCommande(statut)}">${statut}</span>` : '<span></span>'}
+          <span style="font-weight:700;font-size:13px;color:var(--vert)">${montant}</span>
+        </div>
+        <div onclick="toggleDetailCommandeClient(${r.id})" style="cursor:pointer;font-size:11px;color:var(--vert);font-weight:700;margin-top:8px;display:flex;align-items:center;gap:4px">
+          <span>${ouvert ? '▾' : '▸'} Détail${lignes.length ? ` (${lignes.length} article${lignes.length > 1 ? 's' : ''})` : ''}</span>
+        </div>
+        ${ouvert ? renderLignesCommandeClient(lignes) : ''}
+      </div>`;
+    }).join('') : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande client.</div>';
+  }
+
+  async function syncEBPClients() {
+    const btn    = document.getElementById('btn-sync-ebp-clients');
+    const icon   = document.getElementById('sync-icon-clients');
+    const label  = document.getElementById('sync-label-clients');
+    const status = document.getElementById('sync-ebp-clients-status');
+
+    btn.disabled = true;
+    label.textContent = 'Sync…';
+    status.style.display = 'none';
+    icon.style.animation = 'spin 1s linear infinite';
+
+    try {
+      const controller = new AbortController();
+      const timeoutId  = setTimeout(() => controller.abort(), 55000);
+      // ⚠️ Route Worker à créer côté EBP proxy (miroir de /sync pour les commandes clients / ventes).
+      const resp = await fetch(`${EBP_WORKER}/sync-clients?updateDate=0`, { cache: 'no-store', signal: controller.signal });
+      clearTimeout(timeoutId);
+      const data = await resp.json();
+
+      status.style.background = '#e8f5e9';
+      status.style.color = '#2e7d32';
+      status.style.border = '1px solid #a5d6a7';
+      status.textContent = `✅ Sync terminée — ${data.commandes_crees ?? '?'} créée(s), ${data.commandes_maj ?? '?'} maj${data.erreurs?.length > 0 ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+      await new Promise(r => setTimeout(r, 3000));
+      await chargerCommandesClientsPage();
+    } catch (e) {
+      status.style.background = '#fdecea';
+      status.style.color = '#c62828';
+      status.style.border = '1px solid #ef9a9a';
+      status.textContent = '❌ Erreur : ' + e.message;
+    }
+
+    btn.disabled = false;
+    icon.style.animation = '';
+    label.textContent = 'Sync EBP';
+    status.style.display = 'block';
+    setTimeout(() => { status.style.display = 'none'; }, 10000);
+  }
+
+  // ============================================================
   // ÉDITION / SUPPRESSION LIGNE ARTICLE (Admin uniquement)
   // ============================================================
   async function supprimerLigneArticle(ligneId) {
@@ -13931,6 +14097,10 @@
     <span class="nav-icon">📦</span>
     Commandes
   </button>
+  <button class="nav-btn" id="nav-commandes-clients" style="display:none" onclick="switchPage('commandes-clients')">
+    <span class="nav-icon">🧾</span>
+    Commandes clients
+  </button>
   <button class="nav-btn" onclick="seDeconnecter()">
     <span class="nav-icon">🚪</span>
     Quitter
@@ -14027,6 +14197,22 @@
     <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
   </div>
   </div>
+</div>
+
+<!-- PAGE COMMANDES CLIENTS (EBP — ventes) — réservée Administrateur/Gestionnaire -->
+<div id="page-commandes-clients" class="page" style="display:none">
+  <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">🧾 Commandes clients</div>
+    <button onclick="syncEBPClients()" id="btn-sync-ebp-clients" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
+      <span id="sync-icon-clients">🔄</span><span id="sync-label-clients">Sync EBP</span>
+    </button>
+  </div>
+  <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
+  <div style="padding:0 16px 10px">
+    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+  </div>
+  <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
+  <div id="commandes-clients-liste" style="padding:0 16px 80px"></div>
 </div>
 
 <!-- PAGE IMPRESSION COMMANDES (générée dynamiquement, visible uniquement à l'impression) -->
