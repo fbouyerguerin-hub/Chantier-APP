@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9534,7 +9534,17 @@
     try {
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/?user_field_names=true&size=200`;
       const rows = await fetchToutesLesPages(url);
-      _commandesClientsCache = rows.sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+
+      // Ne garder que les commandes clients rattachées à un chantier "En cours" (les autres,
+      // ou celles sans chantier reconnu, sont masquées — 9000 chantiers au total, on ne veut voir
+      // que ceux réellement actifs).
+      const urlChantiersStatut = `https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200&filter__Statue__equal=${encodeURIComponent('En cours')}`;
+      const chantiersEnCours = await fetchToutesLesPages(urlChantiersStatut);
+      const idsChantiersEnCours = new Set(chantiersEnCours.map(c => c.id));
+
+      _commandesClientsCache = rows
+        .filter(r => (r['Chantier'] || []).some(c => idsChantiersEnCours.has(c.id)))
+        .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
 
       _commandesClientsLignesCache = {};
       if (TABLE_COMMANDES_CLIENTS_LIGNES && TABLE_COMMANDES_CLIENTS_LIGNES !== 'A_COMPLETER') {
@@ -9635,8 +9645,8 @@
 
     try {
       const controller = new AbortController();
-      const timeoutId  = setTimeout(() => controller.abort(), 55000);
-      // ⚠️ Route Worker à créer côté EBP proxy (miroir de /sync pour les commandes clients / ventes).
+      // Volume de lignes plus élevé côté commandes clients : délai plus généreux que côté fournisseurs.
+      const timeoutId  = setTimeout(() => controller.abort(), 180000);
       const resp = await fetch(`${EBP_WORKER}/sync-clients?updateDate=0`, { cache: 'no-store', signal: controller.signal });
       clearTimeout(timeoutId);
       const data = await resp.json();
