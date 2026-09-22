@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9611,6 +9611,17 @@
     renderCommandesClientsListe();
   }
 
+  // Code chantier EBP au format CHxxxx (ex. "CHA01187" → "CH1187"), sinon repéré dans le nom du chantier lié
+  function codeChantierCommandeClient(r) {
+    const num = String(r['Numero chantier'] || '').trim();
+    let m = num.match(/^CHA0*(\d+)/i);
+    if (m) return 'CH' + m[1];
+    if (/^CH\d+/i.test(num)) return num.toUpperCase();
+    const nom = String((r['Chantier'] || [])[0]?.value || '');
+    m = nom.match(/CH\d+/i);
+    return m ? m[0].toUpperCase() : '';
+  }
+
   function renderCommandesClientsListe() {
     const listeEl = document.getElementById('commandes-clients-liste');
     const resumeEl = document.getElementById('commandes-clients-resume');
@@ -9620,7 +9631,7 @@
     const resultats = _commandesClientsCache.filter(r => {
       const client = (r['Client'] || '').toLowerCase();
       const numero = String(r['Numero commande'] || '').toLowerCase();
-      const texte = `${client} ${numero}`;
+      const texte = `${client} ${numero} ${codeChantierCommandeClient(r).toLowerCase()} ${String((r['Chantier'] || [])[0]?.value || '').toLowerCase()}`;
       return mots.every(m => texte.includes(m));
     });
     if (resumeEl) {
@@ -9635,9 +9646,13 @@
       const statut = extraireValeurChamp(r['Statut'], '');
       const lignes = _commandesClientsLignesCache[r.id] || [];
       const nbArt = lignes.reduce((n, l) => n + (String(l['Description'] || '').includes('\n') ? String(l['Description']).split('\n').filter(Boolean).length : 1), 0);
+      const codeCh = codeChantierCommandeClient(r);
+      const nomCh = String((r['Chantier'] || [])[0]?.value || '');
+      const chantierLabel = [codeCh && !nomCh.toUpperCase().includes(codeCh) ? codeCh : '', nomCh].filter(Boolean).join(' — ');
       const ouvert = _commandesClientsDetailOuvert.has(r.id);
       return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700;color:var(--gris)">${r['Client'] || '—'}</div>
+        ${chantierLabel ? `<div style="font-size:12px;font-weight:700;color:var(--vert);margin-top:2px">🏗️ ${chantierLabel}</div>` : ''}
         <div style="font-size:11px;color:#888;margin:2px 0">${r['Numero commande'] ? 'N° ' + r['Numero commande'] + ' · ' : ''}${dateLabel}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
           ${statut ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleurStatutCommande(statut)}20;color:${couleurStatutCommande(statut)}">${statut}</span>` : '<span></span>'}
@@ -14238,7 +14253,7 @@
   </div>
   <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
-    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande, CHxxxx)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   <div id="commandes-clients-liste" style="padding:0 16px 80px"></div>
