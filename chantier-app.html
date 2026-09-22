@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -936,9 +936,7 @@
   async function loadTable(key) {
     const { id, field } = TABLES[key];
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`, { headers: HEADERS });
-      const data = await res.json();
-      let rows = data.results || [];
+      let rows = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${id}/?user_field_names=true&size=200`);
       if (key === 'Chantiers') {
         rows = rows.filter(row => (row['Statue']?.value || row['Statue']) !== 'Terminé');
       }
@@ -2911,6 +2909,27 @@
     return champ;
   }
 
+  // Ids des chantiers au statut "Terminé" (champ 'Statue' de TABLE_CHANTIERS_ADMIN),
+  // mis en cache pour éviter de refaire l'appel à chaque changement d'onglet du
+  // Plan de charge. _idsChantiersTerminesCache = null force un rechargement.
+  let _idsChantiersTerminesCache = null;
+  async function obtenirIdsChantiersTermines() {
+    if (_idsChantiersTerminesCache) return _idsChantiersTerminesCache;
+    const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200';
+    const tousChantiers = await fetchToutesLesPages(url);
+    _idsChantiersTerminesCache = new Set(tousChantiers.filter(c => ((c['Statue']?.value || c['Statue'] || '') === 'Terminé')).map(c => c.id));
+    return _idsChantiersTerminesCache;
+  }
+  // Retire du tableau les lignes de Plan de charge (TABLE_PLAN_CHARGE) rattachées
+  // à un chantier Terminé — les chantiers clôturés ne doivent plus apparaître
+  // dans le Plan de charge (Gantt, Capacité, Affaires, Suivi, exports).
+  function filtrerAffairesChantiersActifs(affaires, idsChantiersTermines) {
+    return affaires.filter(a => {
+      const cid = (a['Chantier'] || [])[0]?.id;
+      return !cid || !idsChantiersTermines.has(cid);
+    });
+  }
+
   async function chargerCommandesPourChantiers(chantierIds) {
     if (!chantierIds || !chantierIds.length) return [];
     try {
@@ -4050,7 +4069,8 @@
       fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
     ]);
     const allCollabs = (await resCollabs.json()).results || [];
-    const affaires = (await resCharge.json()).results || [];
+    const idsChantiersTermines = await obtenirIdsChantiersTermines();
+    const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
     const usersData = (await resUsers.json()).results || [];
     const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
     const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
@@ -4122,7 +4142,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       const usersData = (await resUsers.json()).results || [];
       const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
       const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
@@ -4342,7 +4363,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       // Exclure les collaborateurs dont l'utilisateur est inactif (via Vue ID, repli par nom)
       const usersData = (await resUsers.json()).results || [];
       const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
@@ -4686,7 +4708,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       const usersData = (await resUsers.json()).results || [];
       const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
       const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
@@ -4909,7 +4932,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       const usersData = (await resUsers.json()).results || [];
       const inactifsIds = getInactifsCollabIds(usersData, allCollabs);
       const collabs = allCollabs.filter(c => !inactifsIds.has(String(c.id)));
@@ -5163,7 +5187,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabsGantt = (await resCollabsAll.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       const usersDataGantt = (await resUsers.json()).results || [];
       const inactifsIdsGantt = getInactifsCollabIds(usersDataGantt, allCollabsGantt);
       const collabs = allCollabsGantt.filter(c => !inactifsIdsGantt.has(String(c.id)));
@@ -5443,7 +5468,8 @@
         fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabsGp = (await resCollabsAll.json()).results || [];
-      const affaires = (await resCharge.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      const affaires = filtrerAffairesChantiersActifs((await resCharge.json()).results || [], idsChantiersTermines);
       const usersDataGp = (await resUsers.json()).results || [];
       const inactifsIdsGp = getInactifsCollabIds(usersDataGp, allCollabsGp);
       const collabs = allCollabsGp.filter(c => !inactifsIdsGp.has(String(c.id)));
@@ -5827,9 +5853,8 @@
     ['charge-h-etude','charge-h-fab-bois','charge-h-fab-acier','charge-h-pose',
      'charge-p-etude','charge-p-fab-bois','charge-p-fab-acier','charge-p-pose'].forEach(id => document.getElementById(id).value = '');
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      _chantiersChargeCache = (data.results || []).map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id }))
+      const chantiersTousBrut = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+      _chantiersChargeCache = chantiersTousBrut.map(c => ({ id: c.id, nom: c['Nom du chantier'] || '#' + c.id }))
         .sort((a,b) => a.nom.localeCompare(b.nom));
     } catch(e) {}
     try {
@@ -6012,7 +6037,8 @@
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
-      _affairesListeCache = (await res.json()).results || [];
+      const idsChantiersTermines = await obtenirIdsChantiersTermines();
+      _affairesListeCache = filtrerAffairesChantiersActifs((await res.json()).results || [], idsChantiersTermines);
       renderListeAffaires();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
   }
@@ -6550,13 +6576,12 @@
 
   async function modifierSaisie(rowId) {
     try {
-      const [resSaisie, resChantiers, resTaches] = await Promise.all([
+      const [resSaisie, chantiers, resTaches] = await Promise.all([
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`),
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
       ]);
       const r = await resSaisie.json();
-      const chantiers = (await resChantiers.json()).results || [];
       const taches = (await resTaches.json()).results || [];
 
       document.getElementById('edit-saisie-id').value = rowId;
@@ -6681,8 +6706,7 @@
     if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
 
     // Charger chantiers (tous statuts)
-    const resChantiers = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-    dataChantiersCached = await resChantiers.json();
+    dataChantiersCached = { results: await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200') };
     chantiersCollectif = (dataChantiersCached.results || [])
       .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || 'En cours' }))
       .sort((a, b) => { const o = { 'En cours': 0, 'En pause': 1, 'Termin\u00e9': 2 }; return (o[a.statue] ?? 3) - (o[b.statue] ?? 3) || a.nom.localeCompare(b.nom); });
@@ -6868,6 +6892,7 @@
             try {
               await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantier.id + '/?user_field_names=true', { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statue': newStatut }) });
               chantier.statue = newStatut;
+              _idsChantiersTerminesCache = null; // le statut a changé : on force le rechargement de la liste des chantiers terminés au prochain accès au Plan de charge
               const cached = (dataChantiersCached?.results || []).find(r => r.id === chantier.id);
               if (cached) cached['Statue'] = { value: newStatut };
               const sc2 = statutColors[newStatut] || { bg: '#eee', color: '#888' };
@@ -7448,9 +7473,8 @@
     document.getElementById('modal-changer-chantier').classList.add('open');
 
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      tousLesChantiersDispo = (data.results || []).map(r => ({
+      const data = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+      tousLesChantiersDispo = data.map(r => ({
         id: r.id,
         nom: r['Nom du chantier'] || '#' + r.id,
         statue: r['Statue']?.value || ''
@@ -8242,9 +8266,8 @@
         });
       }
       if (!chantiersAdmin.length) {
-        const resC2 = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-        const dataC2 = await resC2.json();
-        chantiersAdmin = (dataC2.results || []).map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || '' }));
+        const dataC2 = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+        chantiersAdmin = dataC2.map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || '' }));
       }
       collabsAdminLoaded = true;
     }
@@ -8613,9 +8636,7 @@
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
-      const data = await res.json();
-      chantiersGestionCache = data.results || [];
+      chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
       renderChantiersGestion(chantiersGestionCache);
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
   }
@@ -10952,6 +10973,7 @@
       // Mettre à jour le cache local
       const c = chantiersGestionCache.find(c => c.id === rowId);
       if (c) c['Statue'] = { value: statue };
+      _idsChantiersTerminesCache = null; // le statut a changé : on force le rechargement de la liste des chantiers terminés au prochain accès au Plan de charge
       renderChantiersGestion(chantiersGestionCache);
     } catch(e) { alert('Erreur : ' + e.message); }
   }
