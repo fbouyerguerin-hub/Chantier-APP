@@ -8930,7 +8930,7 @@
             <div style="font-size:11px;color:#666">${dateLabel}</div>
           </div>
           <div style="font-size:11px;color:#666">${r['Numero commande'] ? 'N° ' + r['Numero commande'] + ' · ' : ''}${statut}${montant ? ' · ' + montant : ''}</div>
-          ${renderLignesArticlesGroupees(lignes, peutVoirPrix)}
+          ${renderLignesArticlesGroupees(lignes, peutVoirPrix, statut)}
         </div>`;
       }).join('');
     } else {
@@ -9395,8 +9395,16 @@
   // PDF : la catégorie n'apparaît qu'une fois, en en-tête, au-dessus des
   // articles qu'elle regroupe) et les affiche façon tableau (Description /
   // Qté·Unité / Montant alignés), plutôt qu'une liste à puces plate.
-  function renderLignesArticlesGroupees(lignes, peutVoirPrix) {
+  function renderLignesArticlesGroupees(lignes, peutVoirPrix, statutCommande) {
     if (!lignes.length) return '';
+    // En réception partielle, on distingue visuellement les articles encore
+    // manquants (à réceptionner) de ceux déjà arrivés — mais seulement si au
+    // moins un article est réellement pointé comme manquant sur cette
+    // commande. Sans ça (statut passé en partielle sans détail article par
+    // article), on ne peut pas savoir ce qui manque : mieux vaut ne rien
+    // afficher que de marquer à tort "reçu" sur toute la ligne.
+    const nbManquantTotal = lignes.filter(l => l['Non réceptionné']).length;
+    const enPartielle = statutCommande === 'Réception partielle' && nbManquantTotal > 0;
     const estAdmin = connectedDroit === 'Administrateur';
     // Trier par Ordre EBP (LineOrder)
     const lignesTri = [...lignes].sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
@@ -9433,14 +9441,20 @@
         const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '' && montantHtVal !== 0)
           ? montantHtVal.toFixed(2) + ' €' : '';
         const ligneBaserowId = l['id'] || l.id;
+        const estManquante = enPartielle && !!l['Non réceptionné'];
+        const badgeEtat = enPartielle
+          ? (estManquante
+              ? ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 manquant</span>`
+              : ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#dceeda;color:#2f7d3c;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">✅ reçu</span>`)
+          : '';
         const actionsAdmin = estAdmin ? `
           <td style="padding:3px 4px;border-bottom:1px dotted #eee;text-align:center;white-space:nowrap">
             <button onclick="editerLigneArticle(${ligneBaserowId})" style="background:#e8f0e7;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:var(--vert);margin-right:3px" title="Modifier">✏️</button>
             <button onclick="supprimerLigneArticle(${ligneBaserowId})" style="background:#fde8e8;border:none;border-radius:5px;padding:2px 6px;cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">🗑️</button>
           </td>` : '';
-        return `<tr>
+        return `<tr${estManquante ? ' style="background:#fdf3e0"' : ''}>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
-          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}${badgeEtat}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
@@ -9611,17 +9625,6 @@
     renderCommandesClientsListe();
   }
 
-  // Code chantier EBP au format CHxxxx (ex. "CHA01187" → "CH1187"), sinon repéré dans le nom du chantier lié
-  function codeChantierCommandeClient(r) {
-    const num = String(r['Numero chantier'] || '').trim();
-    let m = num.match(/^CHA0*(\d+)/i);
-    if (m) return 'CH' + m[1];
-    if (/^CH\d+/i.test(num)) return num.toUpperCase();
-    const nom = String((r['Chantier'] || [])[0]?.value || '');
-    m = nom.match(/CH\d+/i);
-    return m ? m[0].toUpperCase() : '';
-  }
-
   function renderCommandesClientsListe() {
     const listeEl = document.getElementById('commandes-clients-liste');
     const resumeEl = document.getElementById('commandes-clients-resume');
@@ -9631,7 +9634,7 @@
     const resultats = _commandesClientsCache.filter(r => {
       const client = (r['Client'] || '').toLowerCase();
       const numero = String(r['Numero commande'] || '').toLowerCase();
-      const texte = `${client} ${numero} ${codeChantierCommandeClient(r).toLowerCase()} ${String((r['Chantier'] || [])[0]?.value || '').toLowerCase()}`;
+      const texte = `${client} ${numero}`;
       return mots.every(m => texte.includes(m));
     });
     if (resumeEl) {
@@ -9646,13 +9649,9 @@
       const statut = extraireValeurChamp(r['Statut'], '');
       const lignes = _commandesClientsLignesCache[r.id] || [];
       const nbArt = lignes.reduce((n, l) => n + (String(l['Description'] || '').includes('\n') ? String(l['Description']).split('\n').filter(Boolean).length : 1), 0);
-      const codeCh = codeChantierCommandeClient(r);
-      const nomCh = String((r['Chantier'] || [])[0]?.value || '');
-      const chantierLabel = [codeCh && !nomCh.toUpperCase().includes(codeCh) ? codeCh : '', nomCh].filter(Boolean).join(' — ');
       const ouvert = _commandesClientsDetailOuvert.has(r.id);
       return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
         <div style="font-size:13px;font-weight:700;color:var(--gris)">${r['Client'] || '—'}</div>
-        ${chantierLabel ? `<div style="font-size:12px;font-weight:700;color:var(--vert);margin-top:2px">🏗️ ${chantierLabel}</div>` : ''}
         <div style="font-size:11px;color:#888;margin:2px 0">${r['Numero commande'] ? 'N° ' + r['Numero commande'] + ' · ' : ''}${dateLabel}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
           ${statut ? `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleurStatutCommande(statut)}20;color:${couleurStatutCommande(statut)}">${statut}</span>` : '<span></span>'}
@@ -9789,6 +9788,8 @@
     const noteStatut = r['Note statut'] || '';
     const arValidePar = extraireValeurChamp(r['Valide par'], '');
     const receptionnePar = extraireValeurChamp(r['Receptionne par'], '');
+    const premiereReceptionPar = extraireValeurChamp(r['1ere reception par'], '');
+    const premiereReceptionDate = r['1ere reception date'] || '';
     const envoyePar = extraireValeurChamp(r['Envoye par'], '');
     const dateValidationAR = r['Date validation AR'] || '';
     const dateReceptionEffective = r['Date reception'] || '';
@@ -9800,7 +9801,7 @@
     const formaterDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
 
     const nbArticles = (_commandesLignesCache[r.id] || []).length;
-    const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix);
+    const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix, statut);
     const nbRetour = (_commandesLignesCache[r.id] || []).filter(l => l['Retour chantier']).length;
     const nbManquant = (_commandesLignesCache[r.id] || []).filter(l => l['Non réceptionné']).length;
     const peutSignalerRetour = estStatutCommandeReceptionne(statut);
@@ -9829,7 +9830,7 @@
           <button id="btn-reception-atelier-${uid}" onclick="toggleReceptionForm('${uid}', 'atelier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
           <button id="btn-reception-chantier-${uid}" onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
         </div>
-        <div id="reception-form-${uid}" style="display:none;margin-top:8px" data-type="">
+        <div id="reception-form-${uid}" style="display:none;margin-top:8px" data-type="" data-statut-avant="${statut}">
           <input type="text" id="reception-lieu-${uid}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gris-moyen);margin-bottom:6px;cursor:pointer">
             <input type="checkbox" id="reception-partielle-${uid}" onchange="toggleReceptionNoteObligatoire('${uid}')" />
@@ -9859,7 +9860,8 @@
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
     const contenuDetails = `
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
-      ${receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Réceptionné partiellement par' : 'Réceptionné par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
+      ${premiereReceptionPar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 1er arrivage réceptionné par : ${premiereReceptionPar}${premiereReceptionDate ? ` (${formaterDate(premiereReceptionDate)})` : ''}</div>` : (receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Réceptionné partiellement par' : 'Réceptionné par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : '')}
+      ${(premiereReceptionPar && receptionnePar && (premiereReceptionPar !== receptionnePar || dateReceptionEffective !== premiereReceptionDate)) ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Dernier complément réceptionné par' : 'Réception complétée par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
       ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}${dateEnvoiChantier ? ` (${formaterDate(dateEnvoiChantier)})` : ''}</div>` : ''}
       ${lignesHTML}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
@@ -10100,6 +10102,12 @@
   async function validerReception(uid, id) {
     const div = document.getElementById('reception-form-' + uid);
     const type = div?.dataset.type;
+    // Statut de la commande juste avant cette action : permet de distinguer
+    // le tout premier arrivage (statut encore "En attente réception") d'un
+    // complément ultérieur (statut déjà "Réception partielle"), afin de ne
+    // jamais écraser le nom de la personne ayant réceptionné le 1er arrivage.
+    const statutAvant = div?.dataset.statutAvant || '';
+    const premiereReception = statutAvant !== 'Réception partielle';
     const lieuInput = document.getElementById('reception-lieu-' + uid);
     const lieu = lieuInput ? lieuInput.value.trim() : '';
     if (!lieu) { alert('Merci d\'indiquer l\'emplacement de réception.'); return; }
@@ -10112,7 +10120,16 @@
     if (partielle && lignes.length && !nbCocheManquant) { alert('Merci de cocher au moins un article non réceptionné (ou de préciser ce qui manque en note si aucun article détaillé n\'est disponible).'); return; }
     if (partielle && !lignes.length && !note) { alert('Merci de préciser ce qui manque (note obligatoire, aucun article détaillé sur cette commande).'); return; }
     const statutCible = partielle ? 'Réception partielle' : (type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier');
-    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateYMD(new Date()) };
+    const dateAujourdhui = dateYMD(new Date());
+    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateAujourdhui };
+    // On ne renseigne "1ere reception par/date" qu'au tout premier arrivage :
+    // les réceptions suivantes (complément d'une commande déjà partielle)
+    // mettent uniquement à jour "Receptionne par" / "Date reception" ci-dessus,
+    // sans jamais écraser qui a réceptionné le 1er arrivage.
+    if (premiereReception) {
+      payload['1ere reception par'] = connectedCollab || '';
+      payload['1ere reception date'] = dateAujourdhui;
+    }
     if (note) payload['Note statut'] = note;
     try {
       // Met à jour, article par article, l'indicateur "Non réceptionné" : coché =
@@ -14253,7 +14270,7 @@
   </div>
   <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
-    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande, CHxxxx)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   <div id="commandes-clients-liste" style="padding:0 16px 80px"></div>
