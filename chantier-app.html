@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
+
+
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
   <meta name="mobile-web-app-capable" content="yes" />
@@ -640,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -9854,7 +9856,6 @@
     const dateReceptionEffective = r['Date reception'] || '';
     const dateEnvoiChantier = r['Date envoi chantier'] || '';
     const dateReceptionPrevue = r['Date reception prevue'] || '';
-    const dateReceptionEBP = r['Reception EBP'] || '';
     const referenceComplete = r['Reference complete'] || '';
     const envoyeParMail = r['Envoye par mail'] === true;
 
@@ -9966,14 +9967,7 @@
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
-      ${!estStatutCommandeReceptionne(statut) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        <span id="date-reception-prevue-label-${uid}">📅 ${(dateReceptionPrevue || dateReceptionEBP) ? 'Réception prévue le ' + new Date((dateReceptionPrevue || dateReceptionEBP) + 'T12:00:00').toLocaleDateString('fr-FR') + (!dateReceptionPrevue && dateReceptionEBP ? ' <span style="opacity:0.65;font-weight:400">(EBP)</span>' : '') : 'Date de réception prévue non renseignée'}</span>
-        ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="event.stopPropagation();toggleEditDateReceptionPrevue('${uid}')" style="cursor:pointer" title="Modifier la date de réception (AR)">✏️</span>
-        <span id="edit-date-reception-${uid}" style="display:none;align-items:center;gap:4px">
-          <input type="date" id="input-date-reception-${uid}" value="${dateReceptionPrevue}" style="font-size:11px;padding:2px 4px;border:1px solid #ddd;border-radius:5px;outline:none" />
-          <span onclick="event.stopPropagation();enregistrerDateReceptionPrevue('${uid}', ${r.id})" style="cursor:pointer;color:var(--vert);font-weight:700" title="Enregistrer">✔️</span>
-        </span>` : ''}
-      </div>` : ''}
+      ${(dateReceptionPrevue && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="display:flex;align-items:center;gap:6px">
           <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
@@ -10042,30 +10036,6 @@
     } catch (e) {
       console.error('Erreur suppression accusé de réception', e);
       alert('Erreur lors de la suppression : ' + e.message);
-    }
-  }
-
-  // Affiche/masque le mini-formulaire d'édition de la date de réception prévue (AR),
-  // pour corriger manuellement la date quand elle est absente ou erronée.
-  function toggleEditDateReceptionPrevue(uid) {
-    const el = document.getElementById('edit-date-reception-' + uid);
-    if (!el) return;
-    el.style.display = (el.style.display === 'none' || !el.style.display) ? 'inline-flex' : 'none';
-  }
-
-  async function enregistrerDateReceptionPrevue(uid, id) {
-    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
-    const input = document.getElementById('input-date-reception-' + uid);
-    const valeur = input ? input.value : '';
-    try {
-      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Date reception prevue': valeur || null })
-      });
-      if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
-      await rafraichirApresActionCommande();
-    } catch (e) {
-      console.error('Erreur mise à jour date de réception prévue', e);
-      alert('Erreur lors de la mise à jour : ' + e.message);
     }
   }
 
