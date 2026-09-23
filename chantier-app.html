@@ -640,7 +640,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2067,6 +2067,13 @@
   // (cas d'une demande sur une seule journée saisie sans que ce champ soit rempli, ex. directement dans Baserow).
   function finConge(r) {
     return r['Date de fin journée (inclus)'] || r['Date de début'];
+  }
+
+  // Une absence est "partielle" (moins d'une journée) quand elle a été saisie en heures
+  // (champ "Nombre d'heures" renseigné) plutôt qu'en jour(s) — ex : une matinée ou une
+  // après-midi de RTT.
+  function estAbsencePartielle(cg) {
+    return !!(cg && parseFloat(cg["Nombre d'heures"]) > 0);
   }
 
   // Répartit une demande de congé (RTT ou autre) semaine par semaine, en ne comptant que les jours
@@ -6853,13 +6860,13 @@
         dateStr >= cc['Date de début'] && dateStr <= finConge(cc)
       )).map(c => {
         const cg = congesCollectifData.find(cc => (cc['Collaborateurs']||[]).some(ccc => ccc.id === c.collabId) && dateStr >= cc['Date de début'] && dateStr <= finConge(cc));
-        return { nom: c.nom.split(' ')[0], raison: cg?.['Type de demande']?.value || 'Absence' };
+        return { nom: c.nom.split(' ')[0], raison: cg?.['Type de demande']?.value || 'Absence', partielle: estAbsencePartielle(cg) };
       });
       const absents = absentsDetail;
       const absentId = 'abs-' + dateStr;
       th.innerHTML = '<div style="font-weight:800">' + joursNoms[i] + '</div><div style="font-size:9px;opacity:0.85">' + j.toLocaleDateString('fr-FR',{day:'numeric',month:'short'}) + '</div>' +
         (ferie ? '<div style="font-size:8px;font-weight:700;margin-top:2px">🔴 ' + ferie + '</div>' : '') +
-        (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absentsDetail.map(a => iconeAbsence(a.raison) + ' ' + a.nom + ' (' + a.raison + ')').join('<br>') + '</div>' : '');
+        (absents.length ? '<div onclick="event.stopPropagation();toggleAbsents(\'' + absentId + '\')" style="background:rgba(255,100,100,0.3);border-radius:4px;padding:2px 4px;margin-top:3px;font-size:8px;cursor:pointer;font-weight:700">🚫 ' + absents.length + ' absent(s) ▾</div><div id="' + absentId + '" style="display:none;background:rgba(0,0,0,0.5);border-radius:4px;padding:3px 4px;margin-top:2px;font-size:8px;line-height:1.6;text-align:left">' + absentsDetail.map(a => '<span style="color:' + (a.partielle ? '#ffd166' : '#ff9a9a') + '">' + iconeAbsence(a.raison) + ' ' + a.nom + ' (' + (a.partielle ? '½ j. ' : '') + a.raison + ')</span>').join('<br>') + '</div>' : '');
       trH.appendChild(th);
     });
     thead.appendChild(trH);
@@ -7237,7 +7244,10 @@
         }).sort((a, b) => (a.indispo === b.indispo) ? 0 : (a.indispo ? 1 : -1)).map(({ c, conge, chantierAilleurs, indispo }) => {
           const selectionne = sel.has(c.collabId);
           let badge = '';
-          if (conge) badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:11px;font-weight:700;white-space:nowrap">🏖️ ${conge['Type de demande']?.value || 'Absent'}</span>`;
+          if (conge) {
+            const partielle = estAbsencePartielle(conge);
+            badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:${partielle ? '#fff4e0' : '#fdecea'};border:1px solid ${partielle ? '#f0d9a8' : '#f3c6c2'};color:${partielle ? '#a5761f' : '#c0392b'};font-size:11px;font-weight:700;white-space:nowrap">${partielle ? '🌗' : '🏖️'} ${conge['Type de demande']?.value || 'Absent'}${partielle ? ' (partielle)' : ''}</span>`;
+          }
           else if (chantierAilleurs) badge = `<span style="margin-left:8px;padding:2px 8px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:11px;font-weight:700;white-space:nowrap">🚧 Affecté à ${chantierAilleurs}</span>`;
           return '<div class="modal-option ' + (selectionne ? 'selected' : '') + '" '
             + (indispo ? 'style="gap:10px;background:#fafafa;cursor:default;pointer-events:none"' : 'onclick="toggleCollabCase(' + c.collabId + ',this)" style="gap:10px"') + '>'
