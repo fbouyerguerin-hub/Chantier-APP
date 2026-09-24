@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -933,7 +933,18 @@
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     window.scrollTo(0, 0);
+    if (id === 'page-commandes') caleBandeauCommandes();
   }
+
+  // Positionne le bandeau des commandes juste sous l'en-tête de l'appli (s'il est affiché)
+  function caleBandeauCommandes() {
+    const bandeau = document.getElementById('commandes-bandeau');
+    if (!bandeau) return;
+    const header = document.querySelector('.header');
+    const hauteur = header && getComputedStyle(header).display !== 'none' ? header.offsetHeight : 0;
+    bandeau.style.top = hauteur + 'px';
+  }
+  window.addEventListener('resize', caleBandeauCommandes);
 
   async function loadTable(key) {
     const { id, field } = TABLES[key];
@@ -6240,6 +6251,7 @@
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
       _affairesListeCache = filtrerAffairesChantiersActifs((await res.json()).results || [], idsChantiersTermines);
+      await assurerCacheCaChantiers();
       renderListeAffaires();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
   }
@@ -6256,7 +6268,7 @@
     const affaires = _affairesListeCache.filter(a => {
       if (!filtre) return true;
       const nom = (a['Chantier']||[])[0]?.value || '';
-      return nom.toLowerCase().includes(filtre);
+      return nom.toLowerCase().includes(filtre) || normaliserTexteCa(nomCaChantier((a['Chantier']||[])[0]?.id)).includes(normaliserTexteCa(filtre));
     });
     if (!affaires.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucun chantier ne correspond à cette recherche</div>'; return; }
     let html = '<div style="padding:8px 0 0">';
@@ -6268,6 +6280,7 @@
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1">
             <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">${nom}</div>
+            ${nomCaChantier((a['Chantier']||[])[0]?.id) ? `<div style="margin-bottom:4px">${badgeCaHtml(nomCaChantier((a['Chantier']||[])[0]?.id))}</div>` : ''}
             ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🔨 Pose ${livraison}</div>` : ''}
             <div>${postes}</div>
           </div>
@@ -6347,6 +6360,7 @@
   }
 
   async function chargerSuiviAffairesAvecContainer(affaires, collabs, container) {
+    await assurerCacheCaChantiers();
     // Charger toutes les saisies avec pagination complète
     let allSaisies = [];
     let urlSaisies = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200';
@@ -6419,7 +6433,7 @@
       const periodes = calculerPeriodesAffaire(a, collabs);
       const bgRow = idx % 2 === 0 ? '#fff' : '#fafafa';
       suivi += `<tr style="background:${bgRow};border-bottom:1px solid #f0f0f0">`;
-      suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom} <button onclick="afficherDetailSaisiesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" title="Voir toutes les saisies de ce chantier" style="background:#eef5f0;border:none;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;color:var(--vert);vertical-align:middle">📋</button></td>`;
+      suivi += `<td style="padding:8px;font-weight:700;color:var(--gris)">${nom}${nomCaChantier(chantierId) ? `<div style="font-size:10px;font-weight:600;color:#1a4f8b">👤 ${escHtmlRtt(nomCaChantier(chantierId))}</div>` : ''} <button onclick="afficherDetailSaisiesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" title="Voir toutes les saisies de ce chantier" style="background:#eef5f0;border:none;border-radius:6px;padding:2px 6px;font-size:10px;cursor:pointer;color:var(--vert);vertical-align:middle">📋</button></td>`;
       suivi += `<td style="padding:8px;color:#aaa;font-size:10px">${dateLivraison||'—'}</td>`;
 
       // Calcul générique Prévu/Réel pour un poste donné
@@ -8894,20 +8908,117 @@
   // ── GESTION CHANTIERS ──
   let chantiersGestionCache = [];
 
+  // ── CHARGÉ D'AFFAIRES DU CHANTIER ──
+  // Champ Baserow de la table Chantiers : lien vers la table Collaborateurs (1 personne).
+  // Les personnes proposées sont celles dont « Poste / Métier » = chargé d'affaire(s).
+  const CHAMP_CHARGE_AFFAIRES = "Chargé d'affaires";
+  let _champCaDisponible = null; // null = inconnu, sinon true/false selon la présence du champ dans Baserow
+  const _caParChantier = new Map(); // chantierId -> { id, nom }
+  let _caParChantierMaj = 0;
+
+  function normaliserTexteCa(t) {
+    return String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[’`]/g, "'").toLowerCase().trim();
+  }
+  function estPosteChargeAffaires(poste) {
+    return normaliserTexteCa(poste).startsWith("charge d'affaire");
+  }
+  function caDuChantierRow(c) {
+    const l = (c && c[CHAMP_CHARGE_AFFAIRES]) || [];
+    return l[0] ? { id: l[0].id, nom: l[0].value || '' } : null;
+  }
+  function memoriserCaChantiers(chantiers) {
+    if (chantiers.length) _champCaDisponible = chantiers.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_CHARGE_AFFAIRES));
+    chantiers.forEach(c => {
+      const ca = caDuChantierRow(c);
+      if (ca) _caParChantier.set(c.id, ca); else _caParChantier.delete(c.id);
+    });
+    _caParChantierMaj = Date.now();
+  }
+  // Recharge la correspondance chantier → chargé d'affaires si elle date de plus d'une minute
+  async function assurerCacheCaChantiers() {
+    if (Date.now() - _caParChantierMaj < 60000) return;
+    try {
+      memoriserCaChantiers(await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200'));
+    } catch(e) { /* non bloquant */ }
+  }
+  function nomCaChantier(chantierId) {
+    return _caParChantier.get(chantierId)?.nom || '';
+  }
+  function badgeCaHtml(nom, statut) {
+    if (nom) return `<span style="display:inline-flex;align-items:center;gap:4px;background:#eef3f8;color:#1a4f8b;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">👤 ${escHtmlRtt(nom)}</span>`;
+    if (statut === 'En cours' && _champCaDisponible) return `<span style="display:inline-flex;align-items:center;gap:4px;background:#fef3cd;color:#856404;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">👤 Chargé d'affaires non attribué</span>`;
+    return '';
+  }
+
+  // Liste déroulante de la fiche chantier
+  function remplirSelectCaChantier(caActuel) {
+    const sel = document.getElementById('chantier-ca');
+    if (!sel) return;
+    const cas = (_collabsChargeCache || [])
+      .filter(c => estPosteChargeAffaires(c['Poste / Métier']))
+      .map(c => ({ id: c.id, nom: c['Nom Complet'] || ('#' + c.id) }))
+      .sort((a, b) => a.nom.localeCompare(b.nom));
+    // Chargé d'affaires déjà attribué mais qui n'a plus ce poste : on le garde visible
+    if (caActuel && !cas.some(c => c.id === caActuel.id)) cas.push({ id: caActuel.id, nom: caActuel.nom + ' (poste modifié)' });
+    sel.innerHTML = '<option value="">— Non attribué —</option>' + cas.map(c => `<option value="${c.id}">${escHtmlRtt(c.nom)}</option>`).join('');
+    sel.value = caActuel ? String(caActuel.id) : '';
+    majAlerteCaChantier();
+  }
+  function majAlerteCaChantier() {
+    const el = document.getElementById('chantier-ca-alerte');
+    const bloc = document.getElementById('chantier-ca-bloc');
+    if (!el || !bloc) return;
+    if (_champCaDisponible === false) {
+      bloc.style.display = connectedDroit === 'Administrateur' ? 'block' : 'none';
+      document.getElementById('chantier-ca').disabled = true;
+      el.style.display = 'block';
+      el.textContent = "⚙️ Champ « Chargé d'affaires » absent de la table Chantiers dans Baserow.";
+      return;
+    }
+    bloc.style.display = 'block';
+    document.getElementById('chantier-ca').disabled = false;
+    const sansCa = !document.getElementById('chantier-ca').value;
+    const enCours = document.getElementById('chantier-statue').value === 'En cours';
+    el.style.display = sansCa && enCours ? 'block' : 'none';
+    el.textContent = "⚠️ Chantier en cours sans chargé d'affaires.";
+  }
+
   async function loadChantiersGestion() {
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
-      renderChantiersGestion(chantiersGestionCache);
+      memoriserCaChantiers(chantiersGestionCache);
+      remplirFiltreCaChantiers();
+      filtrerChantiersGestion();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
   }
 
+  // Recherche sur le nom du chantier OU le nom du chargé d'affaires, + filtre par chargé d'affaires
   function filtrerChantiersGestion(q) {
-    const filtered = q
-      ? chantiersGestionCache.filter(c => (c['Nom du chantier'] || '').toLowerCase().includes(q.toLowerCase()))
-      : chantiersGestionCache;
+    if (q === undefined) q = document.getElementById('search-chantiers-gestion')?.value || '';
+    const ql = normaliserTexteCa(q);
+    const filtreCa = document.getElementById('filtre-ca-chantiers')?.value || '';
+    const filtered = chantiersGestionCache.filter(c => {
+      const ca = caDuChantierRow(c);
+      if (filtreCa === '__aucun' && ca) return false;
+      if (filtreCa && filtreCa !== '__aucun' && String(ca?.id) !== filtreCa) return false;
+      if (!ql) return true;
+      return normaliserTexteCa(c['Nom du chantier']).includes(ql) || normaliserTexteCa(ca?.nom).includes(ql);
+    });
     renderChantiersGestion(filtered);
+  }
+
+  function remplirFiltreCaChantiers() {
+    const sel = document.getElementById('filtre-ca-chantiers');
+    if (!sel) return;
+    sel.style.display = _champCaDisponible ? '' : 'none';
+    const actuel = sel.value;
+    const cas = new Map();
+    chantiersGestionCache.forEach(c => { const ca = caDuChantierRow(c); if (ca) cas.set(ca.id, ca.nom); });
+    sel.innerHTML = '<option value="">👤 Tous les chargés d\'affaires</option><option value="__aucun">Non attribué</option>' +
+      [...cas.entries()].sort((a, b) => a[1].localeCompare(b[1])).map(([id, nom]) => `<option value="${id}">${escHtmlRtt(nom)}</option>`).join('');
+    sel.value = [...sel.options].some(o => o.value === actuel) ? actuel : '';
   }
 
   function formatDate(d) {
@@ -8941,6 +9052,15 @@
         '<option value="Terminé"' + (statue === 'Terminé' ? ' selected' : '') + '>⚫ Terminé</option>' +
         '</select>';
       div.appendChild(header);
+
+      // Chargé d'affaires
+      const badgeCa = badgeCaHtml(caDuChantierRow(c)?.nom, statue);
+      if (badgeCa) {
+        const caRow = document.createElement('div');
+        caRow.style.cssText = 'margin:-2px 0 8px';
+        caRow.innerHTML = badgeCa;
+        div.appendChild(caRow);
+      }
 
       // Dates
       const dates = document.createElement('div');
@@ -9570,12 +9690,15 @@
     const zoneResultats = document.getElementById('commandes-recherche-globale-resultats');
     const zoneOnglets = document.getElementById('commandes-onglets-normaux');
     const texte = (valeur || '').trim();
+    const blocOnglets = document.getElementById('commandes-tabs-bloc');
     if (!texte) {
       zoneResultats.style.display = 'none';
       zoneOnglets.style.display = 'block';
+      if (blocOnglets) blocOnglets.style.display = 'block';
       return;
     }
     zoneOnglets.style.display = 'none';
+    if (blocOnglets) blocOnglets.style.display = 'none';
     zoneResultats.style.display = 'block';
 
     const recherche = texte.toLowerCase();
@@ -11324,6 +11447,7 @@
         _collabsChargeCache = (await resC.json()).results || [];
       } catch(e) { _collabsChargeCache = _collabsChargeCache || []; }
     }
+    remplirSelectCaChantier(null);
     if (rowId) {
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true', { headers: HEADERS });
@@ -11332,6 +11456,8 @@
         document.getElementById('chantier-date-debut').value = c['Date début'] ? c['Date début'].split('T')[0] : '';
         document.getElementById('chantier-date-fin').value = c['Date fin'] ? c['Date fin'].split('T')[0] : '';
         document.getElementById('chantier-statue').value = c['Statue']?.value || c['Statue'] || 'En cours';
+        _champCaDisponible = Object.prototype.hasOwnProperty.call(c, CHAMP_CHARGE_AFFAIRES);
+        remplirSelectCaChantier(caDuChantierRow(c));
         afficherLienDevisChantier(c['Fichiers'] || []);
         // Charger les fichiers
         document.getElementById('chantier-fichiers-liste').innerHTML = '<div style="color:#aaa;font-size:13px;text-align:center;padding:10px">⏳ Chargement…</div>';
@@ -11427,6 +11553,10 @@
       'Date fin': document.getElementById('chantier-date-fin').value || null,
       'Statue': document.getElementById('chantier-statue').value,
     };
+    if (_champCaDisponible) {
+      const caId = document.getElementById('chantier-ca').value;
+      payload[CHAMP_CHARGE_AFFAIRES] = caId ? [parseInt(caId)] : [];
+    }
     const btn = document.getElementById('btn-save-chantier');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
     try {
@@ -13886,7 +14016,8 @@
       <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
     <div style="margin:0 16px 10px">
-      <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none" />
+      <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier ou un chargé d'affaires…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box" />
+      <select id="filtre-ca-chantiers" onchange="filtrerChantiersGestion()" style="display:none;width:100%;margin-top:8px;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box"></select>
     </div>
     <div id="liste-chantiers-gestion"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
@@ -14247,11 +14378,18 @@
       </div>
       <div class="field">
         <label>Statut</label>
-        <select id="chantier-statue" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+        <select id="chantier-statue" onchange="majAlerteCaChantier()" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
           <option value="En cours">🟢 En cours</option>
           <option value="En pause">🟡 En pause</option>
           <option value="Terminé">⚫ Terminé</option>
         </select>
+      </div>
+      <div class="field" id="chantier-ca-bloc">
+        <label>👤 Chargé d'affaires</label>
+        <select id="chantier-ca" onchange="majAlerteCaChantier()" style="width:100%;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:11px 13px;font-size:15px;color:var(--gris);outline:none">
+          <option value="">— Non attribué —</option>
+        </select>
+        <div id="chantier-ca-alerte" style="display:none;font-size:12px;color:#856404;background:#fef3cd;border-radius:8px;padding:6px 10px;margin-top:6px"></div>
       </div>
     </div>
 
@@ -14714,6 +14852,8 @@
 
 <!-- PAGE COMMANDES FOURNISSEURS -->
 <div id="page-commandes" class="page" style="display:none">
+  <!-- Bandeau fixe en haut de l'écran (titre, recherche, onglets) -->
+  <div id="commandes-bandeau" style="position:sticky;top:0;z-index:9;background:var(--gris-clair);padding-bottom:8px;box-shadow:0 6px 8px -8px rgba(0,0,0,0.25)">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📦 Commandes fournisseurs</div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -14727,12 +14867,7 @@
   <div style="padding:0 16px 10px">
     <input type="text" id="commandes-recherche-globale" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="rechercherCommandesGlobal(this.value)" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
-
-  <!-- Résultats de la recherche globale (tous statuts confondus, avec badge de statut) -->
-  <div id="commandes-recherche-globale-resultats" style="display:none;padding:0 16px 80px"></div>
-
-  <div id="commandes-onglets-normaux">
-  <div style="padding:8px 16px 0">
+  <div id="commandes-tabs-bloc" style="padding:4px 16px 0">
     <div id="commandes-tabs-scroll" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:2px">
       <button id="tab-commandes-ar" onclick="switchCommandesVue('ar')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🕐 En attente AR</button>
       <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 En attente réception</button>
@@ -14743,6 +14878,12 @@
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
     </div>
   </div>
+  </div>
+
+  <!-- Résultats de la recherche globale (tous statuts confondus, avec badge de statut) -->
+  <div id="commandes-recherche-globale-resultats" style="display:none;padding:0 16px 80px"></div>
+
+  <div id="commandes-onglets-normaux">
 
   <!-- Vue Liste (commandes validées AR, en attente de réception) -->
   <div id="commandes-vue-liste">
