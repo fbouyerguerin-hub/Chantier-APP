@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1018,6 +1018,23 @@
   function updateHeures(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.heures=val; }
   function updateNotes(id, val) { const l = lignes.find(l=>l.id===id); if(l) l.notes=val; }
 
+  // Plusieurs lignes Baserow peuvent porter le même libellé (ex. 3 « Autres » : standard, SAV, copie
+  // d'un chantier). Dans les listes de saisie, un libellé n'est proposé qu'une fois. Priorité : la ligne
+  // déjà sélectionnée (idPrefere), puis celle liée au type de tâche choisi, puis la première trouvée.
+  // Sans incidence sur les récapitulatifs, qui regroupent les heures par libellé.
+  function dedoublonnerParLibelle(rows, typeTacheId, idPrefere) {
+    const parLibelle = new Map();
+    const score = o => (idPrefere && String(o.id) === String(idPrefere) ? 2 : 0) +
+      (typeTacheId && (o.typeTacheIds || []).includes(typeTacheId) ? 1 : 0);
+    for (const o of rows) {
+      const cle = (o.value || '').trim().toLowerCase();
+      const actuel = parLibelle.get(cle);
+      if (!actuel || score(o) > score(actuel)) parLibelle.set(cle, o);
+    }
+    const gardes = new Set([...parLibelle.values()]);
+    return rows.filter(o => gardes.has(o));
+  }
+
   async function openModal(key, ligneId) {
     modalKey = key; modalLigneId = ligneId;
     document.getElementById('modal-title').textContent = TABLES[key].label;
@@ -1025,10 +1042,9 @@
     const chantierSelectionne = globalSelected['Chantiers'];
     if ((key === 'TypeTaches' || key === 'SousTaches') && chantierSelectionne) {
       try {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200', { headers: HEADERS });
-        const data = await res.json();
+        const resultats = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200');
         const chantierId = parseInt(chantierSelectionne.id);
-        const allRows = (data.results || []).map(row => ({
+        const allRows = resultats.map(row => ({
           id: row.id, value: row[TABLES[key].field] || ('#' + row.id),
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
           excludeIds: (row['exclure chantier'] || []).map(c => c.id),
@@ -1049,7 +1065,10 @@
             if (linkedToType.length > 0) rows = linkedToType;
           }
         }
-        tableData[key] = rows;
+        const ligneCourante = modalLigneId !== null ? lignes.find(l => l.id === modalLigneId) : null;
+        const typeChoisi = key === 'SousTaches' && ligneCourante?.typeTache ? parseInt(ligneCourante.typeTache.id) : null;
+        const valeurCourante = key === 'SousTaches' ? ligneCourante?.sousTache?.id : ligneCourante?.typeTache?.id;
+        tableData[key] = dedoublonnerParLibelle(rows, typeChoisi, valeurCourante);
       } catch(e) { console.log('Erreur filtre', key, e); }
     }
     renderModalOptions();
@@ -6626,7 +6645,7 @@
   function remplirTachesEdit(valeurAConserver) {
     const sel = document.getElementById('edit-saisie-tache');
     const chantierId = document.getElementById('edit-saisie-chantier-id').value;
-    const options = filtrerPourChantierEdit(_editTachesBrut, 'TypeTaches', chantierId);
+    const options = dedoublonnerParLibelle(filtrerPourChantierEdit(_editTachesBrut, 'TypeTaches', chantierId), null, valeurAConserver);
     sel.innerHTML = '<option value="">— Choisir —</option>' +
       options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
     // Si la tâche d'origine n'est plus autorisée pour ce chantier, elle n'est pas proposée → champ vide
@@ -6642,6 +6661,7 @@
     const typeTacheId = parseInt(tacheId);
     const liees = options.filter(o => o.typeTacheIds.includes(typeTacheId));
     if (liees.length > 0) options = liees;
+    options = dedoublonnerParLibelle(options, typeTacheId, valeurAConserver);
     sel.innerHTML += options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
     if (valeurAConserver && options.some(o => String(o.id) === String(valeurAConserver))) sel.value = valeurAConserver;
   }
@@ -6661,13 +6681,13 @@
       const [resSaisie, chantiers, resTaches, resSousTaches] = await Promise.all([
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, { headers: HEADERS }),
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`),
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Zones.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
       ]).then(async ([a,b,c,d,z]) => { _editZonesBrut = (await z.json()).results || []; return [a,b,c,d]; });
       const r = await resSaisie.json();
-      _editTachesBrut = (await resTaches.json()).results || [];
-      _editSousTachesBrut = (await resSousTaches.json()).results || [];
+      _editTachesBrut = resTaches || [];
+      _editSousTachesBrut = resSousTaches || [];
 
       document.getElementById('edit-saisie-id').value = rowId;
       document.getElementById('edit-saisie-date').value = r['Date'] ? String(r['Date']).split('T')[0] : '';
@@ -10421,15 +10441,15 @@
   async function chargerTachesChantier(chantierId) {
     document.getElementById('chantier-taches-placeholder').style.display = 'none';
     document.getElementById('chantier-taches-contenu').style.display = 'block';
+    const blocRep = document.getElementById('bloc-reparer-taches');
+    if (blocRep) blocRep.style.display = connectedDroit === 'Administrateur' ? 'block' : 'none';
     const chipsContainer = document.getElementById('chantier-types-taches-chips');
     chipsContainer.innerHTML = '<div style="color:#aaa;font-size:12px;padding:4px 0">⏳ Chargement…</div>';
     try {
-      const [resTypes, resSousTaches] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200', { headers: HEADERS })
+      const [allTypes, allSousTaches] = await Promise.all([
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200'),
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200')
       ]);
-      const allTypes = (await resTypes.json()).results || [];
-      const allSousTaches = (await resSousTaches.json()).results || [];
       const chId = parseInt(chantierId);
       _chantierTachesCache = { allTypes, allSousTaches, chantierId: chId };
       renderTachesTableChantier(chId);
@@ -10458,8 +10478,10 @@
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
     // "Disponibles" = uniquement les tâches globales (sans chantier associé, ex. Congés/RTT/Maladie).
     // Une tâche créée pour un AUTRE chantier n'apparaît plus ici : elle reste propre à son chantier.
+    const libellesTypesChantier = new Set(typesSpecifiques.map(t => (t['Libellé'] || '').trim().toLowerCase()));
     const typesDisponibles = allTypes
-      .filter(t => !(t['lien vers chantier'] || []).length)
+      .filter(t => !(t['lien vers chantier'] || []).length && !!t['Modèle standard'])
+      .filter(t => !libellesTypesChantier.has((t['Libellé'] || '').trim().toLowerCase()))
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
 
     if (!_typeTacheSelectionInitialisee) {
@@ -10535,8 +10557,7 @@
       chip.disabled = true;
       chip.style.opacity = '0.5';
       try {
-        await lierTacheExistante('TypeTaches', type.id, chId);
-        _typeTacheSelectionneId = type.id;
+        _typeTacheSelectionneId = await adopterTypeStandard(type, chId);
         renderTachesTableChantier(chId);
       } catch(e) {
         alert('Erreur lors de la liaison : ' + e.message);
@@ -10575,7 +10596,7 @@
     const legende = document.createElement('div');
     legende.style.cssText = 'font-size:10px;color:#999;margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:5px';
     legende.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c0392b"></span> affectée à cette tâche'
-      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ddd5c5"></span> libre'
+      + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ddd5c5"></span> modèle standard'
       + ' &nbsp;·&nbsp; <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#8e5aa6"></span> utilisée par une autre tâche de ce chantier';
     panel.appendChild(legende);
 
@@ -10588,9 +10609,16 @@
 
     // Proposables : libres (aucun chantier) ou déjà sur CE chantier via une autre tâche.
     // Une sous-tâche qui appartient à un AUTRE chantier n'apparaît plus ici : elle reste propre à son chantier.
+    // Un élément du modèle standard n'est plus proposé dès que ce chantier possède déjà une sous-tâche
+    // du même libellé (affectée à cette tâche ou à une autre) : on évite ainsi les doublons « Autres » / « Autres ».
+    const libellesSousTachesDuType = new Set(allSousTaches
+      .filter(st => (st['lien vers chantier'] || []).some(c => c.id === chId))
+      .map(st => (st['Libellé'] || '').trim().toLowerCase()));
     const autresSousTaches = allSousTaches
       .filter(st => !idsAffectes.has(st.id))
-      .filter(st => !(st['lien vers chantier'] || []).length || (st['lien vers chantier'] || []).some(c => c.id === chId))
+      .filter(st => (st['lien vers chantier'] || []).some(c => c.id === chId) ||
+        (!(st['lien vers chantier'] || []).length && !!st['Modèle standard'] &&
+         !libellesSousTachesDuType.has((st['Libellé'] || '').trim().toLowerCase())))
       .sort((a, b) => (a['Libellé'] || '').localeCompare(b['Libellé'] || ''));
 
     // Affectées en premier, puis disponibles
@@ -10613,7 +10641,8 @@
           const dejaSurCeChantier = (st['lien vers chantier'] || []).some(c => c.id === chId);
           const variant = dejaSurCeChantier ? 'partagee' : 'defaut';
           liste.appendChild(creerPuceSousTacheToggle(label, false, variant, async () => {
-            await lierSousTacheAuType(st.id, chId, type.id);
+            if (dejaSurCeChantier) await lierSousTacheAuType(st.id, chId, type.id);
+            else await copierSousTacheStandard(st, chId, type.id);
             afficherToastTache('✓ « ' + label + ' » affectée à « ' + (type['Libellé'] || 'cette tâche') + ' »');
             renderTachesTableChantier(chId);
           }, dejaSurCeChantier ? (() => supprimerTacheChantier('SousTaches', st.id, chId)) : null));
@@ -10845,6 +10874,233 @@
     if (idx !== -1) _chantierTachesCache.allSousTaches[idx] = updated;
   }
 
+  // ── Règle : le MODÈLE STANDARD n'est jamais modifié. Reprendre une tâche/sous-tâche standard sur un
+  // chantier en crée une COPIE propre à ce chantier. Une tâche ou sous-tâche spécifique n'appartient
+  // qu'à UN seul chantier, ses liens vers les types ne peuvent donc pas "déborder" sur un autre chantier.
+  async function postLigneTache(key, body) {
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true',
+      { method: 'POST', headers: HEADERS, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  // Copie une tâche standard sur ce chantier, avec ses sous-tâches standard. Renvoie l'id de la copie.
+  async function adopterTypeStandard(type, chId) {
+    const copie = await postLigneTache('TypeTaches', { 'Libellé': type['Libellé'] || '', 'lien vers chantier': [chId] });
+    _chantierTachesCache.allTypes.push(copie);
+    const sousStd = _chantierTachesCache.allSousTaches.filter(st =>
+      !(st['lien vers chantier'] || []).length && !!st['Modèle standard'] &&
+      (st['lien vers type de tache'] || []).some(t => t.id === type.id));
+    for (const st of sousStd) {
+      const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [copie.id] });
+      _chantierTachesCache.allSousTaches.push(c);
+    }
+    return copie.id;
+  }
+
+  async function copierSousTacheStandard(st, chId, typeId) {
+    const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [parseInt(typeId)] });
+    _chantierTachesCache.allSousTaches.push(c);
+  }
+
+  // Remet les données existantes en conformité avec la règle :
+  //  - une tâche / sous-tâche spécifique liée à plusieurs chantiers est scindée (1 ligne par chantier) ;
+  //  - un élément "Modèle standard" lié à des chantiers redevient standard, chaque chantier reçoit sa copie ;
+  //  - chaque sous-tâche ne garde que les liens vers les tâches de SON chantier (ou standard).
+  // Les saisies d'heures déjà enregistrées restent sur la ligne d'origine (même libellé).
+  async function reparerLiaisonsTaches() {
+    const btn = document.getElementById('btn-reparer-taches');
+    const rapport = document.getElementById('chantier-taches-rapport');
+    const setMsg = m => { rapport.style.display = 'block'; rapport.textContent = m; };
+    btn.disabled = true;
+    let snapshot = null;
+    try {
+      setMsg('⏳ Analyse des tâches et sous-tâches…');
+      const [types, sousTaches] = await Promise.all([
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true&size=200'),
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true&size=200')
+      ]);
+      const ids = arr => (arr || []).map(x => x.id);
+      const lib = r => r['Libellé'] || ('#' + r.id);
+
+      // Plan pour les types : chantier conservé par la ligne d'origine + chantiers à doter d'une copie
+      const planTypes = [];
+      const typeFinalChantiers = new Map(); // typeId -> Set(chantiers après réparation)
+      for (const t of types) {
+        const ch = ids(t['lien vers chantier']);
+        const std = !!t['Modèle standard'];
+        if (std && ch.length) { planTypes.push({ t, garde: [], copies: ch }); typeFinalChantiers.set(t.id, new Set()); }
+        else if (!std && ch.length > 1) { planTypes.push({ t, garde: [ch[0]], copies: ch.slice(1) }); typeFinalChantiers.set(t.id, new Set([ch[0]])); }
+        else typeFinalChantiers.set(t.id, new Set(ch));
+      }
+      const estTypeStandardFinal = tid => { const t = types.find(x => x.id === tid); return !!t && !!t['Modèle standard']; };
+
+      const typesCopiesPour = (tid, cid) => planTypes.some(p => p.t.id === tid && p.copies.includes(cid));
+
+      // Plan pour les sous-tâches
+      const planSous = [];
+      for (const st of sousTaches) {
+        const ch = ids(st['lien vers chantier']);
+        const tys = ids(st['lien vers type de tache']);
+        const std = !!st['Modèle standard'];
+        if (!ch.length) continue;
+        const garde = std ? [] : [ch[0]];
+        const copies = std ? ch : ch.slice(1);
+        // Types invalides pour le chantier conservé = liens qui "fuient" vers un autre chantier
+        const cible = garde[0];
+        const typesGardes = tys.filter(tid => cible === undefined
+          ? estTypeStandardFinal(tid)
+          : (typeFinalChantiers.get(tid)?.has(cible) || typesCopiesPour(tid, cible) || estTypeStandardFinal(tid)));
+        if (copies.length || typesGardes.length !== tys.length) planSous.push({ st, garde, copies, tys });
+      }
+
+      if (!planTypes.length && !planSous.length) { setMsg('✅ Aucune anomalie : chaque tâche et sous-tâche spécifique appartient à un seul chantier.'); return; }
+
+      const apercu = [
+        ...planTypes.map(p => '• Tâche « ' + lib(p.t) + ' » : ' + (p.copies.length) + ' copie(s)' + (p.garde.length ? '' : ' — redevient modèle standard')),
+        ...planSous.map(p => '• Sous-tâche « ' + lib(p.st) + ' » : ' + (p.copies.length ? p.copies.length + ' copie(s)' : 'liens vers tâches corrigés'))
+      ];
+      if (!confirm('🔧 Réparation des liaisons tâches / sous-tâches\n\n' + planTypes.length + ' tâche(s) et ' + planSous.length + ' sous-tâche(s) à corriger :\n\n' +
+        apercu.slice(0, 15).join('\n') + (apercu.length > 15 ? '\n… et ' + (apercu.length - 15) + ' autre(s)' : '') +
+        '\n\nLes saisies d\u2019heures existantes ne sont pas modifiées.\nUn fichier de sauvegarde sera téléchargé pour pouvoir annuler. Continuer ?')) { setMsg('Réparation annulée.'); return; }
+
+      // Sauvegarde de l'état d'origine AVANT toute écriture (appareil + fichier téléchargé en fin de traitement)
+      snapshot = {
+        version: 1, date: new Date().toISOString(),
+        types: planTypes.map(p => ({ id: p.t.id, libelle: lib(p.t), chantiers: ids(p.t['lien vers chantier']) })),
+        sous: planSous.map(p => ({ id: p.st.id, libelle: lib(p.st), chantiers: ids(p.st['lien vers chantier']), types: p.tys })),
+        creesTypes: [], creesSous: []
+      };
+      sauverSnapshotReparation(snapshot);
+
+      const patch = async (key, id, body) => {
+        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + id + '/?user_field_names=true',
+          { method: 'PATCH', headers: HEADERS, body: JSON.stringify(body) });
+        if (!res.ok) throw new Error(await res.text());
+      };
+
+      // 1) Types : copies par chantier + recentrage de la ligne d'origine
+      const copieType = new Map(); // `${typeId}|${chantierId}` -> id de la copie
+      let n = 0;
+      for (const p of planTypes) {
+        for (const cid of p.copies) {
+          const c = await postLigneTache('TypeTaches', { 'Libellé': p.t['Libellé'] || '', 'lien vers chantier': [cid] });
+          copieType.set(p.t.id + '|' + cid, c.id);
+          snapshot.creesTypes.push(c.id); sauverSnapshotReparation(snapshot);
+        }
+        await patch('TypeTaches', p.t.id, { 'lien vers chantier': p.garde });
+        setMsg('⏳ Tâches : ' + (++n) + ' / ' + planTypes.length);
+      }
+
+      // Types valables pour une sous-tâche sur le chantier cid (undefined = sous-tâche standard)
+      const typesPour = (tys, cid) => [...new Set(tys.map(tid => {
+        if (cid === undefined) return estTypeStandardFinal(tid) ? tid : null;
+        if (typeFinalChantiers.get(tid)?.has(cid)) return tid;
+        if (copieType.has(tid + '|' + cid)) return copieType.get(tid + '|' + cid);
+        return estTypeStandardFinal(tid) ? tid : null;
+      }).filter(Boolean))];
+
+      // 2) Sous-tâches : copies par chantier + liens vers types remis au bon chantier
+      n = 0;
+      for (const p of planSous) {
+        for (const cid of p.copies) {
+          const c = await postLigneTache('SousTaches', { 'Libellé': p.st['Libellé'] || '', 'lien vers chantier': [cid], 'lien vers type de tache': typesPour(p.tys, cid) });
+          snapshot.creesSous.push(c.id); sauverSnapshotReparation(snapshot);
+        }
+        await patch('SousTaches', p.st.id, { 'lien vers chantier': p.garde, 'lien vers type de tache': typesPour(p.tys, p.garde[0]) });
+        setMsg('⏳ Sous-tâches : ' + (++n) + ' / ' + planSous.length);
+      }
+
+      setMsg('✅ Réparation terminée : ' + planTypes.length + ' tâche(s) et ' + planSous.length + ' sous-tâche(s) corrigées.');
+      const rowId = document.getElementById('chantier-row-id').value;
+      if (rowId) chargerTachesChantier(rowId);
+    } catch(e) {
+      setMsg('❌ Erreur pendant la réparation : ' + e.message + (snapshot
+        ? '\nLe fichier de sauvegarde a été téléchargé : utilisez « Annuler une réparation » pour revenir à l\u2019état d\u2019origine.'
+        : ''));
+    } finally {
+      if (snapshot) telechargerSnapshotReparation(snapshot);
+      btn.disabled = false;
+    }
+  }
+
+  const CLE_SNAPSHOT_REPARATION = 'reparationTachesDerniere';
+  function sauverSnapshotReparation(snap) {
+    try { localStorage.setItem(CLE_SNAPSHOT_REPARATION, JSON.stringify(snap)); } catch(e) {}
+  }
+  function telechargerSnapshotReparation(snap) {
+    const d = new Date(snap.date);
+    const pad = n => String(n).padStart(2, '0');
+    const nom = 'sauvegarde-reparation-taches-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.json';
+    const url = URL.createObjectURL(new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = nom;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // Choix de la sauvegarde : celle gardée sur cet appareil, sinon un fichier .json téléchargé lors de la réparation
+  function annulerReparationTaches() {
+    let locale = null;
+    try { locale = JSON.parse(localStorage.getItem(CLE_SNAPSHOT_REPARATION) || 'null'); } catch(e) {}
+    if (locale && confirm('Annuler la réparation du ' + new Date(locale.date).toLocaleString('fr-FR') + ' enregistrée sur cet appareil ?\n\nOK = utiliser celle-ci\nAnnuler = choisir un fichier de sauvegarde')) {
+      appliquerAnnulationReparation(locale, true);
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      try {
+        const snap = JSON.parse(await f.text());
+        if (!snap || snap.version !== 1 || !Array.isArray(snap.types) || !Array.isArray(snap.sous)) throw new Error('format');
+        appliquerAnnulationReparation(snap, false);
+      } catch(e) { alert('⚠️ Ce fichier n\u2019est pas une sauvegarde de réparation valide.'); }
+    };
+    input.click();
+  }
+
+  async function appliquerAnnulationReparation(snap, depuisAppareil) {
+    const rapport = document.getElementById('chantier-taches-rapport');
+    const btnA = document.getElementById('btn-annuler-reparation');
+    const setMsg = m => { rapport.style.display = 'block'; rapport.textContent = m; };
+    const nbCrees = (snap.creesTypes || []).length + (snap.creesSous || []).length;
+    if (!confirm('↩️ Annulation de la réparation du ' + new Date(snap.date).toLocaleString('fr-FR') + '\n\n' +
+      '• ' + snap.types.length + ' tâche(s) et ' + snap.sous.length + ' sous-tâche(s) retrouvent leurs liens d\u2019origine\n' +
+      '• ' + nbCrees + ' copie(s) créées par la réparation seront supprimées\n\n' +
+      '⚠️ Les heures saisies depuis sur ces copies perdront leur tâche / sous-tâche.\nContinuer ?')) return;
+    if (btnA) btnA.disabled = true;
+    const erreurs = [];
+    const appel = async (methode, key, id, body) => {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + id + '/?user_field_names=true',
+        { method: methode, headers: HEADERS, body: body ? JSON.stringify(body) : undefined });
+      // 404 sur une suppression = déjà supprimée : pas une erreur
+      if (!res.ok && !(methode === 'DELETE' && res.status === 404)) erreurs.push(key + ' #' + id + ' (' + res.status + ')');
+    };
+    try {
+      let n = 0;
+      const total = snap.types.length + snap.sous.length + nbCrees;
+      const avance = () => setMsg('⏳ Annulation : ' + (++n) + ' / ' + total);
+      // 1) Liens d'origine (sous-tâches d'abord : elles pointent vers les types)
+      for (const r of snap.sous) { await appel('PATCH', 'SousTaches', r.id, { 'lien vers chantier': r.chantiers, 'lien vers type de tache': r.types }); avance(); }
+      for (const r of snap.types) { await appel('PATCH', 'TypeTaches', r.id, { 'lien vers chantier': r.chantiers }); avance(); }
+      // 2) Suppression des copies (sous-tâches puis tâches)
+      for (const id of (snap.creesSous || [])) { await appel('DELETE', 'SousTaches', id); avance(); }
+      for (const id of (snap.creesTypes || [])) { await appel('DELETE', 'TypeTaches', id); avance(); }
+      if (erreurs.length) {
+        setMsg('⚠️ Annulation terminée avec ' + erreurs.length + ' erreur(s) :\n' + erreurs.slice(0, 10).join('\n') + '\nVous pouvez relancer l\u2019annulation avec la même sauvegarde.');
+      } else {
+        setMsg('✅ Annulation terminée : la base est revenue à l\u2019état d\u2019avant la réparation.');
+        if (depuisAppareil) { try { localStorage.removeItem(CLE_SNAPSHOT_REPARATION); } catch(e) {} }
+      }
+      const rowId = document.getElementById('chantier-row-id').value;
+      if (rowId) chargerTachesChantier(rowId);
+    } catch(e) {
+      setMsg('❌ Erreur pendant l\u2019annulation : ' + e.message + '\nVous pouvez relancer l\u2019annulation avec la même sauvegarde.');
+    } finally { if (btnA) btnA.disabled = false; }
+  }
+
   // Retire une tâche/sous-tâche de CE chantier uniquement : on déconnecte le lien vers ce chantier,
   // la ligne elle-même n'est jamais supprimée (elle peut être utilisée ailleurs — chantiers, saisies,
   // ou simplement être une tâche globale de l'entreprise comme Congés/RTT/Maladie).
@@ -10856,8 +11112,16 @@
     if (!confirm('Retirer ' + label + ' de ce chantier ?\nElle ne sera plus proposée ici, mais elle n\u2019est pas supprimée : elle reste disponible ailleurs (autres chantiers, tâche globale de l\u2019entreprise…).')) return;
     try {
       const nouveauxChantiers = chantiersLies.filter(cid => cid !== parseInt(chantierId));
+      const payload = { 'lien vers chantier': nouveauxChantiers };
+      if (key === 'SousTaches') {
+        // Sans ça, la sous-tâche garde ses liens vers les tâches de ce chantier et les "transporte"
+        // ensuite sur un autre chantier (origine des fuites CH1219 → CH1276).
+        const typesDuChantier = new Set((_chantierTachesCache?.allTypes || [])
+          .filter(t => (t['lien vers chantier'] || []).some(c => c.id === parseInt(chantierId))).map(t => t.id));
+        payload['lien vers type de tache'] = (row?.['lien vers type de tache'] || []).map(t => t.id).filter(tid => !typesDuChantier.has(tid));
+      }
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + id + '/?user_field_names=true',
-        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'lien vers chantier': nouveauxChantiers }) });
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
       if (!res.ok) throw new Error(await res.text());
       const updated = await res.json();
       const cache = key === 'TypeTaches' ? _chantierTachesCache.allTypes : _chantierTachesCache.allSousTaches;
@@ -13909,10 +14173,10 @@
     <div id="chantier-tab-taches" style="padding:0 20px;overflow-y:auto;flex:1;display:none">
       <div id="chantier-taches-placeholder" style="color:#aaa;font-size:13px;text-align:center;padding:20px">Enregistrez d'abord le chantier pour ajouter des tâches spécifiques</div>
       <div id="chantier-taches-contenu" style="display:none">
-        <div style="font-size:10px;color:#aaa;margin-bottom:14px">Sélectionnez une tâche ci-dessous pour lui associer des sous-tâches. Ces éléments ne seront proposés que sur ce chantier lors de la saisie des heures, en plus des tâches habituelles.</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:14px">Sélectionnez une tâche ci-dessous pour lui associer des sous-tâches. Tant qu'aucune tâche n'est affectée ici, le modèle standard s'applique. Dès qu'une tâche est affectée ou créée, seules les tâches de ce chantier sont proposées à la saisie. Reprendre une tâche du modèle standard en crée une copie propre à ce chantier.</div>
 
         <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">⚙️ Tâches de ce chantier</div>
-        <div style="font-size:10px;color:#aaa;margin-bottom:8px">Cliquez sur une tâche libre pour l'affecter à ce chantier, ou créez-en une nouvelle.</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:8px">Cliquez sur une tâche du modèle standard pour la reprendre sur ce chantier (avec ses sous-tâches), ou créez-en une nouvelle.</div>
         <div id="chantier-types-taches-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
         <div style="display:flex;gap:8px;margin-bottom:24px">
           <input type="text" id="chantier-nouveau-type-tache" placeholder="Ou créer une nouvelle tâche…" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterTypeTacheChantier();}">
@@ -13926,6 +14190,11 @@
         <div style="display:flex;gap:8px;margin-bottom:16px">
           <input type="text" id="chantier-nouvelle-sous-tache-sans-type" placeholder="Ou créer une sous-tâche sans type…" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterSousTacheSansType();}">
           <button onclick="ajouterSousTacheSansType()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 14px;font-size:13px;font-weight:700;cursor:pointer;flex-shrink:0">+ Créer</button>
+        </div>
+        <div id="bloc-reparer-taches" style="border-top:1px dashed #ddd5c5;padding-top:12px;margin-bottom:16px">
+          <button id="btn-reparer-taches" onclick="reparerLiaisonsTaches()" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;color:var(--gris);border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer">🔧 Vérifier / réparer les liaisons tâches (tous chantiers)</button>
+          <button id="btn-annuler-reparation" onclick="annulerReparationTaches()" style="width:100%;background:#fff;border:1.5px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;margin-top:8px">↩️ Annuler une réparation</button>
+          <div id="chantier-taches-rapport" style="display:none;white-space:pre-line;font-size:11px;color:var(--gris);background:#fbfaf7;border-radius:8px;padding:8px 10px;margin-top:8px"></div>
         </div>
       </div>
     </div>
