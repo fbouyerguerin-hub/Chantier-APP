@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2589,8 +2589,8 @@
             <table class="rtt-table"><tbody>
               <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
               <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-              <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${soldeDeBasePrevisionnel > 0 ? '− ' : ''}${formatJoursRtt(soldeDeBasePrevisionnel)} h<span class="rtt-sub">déduit du solde acquis</span></td></tr>
-              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris − ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
+              <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
@@ -2836,8 +2836,8 @@
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
           <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
           <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-          <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${soldeDeBasePrevisionnel > 0 ? '− ' : ''}${formatJoursRtt(soldeDeBasePrevisionnel)} h<span class="rtt-sub">déduit du solde acquis</span></td></tr>
-              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris − ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
+          <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
           ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
         </tbody></table></div>
         <div class="rtt-table-title">📊 Prévisionnel ${anneeEnCours}</div>
