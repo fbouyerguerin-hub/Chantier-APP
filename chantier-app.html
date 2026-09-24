@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2353,6 +2353,140 @@
     } catch(e) { /* synchro non bloquante */ }
   }
 
+  // ── AJUSTEMENTS RTT (administrateurs) ──
+  // Table Baserow « Ajustements RTT », champs : Collaborateur (lien → Collaborateurs), Date (date),
+  // Heures (nombre, 2 décimales, négatifs autorisés), Motif (texte long), Saisi par (texte).
+  // Heures négatives = heures retirées (ex. RTT payées), positives = heures ajoutées.
+  // Tant que l'ID est vide, la fonction est simplement désactivée (aucun impact sur les calculs).
+  const TABLE_AJUSTEMENTS_RTT = '1218349'; // Table « Ajustements RTT »
+
+  function escHtmlRtt(t) {
+    return String(t || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // Ajustements pris en compte : année civile en cours, et à partir de la date pivot (comme les RTT prises)
+  function ajustementRttPertinent(dateStr) {
+    if (!dateStr) return false;
+    if (dateStr.slice(0, 4) !== String(new Date().getFullYear())) return false;
+    return !(DATE_DEBUT_SUIVI_RTT && dateStr < DATE_DEBUT_SUIVI_RTT);
+  }
+
+  // Renvoie la liste des ajustements (tous collaborateurs si collabId est null). Jamais bloquant.
+  async function chargerAjustementsRtt(collabId) {
+    if (!TABLE_AJUSTEMENTS_RTT) return [];
+    try {
+      const filtre = collabId ? '&filter__Collaborateur__link_row_has=' + collabId : '';
+      const rows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_AJUSTEMENTS_RTT + '/?user_field_names=true&size=200' + filtre);
+      return rows.map(r => ({
+        id: r.id,
+        collabId: (r['Collaborateur'] || [])[0]?.id,
+        date: r['Date'] ? String(r['Date']).split('T')[0] : '',
+        heures: parseFloat(r['Heures']) || 0,
+        motif: r['Motif'] || '',
+        saisiPar: r['Saisi par'] || ''
+      }))
+      .filter(a => (!collabId || a.collabId === collabId) && ajustementRttPertinent(a.date))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    } catch(e) { return []; }
+  }
+
+  function totalAjustementsRtt(liste) {
+    return Math.round((liste || []).reduce((s, a) => s + a.heures, 0) * 100) / 100;
+  }
+
+  function formatAjustRtt(h) {
+    return (h > 0 ? '+' : '−') + formatJoursRtt(Math.abs(h)) + ' h';
+  }
+
+  // Ligne « Ajustement administrateur » du tableau de solde (vide s'il n'y en a pas)
+  function ligneAjustementRttHtml(total) {
+    if (!total) return '';
+    return `<tr><th>Ajustement administrateur</th><td class="valeur" style="color:${total < 0 ? '#c0392b' : 'var(--vert)'}">${formatAjustRtt(total)}<span class="rtt-sub">voir administrateur pour explication</span></td></tr>`;
+  }
+
+  // Détail visible par le collaborateur : date + heures, sans le motif (explication auprès de l'administrateur)
+  function listeAjustementsCollabHtml(liste) {
+    if (!liste.length) return '';
+    return `
+      <div class="rtt-table-title">🛠️ Ajustements administrateur</div>
+      <div class="rtt-table-wrap"><table class="rtt-table">
+        <thead><tr><th>Date</th><th>Heures</th><th>Explication</th></tr></thead>
+        <tbody>${liste.map(a => `<tr><td>${new Date(a.date + 'T12:00:00').toLocaleDateString('fr-FR')}</td><td class="valeur" style="color:${a.heures < 0 ? '#c0392b' : 'var(--vert)'}">${formatAjustRtt(a.heures)}</td><td style="font-size:12px;color:#856404">ℹ️ Voir administrateur</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+
+  // Bloc de la fenêtre de gestion : historique complet (avec motif) + formulaire réservé aux administrateurs
+  function blocAjustementsAdminHtml(liste, collabId, collabNom) {
+    const estAdmin = connectedDroit === 'Administrateur';
+    if (!TABLE_AJUSTEMENTS_RTT) {
+      return estAdmin ? `<div class="rtt-note-annuelle">🛠️ Ajustements RTT non activés : créez la table « Ajustements RTT » dans Baserow et renseignez son ID dans TABLE_AJUSTEMENTS_RTT.</div>` : '';
+    }
+    const nomJs = String(collabNom || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const historique = liste.length ? `
+      <div class="rtt-table-wrap"><table class="rtt-table">
+        <thead><tr><th>Date</th><th>Heures</th><th>Motif</th>${estAdmin ? '<th></th>' : ''}</tr></thead>
+        <tbody>${liste.map(a => `<tr>
+          <td>${new Date(a.date + 'T12:00:00').toLocaleDateString('fr-FR')}</td>
+          <td class="valeur" style="color:${a.heures < 0 ? '#c0392b' : 'var(--vert)'}">${formatAjustRtt(a.heures)}</td>
+          <td style="font-size:12px">${escHtmlRtt(a.motif)}${a.saisiPar ? `<span class="rtt-sub">par ${escHtmlRtt(a.saisiPar)}</span>` : ''}</td>
+          ${estAdmin ? `<td><button onclick="supprimerAjustementRtt(${a.id}, ${collabId}, '${nomJs}')" title="Supprimer cet ajustement" style="background:rgba(192,57,43,0.12);border:none;border-radius:6px;padding:4px 8px;cursor:pointer;color:#c0392b;font-size:12px">🗑</button></td>` : ''}
+        </tr>`).join('')}</tbody>
+      </table></div>` : `<div style="font-size:12px;color:#aaa;margin:0 0 10px">Aucun ajustement cette année.</div>`;
+    const formulaire = estAdmin ? `
+      <div style="background:#fbfaf7;border:1.5px solid #e3ded2;border-radius:12px;padding:12px;margin:8px 0 14px">
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <select id="ajust-rtt-sens" style="flex:1;min-width:120px;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+            <option value="-1">➖ Retirer des heures</option>
+            <option value="1">➕ Ajouter des heures</option>
+          </select>
+          <input type="number" id="ajust-rtt-heures" min="0" step="0.5" placeholder="Heures" style="width:90px;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box">
+          <input type="date" id="ajust-rtt-date" value="${dateYMD(new Date())}" style="padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box">
+        </div>
+        <textarea id="ajust-rtt-motif" placeholder="Motif (obligatoire, non visible par le collaborateur) — ex. 14 h de RTT payées sur la paie de septembre" style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;min-height:54px;resize:vertical"></textarea>
+        <button id="btn-ajust-rtt" onclick="enregistrerAjustementRtt(${collabId}, '${nomJs}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">💾 Enregistrer l'ajustement</button>
+      </div>` : '';
+    return `<div class="rtt-table-title">🛠️ Ajustements administrateur</div>${formulaire}${historique}`;
+  }
+
+  async function enregistrerAjustementRtt(collabId, collabNom) {
+    if (connectedDroit !== 'Administrateur') return;
+    const sens = parseInt(document.getElementById('ajust-rtt-sens').value);
+    const heures = parseFloat(document.getElementById('ajust-rtt-heures').value);
+    const date = document.getElementById('ajust-rtt-date').value;
+    const motif = document.getElementById('ajust-rtt-motif').value.trim();
+    if (!heures || heures <= 0) { alert('⚠️ Indiquez un nombre d\u2019heures supérieur à 0.'); return; }
+    if (!date) { alert('⚠️ Indiquez une date.'); return; }
+    if (!ajustementRttPertinent(date)) { alert('⚠️ La date doit être dans l\u2019année en cours' + (DATE_DEBUT_SUIVI_RTT ? ' et à partir du ' + new Date(DATE_DEBUT_SUIVI_RTT + 'T12:00:00').toLocaleDateString('fr-FR') : '') + '.'); return; }
+    if (!motif) { alert('⚠️ Le motif est obligatoire.'); return; }
+    const valeur = sens * heures;
+    if (!confirm((valeur < 0 ? 'Retirer ' : 'Ajouter ') + formatJoursRtt(heures) + ' h au solde RTT de ' + collabNom + ' ?\n\nLe collaborateur verra l\u2019ajustement avec la mention « voir administrateur ».')) return;
+    const btn = document.getElementById('btn-ajust-rtt');
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_AJUSTEMENTS_RTT + '/?user_field_names=true', {
+        method: 'POST', headers: HEADERS,
+        body: JSON.stringify({ 'Collaborateur': [collabId], 'Date': date, 'Heures': valeur, 'Motif': motif, 'Saisi par': connectedCollab || '' })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadRTTCollabModal(collabId, collabNom);
+      if (document.getElementById('rtt-admin-content')) loadRTTAdmin();
+    } catch(e) {
+      alert('Erreur lors de l\u2019enregistrement : ' + e.message);
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function supprimerAjustementRtt(ajustId, collabId, collabNom) {
+    if (connectedDroit !== 'Administrateur') return;
+    if (!confirm('Supprimer cet ajustement ? Le solde RTT du collaborateur sera recalculé sans lui.')) return;
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_AJUSTEMENTS_RTT + '/' + ajustId + '/', { method: 'DELETE', headers: HEADERS });
+      if (!res.ok && res.status !== 404) throw new Error(await res.text());
+      await loadRTTCollabModal(collabId, collabNom);
+      if (document.getElementById('rtt-admin-content')) loadRTTAdmin();
+    } catch(e) { alert('Erreur lors de la suppression : ' + e.message); }
+  }
+
   async function loadRTTPerso() {
     const container = document.getElementById('rtt-perso-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -2411,7 +2545,10 @@
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
       syncHeuresSupplementaires(feuilleCollab.id, heuresSup);
 
-      const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+      const ajustementsRtt = await chargerAjustementsRtt(feuilleCollab.id);
+      const totalAjustRtt = totalAjustementsRtt(ajustementsRtt);
+      const acquisAvantAjust = acquisSemaines + heuresSup + rttSoldeInitial;
+      const acquis = acquisAvantAjust + totalAjustRtt;
 
       const validees = demandesRtt
         .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Approuvé'; })
@@ -2526,7 +2663,7 @@
         <div class="rtt-table-wrap">
           <table class="rtt-table">
             <tbody>
-              <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
+              <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${totalAjustRtt ? `<span class="rtt-sub">dont ${formatAjustRtt(totalAjustRtt)} ajustement administrateur</span>` : ''}${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
               ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
               <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE_EFF}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
               <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)} h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)} h solde de base</span>` : ''}</td></tr>
@@ -2587,15 +2724,15 @@
         <div id="rtt-subtab-solde">
           <div class="rtt-table-wrap">
             <table class="rtt-table"><tbody>
-              <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
+              <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquisAvantAjust)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
               <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-              <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
-              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
+              ${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquisAvantAjust)} h acquis${totalAjustRtt ? (totalAjustRtt < 0 ? ' − ' : ' + ') + formatJoursRtt(Math.abs(totalAjustRtt)) + ' h ajustement' : ''} − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
           </div>
           <div class="rtt-legende">ℹ️ RTT acquise chaque semaine = nombre d'heures travaillées entre 36h et 40h (plafonné à 4h/semaine, hors semaine couverte par un congé payé, maladie, sans solde ou accident) — entre 35h et 36h et entre 40h et 42,5h : heures supplémentaires — au-delà de 42,5h : heures en plus — 1 journée prise = 7h déduites — calcul sur l'année civile</div>
-          ${listeEnAttenteHtml}${listeDatesHtml}${listeHeuresSupHtml}
+          ${listeEnAttenteHtml}${listeAjustementsCollabHtml(ajustementsRtt)}${listeDatesHtml}${listeHeuresSupHtml}
         </div>
 
         <!-- Prévisionnel année -->
@@ -2625,6 +2762,7 @@
 
       const anneeEnCours = new Date().getFullYear();
       const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), null);
+      const tousAjustementsRtt = await chargerAjustementsRtt(null);
 
       rttAdminCache.donnees = collabs
         .filter(c => c['Nom Complet'])
@@ -2661,13 +2799,14 @@
           syncHeuresSupplementaires(c.id, heuresSup);
           syncDejaPrisPrevisionnel(c.id, prisHeures + soldeDeBasePrevisionnel);
 
-          const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+          const totalAjustRtt = totalAjustementsRtt(tousAjustementsRtt.filter(a => a.collabId === c.id));
+          const acquis = acquisSemaines + heuresSup + rttSoldeInitial + totalAjustRtt;
           const { semainesRestantesNonBloquees: semainesRestantesAdmin } = decompteAnneeRtt(absencesBloquantes);
           const HEURES_RTT_PAR_SEMAINE_EFF_ADMIN = POSTES_RTT_MAJOREE_25.includes(c['Poste / Métier'] || '') ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
           const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF_ADMIN * semainesRestantesAdmin);
           const restePrevisionnel = Math.max(0, previsionnelTotalDisponible - prisHeures) - soldeDeBasePrevisionnel;
 
-          return { collab: c, congesCollab, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente };
+          return { collab: c, congesCollab, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente, totalAjustRtt };
         });
 
       container.innerHTML = `
@@ -2750,7 +2889,10 @@
       const acquisSemaines = rttEtSup.rttAcquis;
       const heuresSupResult = rttEtSup.heuresSup;
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
-      const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+      const ajustementsRtt = await chargerAjustementsRtt(collabId);
+      const totalAjustRtt = totalAjustementsRtt(ajustementsRtt);
+      const acquisAvantAjust = acquisSemaines + heuresSup + rttSoldeInitial;
+      const acquis = acquisAvantAjust + totalAjustRtt;
 
       const validees = demandesRtt
         .filter(r => { const s = r['Statut']?.value || 'En attente'; return s === 'Approuvé'; })
@@ -2834,15 +2976,15 @@
           ${enAttenteListe.length > 0 ? `⏳ ${enAttenteListe.length} demande${enAttenteListe.length > 1 ? 's' : ''} RTT en attente` : '✅ Aucune demande en attente'}
         </div>
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
-          <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
+          <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquisAvantAjust)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
           <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-          <tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
-              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquis)} h acquis − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
+          ${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+              <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquisAvantAjust)} h acquis${totalAjustRtt ? (totalAjustRtt < 0 ? ' − ' : ' + ') + formatJoursRtt(Math.abs(totalAjustRtt)) + ' h ajustement' : ''} − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
           ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
         </tbody></table></div>
         <div class="rtt-table-title">📊 Prévisionnel ${anneeEnCours}</div>
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
-          <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h</td></tr>
+          <tr><th>Solde actuel acquis</th><td class="valeur">${formatJoursRtt(acquis)} h${totalAjustRtt ? `<span class="rtt-sub">dont ${formatAjustRtt(totalAjustRtt)} ajustement administrateur</span>` : ''}</td></tr>
           ${reliquatAnneePrecedente !== 0 ? `<tr><th>Solde année précédente <span class="rtt-sub">(info, hors total)</span></th><td class="valeur" style="${reliquatAnneePrecedente < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)} h</td></tr>` : ''}
           <tr><th>Projection restante (${semainesRestantesNonBloquees} sem. × ${HEURES_RTT_PAR_SEMAINE_EFF}h)</th><td class="valeur" style="color:var(--vert)">+${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF * semainesRestantesNonBloquees)} h${semainesRestantes > semainesRestantesNonBloquees ? `<span class="rtt-sub">${semainesRestantes - semainesRestantesNonBloquees} sem. bloquée(s) exclue(s)</span>` : ''}</td></tr>
           <tr><th>Déjà pris</th><td class="valeur">${formatJoursRtt(totalConsommePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeures)}h pris + ${formatJoursRtt(soldeDeBasePrevisionnel)}h solde de base</span>` : ''}</td></tr>
@@ -2853,6 +2995,7 @@
           <div class="rtt-progress-seg rtt-progress-seg-base" style="width:${pctSoldeBase}%"></div>
         </div>
         <div class="rtt-progress-label" style="color:${couleurBarre};font-weight:700">${pctAtteint}% du prévisionnel consommé${depassement > 0 ? ` — ⚠️ dépassement ${formatJoursRtt(depassement)} h` : ''}</div>
+        ${blocAjustementsAdminHtml(ajustementsRtt, collabId, collabNom)}
         ${listeEnAttenteHtml}
         ${listeDatesHtml}
         ${listeHeuresSupHtml}
@@ -2876,10 +3019,10 @@
       }))
       .sort((a, b) => (a.collab['Nom Complet'] || '').localeCompare(b.collab['Nom Complet'] || ''))
       .map(d => {
-        const { collab: c, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente } = d;
+        const { collab: c, acquis, prisHeures, pris, enAttente, restePrevisionnel, heuresSup, soldeDeBasePrevisionnel, reliquatAnneePrecedente, totalAjustRtt } = d;
         return `<tr>
           <td><button onclick="ouvrirModalRTTCollab(${c.id}, '${(c['Nom Complet']||'').replace(/'/g,"\\'")}', this)" style="background:none;border:none;padding:0;font-size:inherit;font-weight:600;color:var(--vert);cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-align:left">${c['Nom Complet']}</button></td>
-          <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}</td>
+          <td class="valeur">${formatJoursRtt(acquis)} h${heuresSup > 0 ? `<span class="rtt-sub">(+${formatJoursRtt(heuresSup)}h sup)</span>` : ''}${totalAjustRtt ? `<span class="rtt-sub" style="color:${totalAjustRtt < 0 ? '#c0392b' : 'var(--vert)'}">dont ${formatAjustRtt(totalAjustRtt)} ajustement</span>` : ''}</td>
           <td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${(acquis - prisHeures) < 0 ? `<span class="rtt-sub" style="color:#c0392b">⚠️ ${formatJoursRtt(acquis - prisHeures)}h vs acquis</span>` : ''}</td>
           <td class="valeur" style="${restePrevisionnel < 0 ? 'color:#c0392b' : restePrevisionnel === 0 ? 'color:var(--vert)' : ''}">${formatJoursRtt(restePrevisionnel)} h${soldeDeBasePrevisionnel > 0 ? `<span class="rtt-sub">dont -${formatJoursRtt(soldeDeBasePrevisionnel)}h base</span>` : ''}${reliquatAnneePrecedente !== 0 ? `<span class="rtt-sub">${reliquatAnneePrecedente > 0 ? '+' : ''}${formatJoursRtt(reliquatAnneePrecedente)}h reliquat N-1 (info, hors total)</span>` : ''}</td>
           <td class="valeur" style="${enAttente > 0 ? 'color:#856404' : ''}">${enAttente > 0 ? formatJoursRtt(enAttente) + ' j' : '—'}</td>
@@ -12585,6 +12728,7 @@
       const conges = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200');
 
       const toutesLesSaisies = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', aujourdHuiStr, null);
+      const tousAjustementsRttExport = await chargerAjustementsRtt(null);
 
       const headerRecap = ['Collaborateur', 'RTT Acquis (h)', 'RTT Pris (j)', 'RTT Pris (h)', 'RTT En attente (j)', 'Solde prévisionnel restant (h)', 'Congés payés pris (j)', 'Congés payés en attente (j)'];
       const headerDetail = ['Collaborateur', 'Type', 'Date début', 'Date fin', 'Jours', 'Heures', 'Statut', 'Notes'];
@@ -12629,7 +12773,7 @@
           const soldeDeBasePrevisionnel = parseFloat(c['Solde de base prévisionnel (h)']) || 0;
           const reliquatAnneePrecedente = parseFloat(c['Reliquat année précédente (h)']) || 0;
           const heuresSup = rttEtSup.heuresSup.total + heuresSupSoldeInitial;
-          const acquis = acquisSemaines + heuresSup + rttSoldeInitial;
+          const acquis = acquisSemaines + heuresSup + rttSoldeInitial + totalAjustementsRtt(tousAjustementsRttExport.filter(a => a.collabId === c.id));
           const { semainesRestantesNonBloquees: semainesRestantesExport } = decompteAnneeRtt(absencesBloquantes);
           const HEURES_RTT_PAR_SEMAINE_EFF_EXPORT = POSTES_RTT_MAJOREE_25.includes(c['Poste / Métier'] || '') ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
           const previsionnelTotalDisponible = acquis + (HEURES_RTT_PAR_SEMAINE_EFF_EXPORT * semainesRestantesExport);
