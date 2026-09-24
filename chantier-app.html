@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -891,6 +891,68 @@
   };
   const HEADERS = { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' };
 
+  // ── CACHE DES LECTURES BASEROW ──
+  // Une même lecture (même URL) n'est refaite qu'après un court délai : changer d'onglet ou revenir
+  // sur une semaine déjà vue est instantané. Toute écriture (POST/PATCH/DELETE, synchro EBP…) vide
+  // le cache : on ne voit donc jamais ses propres modifications en retard. Les modifications faites
+  // depuis un AUTRE appareil apparaissent au plus tard après la durée ci-dessous.
+  const CACHE_BASEROW_TTL_DEFAUT = 30 * 1000;
+  const CACHE_BASEROW_TTL_REFERENCE = 2 * 60 * 1000; // tables qui changent peu
+  const CACHE_BASEROW_TABLES_REFERENCE = new Set([
+    TABLES.Collaborateur.id, TABLES.Chantiers.id, TABLES.Vehicules.id, TABLES.TypeTaches.id,
+    TABLES.SousTaches.id, TABLES.Zones.id, '1022869' /* congés */
+  ].map(String));
+  // Jamais mis en cache : messages (veille toutes les minutes), utilisateurs (connexion), signatures
+  const CACHE_BASEROW_TABLES_EXCLUES = new Set([TABLE_MESSAGES, TABLE_USERS, TABLE_SIGNATURES].map(String));
+  const _cacheBaserow = new Map(); // url -> { t, ttl, promesse }
+  const _fetchNatifBrut = window.fetch.bind(window);
+  // Au plus 6 requêtes Baserow simultanées (évite d'être freiné par Baserow quand plusieurs
+  // tables sont lues en parallèle) + nouvelle tentative automatique si Baserow répond 429.
+  const BASEROW_MAX_SIMULTANEES = 6;
+  let _baserowEnCours = 0;
+  const _baserowFile = [];
+  function _baserowLiberer() {
+    _baserowEnCours--;
+    const suivant = _baserowFile.shift();
+    if (suivant) suivant();
+  }
+  async function _fetchNatif(input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (!url.startsWith('https://api.baserow.io/')) return _fetchNatifBrut(input, init);
+    if (_baserowEnCours >= BASEROW_MAX_SIMULTANEES) await new Promise(r => _baserowFile.push(r));
+    _baserowEnCours++;
+    try {
+      for (let essai = 0; ; essai++) {
+        const res = await _fetchNatifBrut(input, init);
+        if (res.status !== 429 || essai >= 3) return res;
+        await new Promise(r => setTimeout(r, 800 * (essai + 1)));
+      }
+    } finally { _baserowLiberer(); }
+  }
+
+  function viderCacheBaserow() { _cacheBaserow.clear(); }
+
+  window.fetch = function(input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const methode = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (methode !== 'GET') {
+      viderCacheBaserow();
+      // Vidé aussi à la fin de l'écriture : une lecture lancée pendant l'écriture ne reste pas en cache
+      return _fetchNatif(input, init).then(r => { viderCacheBaserow(); return r; }, e => { viderCacheBaserow(); throw e; });
+    }
+    const m = url.match(/^https:\/\/api\.baserow\.io\/api\/database\/rows\/table\/(\d+)\//);
+    if (!m || CACHE_BASEROW_TABLES_EXCLUES.has(m[1])) return _fetchNatif(input, init);
+    const maintenant = Date.now();
+    const entree = _cacheBaserow.get(url);
+    if (entree && maintenant - entree.t < entree.ttl) return entree.promesse.then(r => r.clone());
+    const promesse = _fetchNatif(input, init).then(res => {
+      if (!res.ok) _cacheBaserow.delete(url);
+      return res;
+    }, err => { _cacheBaserow.delete(url); throw err; });
+    _cacheBaserow.set(url, { t: maintenant, ttl: CACHE_BASEROW_TABLES_REFERENCE.has(m[1]) ? CACHE_BASEROW_TTL_REFERENCE : CACHE_BASEROW_TTL_DEFAUT, promesse });
+    return promesse.then(r => r.clone());
+  };
+
   // Détermine les IDs de collaborateurs (table Collaborateurs) dont l'utilisateur lié est inactif.
   // Le lien fiable est le champ "Vue ID" (Utilisateurs) = ID de la ligne Collaborateur correspondante.
   // On garde un repli par nom (trim + minuscule) pour les fiches Utilisateur sans Vue ID renseigné.
@@ -911,16 +973,43 @@
   // Baserow limite chaque page d'API à 200 lignes (paramètre size). Au-delà, il faut boucler sur `next`
   // pour récupérer toutes les lignes, sans quoi les entrées les plus récentes (ID les plus élevés)
   // peuvent être silencieusement absentes des résultats.
+  // Lit toutes les pages d'une table. La 1re page donne le nombre total de lignes : les pages
+  // suivantes sont alors demandées en parallèle (4 à la fois) au lieu d'une par une.
   async function fetchToutesLesPages(url) {
-    let resultats = [];
-    let next = url;
-    while (next) {
-      const res = await fetch(next, { headers: HEADERS });
-      const data = await res.json();
-      resultats = resultats.concat(data.results || []);
-      next = data.next ? data.next.replace('http://', 'https://') : null;
+    const res = await fetch(url, { headers: HEADERS });
+    const data = await res.json();
+    const premiere = data.results || [];
+    if (!data.next) return premiere;
+    const taillePage = premiere.length;
+    const total = parseInt(data.count);
+    if (!taillePage || !total) {
+      // Repli : lecture page par page
+      let resultats = premiere, next = data.next.replace('http://', 'https://');
+      while (next) {
+        const d = await (await fetch(next, { headers: HEADERS })).json();
+        resultats = resultats.concat(d.results || []);
+        next = d.next ? d.next.replace('http://', 'https://') : null;
+      }
+      return resultats;
     }
-    return resultats;
+    const nbPages = Math.ceil(total / taillePage);
+    const urls = [];
+    for (let p = 2; p <= nbPages; p++) {
+      const u = new URL(url);
+      u.searchParams.set('page', p);
+      urls.push(u.toString());
+    }
+    const pages = new Array(urls.length);
+    let suivant = 0;
+    const travailleur = async () => {
+      while (suivant < urls.length) {
+        const i = suivant++;
+        const r = await fetch(urls[i], { headers: HEADERS });
+        pages[i] = r.ok ? ((await r.json()).results || []) : [];
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, urls.length) }, travailleur));
+    return premiere.concat(...pages);
   }
   const tableData = {};
   const globalSelected = { Collaborateur: null, Vehicules: null, Chantiers: null };
@@ -6955,15 +7044,51 @@
 
   let chantiersAvecCommandesCollectif = new Set();
 
+  function urlSemainePlanningCollectif(table, dateDebut, dateFin) {
+    return 'https://api.baserow.io/api/database/rows/table/' + table + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin;
+  }
+
+  // Précharge en arrière-plan les semaines précédente et suivante (mises en cache) :
+  // les flèches ◀ ▶ affichent alors la semaine quasi instantanément.
+  function prechargerSemainesVoisinesCollectif() {
+    [-7, 7].forEach(dec => {
+      const lundi = getLundiAdmin(semaineCollectif); lundi.setDate(lundi.getDate() + dec);
+      const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
+      const dd = dateYMD(lundi), df = dateYMD(vendredi);
+      const v = new Date(vendredi); v.setHours(23, 59, 59, 0);
+      const table = v < new Date() ? TABLE_SAISIE : TABLE_PLANNING_ADMIN;
+      fetchToutesLesPages(urlSemainePlanningCollectif(table, dd, df)).catch(() => {});
+    });
+  }
+
   async function loadPlanningCollectif() {
-    // Charger collaborateurs, en excluant ceux dont l'utilisateur est inactif
-    const [resC, resUsersActif] = await Promise.all([
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+    const lundi = getLundiAdmin(semaineCollectif);
+    joursCollectif = [];
+    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); joursCollectif.push(j); }
+    const dateDebut = dateYMD(joursCollectif[0]);
+    const dateFin = dateYMD(joursCollectif[4]);
+    todayCollectif = dateYMD(new Date());
+
+    // Semaine passée → saisies réelles (on compare le vendredi, pas le lundi)
+    const vendreC = new Date(getLundiAdmin(semaineCollectif)); vendreC.setDate(vendreC.getDate() + 4); vendreC.setHours(23,59,59,0);
+    isPasseCollectif = vendreC < new Date();
+
+    document.getElementById('planning-collectif-loading').style.display = 'block';
+    document.getElementById('planning-collectif-grid').innerHTML = '';
+
+    // Toutes les lectures lancées en même temps (collaborateurs, utilisateurs, chantiers et véhicules
+    // changent peu : ils sont servis depuis le cache lors d'un changement de semaine)
+    const [allCollabsCollectif, usersDataActif, chantiersTous, planningSemaine, congesResultats, vehiculesRows] = await Promise.all([
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200'),
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200'),
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200'),
+      fetchToutesLesPages(urlSemainePlanningCollectif(isPasseCollectif ? TABLE_SAISIE : TABLE_PLANNING_ADMIN, dateDebut, dateFin)),
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200'),
+      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200'),
     ]);
+
+    // Collaborateurs, en excluant ceux dont l'utilisateur est inactif
     const postes = new Set();
-    const allCollabsCollectif = (await resC.json()).results || [];
-    const usersDataActif = (await resUsersActif.json()).results || [];
     const inactifsIdsCollectif = getInactifsCollabIds(usersDataActif, allCollabsCollectif);
     inactifsCollabIdsCollectif = inactifsIdsCollectif;
     COLLABORATEURS_ADMIN = allCollabsCollectif
@@ -6978,36 +7103,15 @@
     const btnFiltre = document.getElementById('btn-filtre-poste');
     if (btnFiltre) btnFiltre.textContent = postesSelectionnes.size > 0 ? '🔽 ' + postesSelectionnes.size + ' poste(s)' : '🔽 Postes';
 
-    // Charger chantiers (tous statuts)
-    dataChantiersCached = { results: await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200') };
+    // Chantiers (tous statuts)
+    dataChantiersCached = { results: chantiersTous };
     chantiersCollectif = (dataChantiersCached.results || [])
       .map(r => ({ id: r.id, nom: r['Nom du chantier'] || '#' + r.id, statue: r['Statue']?.value || r['Statue'] || 'En cours' }))
       .sort((a, b) => { const o = { 'En cours': 0, 'En pause': 1, 'Termin\u00e9': 2 }; return (o[a.statue] ?? 3) - (o[b.statue] ?? 3) || a.nom.localeCompare(b.nom); });
 
-    const lundi = getLundiAdmin(semaineCollectif);
-    joursCollectif = [];
-    for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); joursCollectif.push(j); }
-    const dateDebut = dateYMD(joursCollectif[0]);
-    const dateFin = dateYMD(joursCollectif[4]);
-    todayCollectif = dateYMD(new Date());
-
-    document.getElementById('planning-collectif-loading').style.display = 'block';
-    document.getElementById('planning-collectif-grid').innerHTML = '';
-
-    const [resP, congesResultats, resVeh] = await Promise.all([
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
-      fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200'),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200', { headers: HEADERS })
-    ]);
-    planningCollectifData = (await resP.json()).results || [];
     congesCollectifData = congesResultats.filter(r => r['Statut']?.value !== 'Refusé');
-    vehiculesCollectif = ((await resVeh.json()).results || []).map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id }));
+    vehiculesCollectif = vehiculesRows.map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id }));
     document.getElementById('planning-collectif-loading').style.display = 'none';
-
-    // Semaine passée → saisies réelles (on compare le vendredi, pas le lundi)
-    const vendreC = new Date(getLundiAdmin(semaineCollectif)); vendreC.setDate(vendreC.getDate() + 4); vendreC.setHours(23,59,59,0);
-    const todayC = new Date();
-    isPasseCollectif = vendreC < todayC;
 
     collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
       if (!c.collabId) return false;
@@ -7016,13 +7120,15 @@
     });
 
     if (isPasseCollectif) {
-      const resSaisies = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
       const filtreIds = new Set(collaborateursFiltre.map(c => c.collabId));
-      planningCollectifData = ((await resSaisies.json()).results || [])
+      planningCollectifData = planningSemaine
         .filter(r => { const id = (r['Collaborateur']||[])[0]?.id; return filtreIds.size === 0 || filtreIds.has(id); })
         .map(r => ({ id: r.id, Date: r['Date'], Collaborateurs: r['Collaborateur']||[], Chantier: r['Chantiers']||[], Notes: r['Notes']||'', Fichiers:[], isSaisie:true, heures: r['Heures Normales']||0 }));
+    } else {
+      planningCollectifData = planningSemaine;
     }
 
+    prechargerSemainesVoisinesCollectif();
     renderPlanningCollectifGrid();
 
     // Icône 📦 sur les étiquettes collaborateur (Gestionnaire/Administrateur
@@ -7051,8 +7157,7 @@
     if (isPasseCollectif) { await loadPlanningCollectif(); return; }
     const dateDebut = dateYMD(joursCollectif[0]);
     const dateFin = dateYMD(joursCollectif[4]);
-    const resP = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS });
-    planningCollectifData = (await resP.json()).results || [];
+    planningCollectifData = await fetchToutesLesPages(urlSemainePlanningCollectif(TABLE_PLANNING_ADMIN, dateDebut, dateFin));
     renderPlanningCollectifGrid();
   }
 
@@ -9194,11 +9299,24 @@
 
   async function chargerCommandesPage() {
     const listeEl = document.getElementById('commandes-liste');
-    listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    // Déjà chargées une fois : on affiche tout de suite le dernier état connu, puis on met à jour
+    if (_commandesCache.length) {
+      try {
+        renderCommandesListe(); renderCommandesEnAttenteAR(); renderCommandesPartielles();
+        renderCommandesParChantier(); renderCommandesReceptionnees(); renderCommandesRetour();
+      } catch(e) {}
+    } else {
+      listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    }
     try {
-      _peutVoirPrixActuel = await peutVoirPrixCommandes();
       const urlCommandes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
-      let toutes = await fetchToutesLesPages(urlCommandes);
+      const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
+      // Commandes, lignes d'articles et droits lus en même temps
+      const [peutVoirPrix, toutesCmd, toutesLignes] = await Promise.all([
+        peutVoirPrixCommandes(), fetchToutesLesPages(urlCommandes), fetchToutesLesPages(urlLignes)
+      ]);
+      _peutVoirPrixActuel = peutVoirPrix;
+      let toutes = toutesCmd;
 
       // Utilisateur : ne garder que les commandes des chantiers qui lui sont
       // affectés — sauf pour Fab Acier/Fab Bois (ateliers, sans affectation
@@ -9217,14 +9335,12 @@
         }
       }
 
-      const idsCommandes = toutes.map(r => r.id);
+      const idsCommandes = new Set(toutes.map(r => r.id));
 
-      const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
-      const toutesLignes = await fetchToutesLesPages(urlLignes);
       const lignesParCommande = {};
       toutesLignes.forEach(l => {
         const cid = (l['Commande'] || [])[0]?.id;
-        if (!cid || !idsCommandes.includes(cid)) return;
+        if (!cid || !idsCommandes.has(cid)) return;
         if (!lignesParCommande[cid]) lignesParCommande[cid] = [];
         lignesParCommande[cid].push(l);
       });
