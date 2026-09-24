@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6593,33 +6593,81 @@
     document.getElementById('edit-saisie-chantier-id').value = id;
     document.getElementById('edit-saisie-chantier-search').value = nom;
     document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
+    // Changement de chantier → on recalcule les tâches autorisées (et on vide celles qui ne le sont plus)
+    const tacheActuelle = document.getElementById('edit-saisie-tache').value;
+    const sousTacheActuelle = document.getElementById('edit-saisie-sous-tache').value;
+    remplirTachesEdit(tacheActuelle);
+    chargerSousTachesEdit(document.getElementById('edit-saisie-tache').value, sousTacheActuelle);
+    majZoneEdit();
   }
 
-  async function chargerSousTachesEdit(tacheId) {
+  // Cache brut des tâches / sous-tâches pour la modale de modification
+  let _editTachesBrut = [];
+  let _editSousTachesBrut = [];
+  let _editZonesBrut = [];
+
+  // Même règle que openModal() : tâches rattachées au chantier, sinon uniquement "Modèle standard",
+  // en excluant les tâches marquées "exclure chantier".
+  function filtrerPourChantierEdit(rowsBrut, key, chantierId) {
+    const cid = parseInt(chantierId);
+    if (!cid) return [];
+    const all = rowsBrut.map(row => ({
+      id: row.id, value: row[TABLES[key].field] || row['Libellé'] || ('#' + row.id),
+      chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
+      excludeIds: (row['exclure chantier'] || []).map(c => c.id),
+      typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id),
+      modeleStandard: !!row['Modèle standard']
+    })).filter(opt => !opt.excludeIds.includes(cid));
+    const linked = all.filter(opt => opt.chantiersIds.includes(cid));
+    const globales = all.filter(opt => opt.chantiersIds.length === 0 && opt.modeleStandard);
+    return (linked.length > 0 ? linked : globales).sort((a,b) => a.value.localeCompare(b.value));
+  }
+
+  function remplirTachesEdit(valeurAConserver) {
+    const sel = document.getElementById('edit-saisie-tache');
+    const chantierId = document.getElementById('edit-saisie-chantier-id').value;
+    const options = filtrerPourChantierEdit(_editTachesBrut, 'TypeTaches', chantierId);
+    sel.innerHTML = '<option value="">— Choisir —</option>' +
+      options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
+    // Si la tâche d'origine n'est plus autorisée pour ce chantier, elle n'est pas proposée → champ vide
+    sel.value = options.some(o => String(o.id) === String(valeurAConserver)) ? valeurAConserver : '';
+  }
+
+  async function chargerSousTachesEdit(tacheId, valeurAConserver) {
     const sel = document.getElementById('edit-saisie-sous-tache');
     sel.innerHTML = '<option value="">— Choisir —</option>';
     if (!tacheId) return;
-    try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS });
-      const data = await res.json();
-      (data.results || []).sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s['Libellé'] || '#' + s.id;
-        sel.appendChild(opt);
-      });
-    } catch(e) {}
+    const chantierId = document.getElementById('edit-saisie-chantier-id').value;
+    let options = filtrerPourChantierEdit(_editSousTachesBrut, 'SousTaches', chantierId);
+    const typeTacheId = parseInt(tacheId);
+    const liees = options.filter(o => o.typeTacheIds.includes(typeTacheId));
+    if (liees.length > 0) options = liees;
+    sel.innerHTML += options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
+    if (valeurAConserver && options.some(o => String(o.id) === String(valeurAConserver))) sel.value = valeurAConserver;
+  }
+
+  // Affiche le champ Zone uniquement si le type de tâche sélectionné est "Pose" (même règle que la saisie)
+  function tacheEditEstPose() {
+    const sel = document.getElementById('edit-saisie-tache');
+    const opt = sel.options[sel.selectedIndex];
+    return !!(opt && opt.value && opt.textContent.trim() === 'Pose');
+  }
+  function majZoneEdit() {
+    document.getElementById('edit-saisie-zone-bloc').style.display = tacheEditEstPose() ? 'block' : 'none';
   }
 
   async function modifierSaisie(rowId) {
     try {
-      const [resSaisie, chantiers, resTaches] = await Promise.all([
+      const [resSaisie, chantiers, resTaches, resSousTaches] = await Promise.all([
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, { headers: HEADERS }),
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`),
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
-      ]);
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Zones.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+      ]).then(async ([a,b,c,d,z]) => { _editZonesBrut = (await z.json()).results || []; return [a,b,c,d]; });
       const r = await resSaisie.json();
-      const taches = (await resTaches.json()).results || [];
+      _editTachesBrut = (await resTaches.json()).results || [];
+      _editSousTachesBrut = (await resSousTaches.json()).results || [];
 
       document.getElementById('edit-saisie-id').value = rowId;
       document.getElementById('edit-saisie-date').value = r['Date'] ? String(r['Date']).split('T')[0] : '';
@@ -6636,17 +6684,20 @@
       document.getElementById('edit-saisie-chantier-search').value = chantierNom;
       document.getElementById('edit-saisie-chantier-liste').style.display = 'none';
 
-      const selTache = document.getElementById('edit-saisie-tache');
-      selTache.innerHTML = '<option value="">— Choisir —</option>';
-      taches.sort((a,b) => (a['Libellé']||'').localeCompare(b['Libellé']||'')).forEach(t => {
-        const opt = document.createElement('option'); opt.value = t.id; opt.textContent = t['Libellé'] || '#' + t.id; selTache.appendChild(opt);
-      });
       const tacheId = (r['Type de taches'] || [])[0]?.id;
-      if (tacheId) selTache.value = tacheId;
-
-      await chargerSousTachesEdit(tacheId);
       const sousTacheId = (r['Sous Taches'] || [])[0]?.id;
-      if (sousTacheId) document.getElementById('edit-saisie-sous-tache').value = sousTacheId;
+      remplirTachesEdit(tacheId);
+      await chargerSousTachesEdit(document.getElementById('edit-saisie-tache').value, sousTacheId);
+
+      const selZone = document.getElementById('edit-saisie-zone');
+      const champZone = TABLES.Zones.field;
+      selZone.innerHTML = '<option value="">— Choisir —</option>' + _editZonesBrut
+        .map(z => ({ id: z.id, nom: z[champZone] || ('#' + z.id) }))
+        .sort((a,b) => a.nom.localeCompare(b.nom))
+        .map(z => `<option value="${z.id}">${z.nom}</option>`).join('');
+      const zoneId = (r['Zones'] || [])[0]?.id;
+      selZone.value = zoneId && [...selZone.options].some(o => o.value === String(zoneId)) ? String(zoneId) : '';
+      majZoneEdit();
 
       document.getElementById('modal-edit-saisie').style.display = 'flex';
     } catch(e) { alert('Erreur lors du chargement de la saisie'); }
@@ -6662,6 +6713,11 @@
     const sousTacheId = document.getElementById('edit-saisie-sous-tache').value;
     if (!heures || heures <= 0) { alert("⚠️ Veuillez saisir un nombre d'heures valide."); return; }
     if (!chantierId) { alert('⚠️ Veuillez sélectionner un chantier.'); return; }
+    if (!tacheId) { alert('⚠️ Veuillez sélectionner un type de tâche autorisé pour ce chantier.'); return; }
+    if (!sousTacheId) { alert('⚠️ Veuillez sélectionner une sous-tâche.'); return; }
+    const estPose = tacheEditEstPose();
+    const zoneId = document.getElementById('edit-saisie-zone').value;
+    if (estPose && !zoneId) { alert('⚠️ Veuillez sélectionner une zone pour une tâche de type "Pose".'); return; }
     try {
       await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS,
@@ -6670,6 +6726,7 @@
           'Chantiers': chantierId ? [parseInt(chantierId)] : [],
           'Type de taches': tacheId ? [parseInt(tacheId)] : [],
           'Sous Taches': sousTacheId ? [parseInt(sousTacheId)] : [],
+          'Zones': estPose && zoneId ? [parseInt(zoneId)] : [],
         })
       });
       document.getElementById('modal-edit-saisie').style.display = 'none';
@@ -13930,13 +13987,23 @@
     </div>
     <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Type de tâche</label>
-      <select id="edit-saisie-tache" onchange="chargerSousTachesEdit(this.value)" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+      <select id="edit-saisie-tache" onchange="chargerSousTachesEdit(this.value); majZoneEdit()" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
         <option value="">— Choisir —</option>
       </select>
     </div>
     <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Sous-tâche</label>
       <select id="edit-saisie-sous-tache" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+        <option value="">— Choisir —</option>
+      </select>
+    </div>
+    <div id="edit-saisie-zone-bloc" style="margin-bottom:12px;display:none">
+      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Zone <span style="color:#c0392b">*</span></label>
+      <div style="background:#fffbe6;border:1px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:11px;color:#7a6a3a;margin-bottom:8px;line-height:1.7">
+        Z1a → 0 à 5 km &nbsp;|&nbsp; Z1b → 5 à 10 km &nbsp;|&nbsp; Z2 → 10 à 20 km &nbsp;|&nbsp; Z3 → 20 à 30 km<br>
+        Z4 → 30 à 40 km &nbsp;|&nbsp; Z5 → 40 à 50 km &nbsp;|&nbsp; Z6 → 50 à 65 km &nbsp;|&nbsp; Z7 → 65 à 80 km
+      </div>
+      <select id="edit-saisie-zone" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
         <option value="">— Choisir —</option>
       </select>
     </div>
