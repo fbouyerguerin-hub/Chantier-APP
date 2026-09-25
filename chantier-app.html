@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -10429,7 +10429,7 @@
       if (lieu || planX !== null) {
         extras += `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
           ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
-          ${planX !== null ? `<button type="button" onclick="voirPointSurPlan(${planX},${planY},'${(lieu||'Emplacement').replace(/'/g,"\'")}')" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+          ${planX !== null ? `<button type="button" onclick="voirPointSurPlan(${planX},${planY},{lieu:'${(lieu||'Emplacement').replace(/'/g,"\\'")}',chantier:'${chantierNom.replace(/'/g,"\\'")}',fourn:'${(r['Fournisseur']||'').replace(/'/g,"\\'")}',num:'${(r['Numero commande']||'').replace(/'/g,"\\'")}',statut:'${statut.replace(/'/g,"\\'")}'})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
         </div>`;
       }
       if (statut === 'Réceptionné en atelier') {
@@ -15286,7 +15286,7 @@
       <div id="plan-point-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
         <img id="plan-point-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
         <div id="plan-point-marker" style="display:none;position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:5">
-          <div style="width:22px;height:22px;background:#e74c3c;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>
+          <div style="width:11px;height:11px;background:#e74c3c;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.5)"></div>
         </div>
       </div>
       <div id="plan-point-hint" style="display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;border-radius:8px;padding:6px 14px;pointer-events:none;white-space:nowrap">Tapez pour placer le point</div>
@@ -15314,6 +15314,16 @@
     </div>
     <button onclick="fermerPlanViewer()" style="background:rgba(255,255,255,.15);border:none;border-radius:7px;padding:6px 10px;font-size:15px;cursor:pointer;color:#fff">✕</button>
   </div>
+  <div id="plan-viewer-legende" style="background:#fff;border-bottom:2px solid var(--beige,#c9a84c);padding:10px 16px;display:none;flex-shrink:0">
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <div style="font-size:22px;line-height:1;flex-shrink:0;margin-top:2px">📦</div>
+      <div>
+        <div id="plan-viewer-chantier" style="font-size:12px;font-weight:800;color:#2c2c2c"></div>
+        <div id="plan-viewer-fourn" style="font-size:11px;color:#666;margin-top:2px"></div>
+        <div id="plan-viewer-statut" style="font-size:10px;margin-top:4px"></div>
+      </div>
+    </div>
+  </div>
   <div style="flex:1;position:relative;overflow:hidden;background:#c8c8c8">
     <div id="plan-viewer-wrap" style="position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab">
       <div id="plan-viewer-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:10px">
@@ -15322,8 +15332,13 @@
       </div>
       <div id="plan-viewer-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
         <img id="plan-viewer-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
-        <div id="plan-viewer-marker" style="display:none;position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:5">
-          <div style="width:22px;height:22px;background:#e74c3c;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>
+        <div id="plan-viewer-marker" style="display:none;position:absolute;transform:translate(-50%,-100%);pointer-events:none;z-index:5">
+          <!-- Bulle légende -->
+          <div id="plan-viewer-bubble" style="background:#e74c3c;color:#fff;border-radius:8px;padding:5px 9px;white-space:nowrap;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.4);margin-bottom:3px;text-align:center;max-width:140px;overflow:hidden;text-overflow:ellipsis"></div>
+          <!-- Flèche vers le bas -->
+          <div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:9px solid #e74c3c;margin:0 auto"></div>
+          <!-- Point -->
+          <div style="width:11px;height:11px;background:#e74c3c;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.5);margin:0 auto;margin-top:-2px"></div>
         </div>
       </div>
       <div style="position:absolute;bottom:10px;left:10px;display:flex;flex-direction:column;gap:4px;z-index:10">
@@ -15466,8 +15481,28 @@ function fermerPlanPoint(confirmer){
   _ppUid=null;
 }
 
-function voirPointSurPlan(planX,planY,label){
-  document.getElementById('plan-viewer-title').textContent=label||'Emplacement';
+function voirPointSurPlan(planX,planY,infos){
+  // infos peut être un objet {lieu,chantier,fourn,num,statut} ou une string (compat)
+  const info = (typeof infos==='object'&&infos) ? infos : {lieu:infos||'Emplacement',chantier:'',fourn:'',num:'',statut:''};
+  document.getElementById('plan-viewer-title').textContent=info.lieu||'Emplacement';
+  // Remplir la bulle sur le marqueur
+  const bubble=document.getElementById('plan-viewer-bubble');
+  if(bubble) bubble.textContent=info.lieu||'Emplacement';
+  // Remplir la légende sous le header
+  const leg=document.getElementById('plan-viewer-legende');
+  const elChantier=document.getElementById('plan-viewer-chantier');
+  const elFourn=document.getElementById('plan-viewer-fourn');
+  const elStatut=document.getElementById('plan-viewer-statut');
+  if(info.chantier||info.fourn||info.num){
+    if(leg) leg.style.display='block';
+    if(elChantier) elChantier.textContent='🏗 '+info.chantier;
+    if(elFourn) elFourn.textContent=(info.fourn?'📦 '+info.fourn:'')+(info.num?' — N° '+info.num:'');
+    const sC={'Réceptionné en atelier':'#4a7c3f','Réceptionné sur chantier':'#4a7c3f','Envoyé sur chantier':'#7c5200'};
+    const sB={'Réceptionné en atelier':'#e8f0e7','Réceptionné sur chantier':'#e8f0e7','Envoyé sur chantier':'#fde8c3'};
+    if(elStatut&&info.statut) elStatut.innerHTML=`<span style="background:${sB[info.statut]||'#f0ebe3'};color:${sC[info.statut]||'#666'};padding:2px 8px;border-radius:8px;font-weight:800">${info.statut}</span>`;
+  } else {
+    if(leg) leg.style.display='none';
+  }
   const modal=document.getElementById('modal-plan-viewer');
   modal.style.display='flex';
   const src=ppGetImg();
