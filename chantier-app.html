@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -10402,7 +10402,12 @@
           <button onclick="validerAR('${uid}', ${r.id})" id="ar-btn-valider-${uid}" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Confirmer la validation</button>
         </div>`;
     } else if (statut === 'En attente réception' || statut === 'Réception partielle') {
-      const badgeLieuPartiel = lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : '';
+      const planXPartiel = parseFloat(r['Plan_X']) || null;
+      const planYPartiel = parseFloat(r['Plan_Y']) || null;
+      const badgeLieuPartiel = (lieu || planXPartiel !== null) ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+        ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
+        ${planXPartiel !== null ? `<button type="button" onclick="voirPointSurPlan(${planXPartiel},${planYPartiel},{lieu:'${(lieu||'Emplacement').replace(/'/g,"\'")}',chantier:'${chantierNom.replace(/'/g,"\'")}',fourn:'${(r['Fournisseur']||'').replace(/'/g,"\'")}',num:'${(r['Numero commande']||'').replace(/'/g,"\'")}',statut:'${statut.replace(/'/g,"\'")}'})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+      </div>` : '';
       actionsHTML = `
         ${badgeLieuPartiel}
         <div style="display:flex;gap:8px;margin-top:8px">
