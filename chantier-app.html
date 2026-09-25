@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -15280,12 +15280,8 @@
   <div style="flex:1;position:relative;overflow:hidden;background:#c8c8c8">
     <div id="plan-point-wrap" style="position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:crosshair">
       <div id="plan-point-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px">
-        <div style="font-size:44px">🏗️</div>
-        <div style="font-size:13px;font-weight:700;color:#aaa">Aucun plan chargé</div>
-        <label style="background:#4a7c3f;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:12px;font-weight:700;cursor:pointer;display:inline-block">
-          📂 Charger le plan de l'atelier
-          <input type="file" accept="image/*" style="display:none" onchange="planPointLoadImage(this)" />
-        </label>
+        <div style="font-size:36px">⏳</div>
+        <div style="font-size:13px;font-weight:700;color:#aaa">Chargement du plan…</div>
       </div>
       <div id="plan-point-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
         <img id="plan-point-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
@@ -15303,10 +15299,7 @@
   </div>
   <div style="background:#fff;padding:12px 16px;display:flex;gap:10px;align-items:center;flex-shrink:0;border-top:1px solid #eee">
     <div id="plan-point-ft-label" style="flex:1;font-size:13px;font-weight:700;color:#888">Tapez sur le plan pour placer le point</div>
-    <label style="background:#f5f0e8;border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;color:#3a3530;cursor:pointer;white-space:nowrap">
-      🔄 Changer le plan
-      <input type="file" accept="image/*" style="display:none" onchange="planPointLoadImage(this)" />
-    </label>
+
     <button onclick="fermerPlanPoint(false)" style="background:#f5f0e8;border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;color:#3a3530;cursor:pointer">Annuler</button>
     <button onclick="fermerPlanPoint(true)" id="plan-point-confirm-btn" disabled style="background:#4a7c3f;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;color:#fff;cursor:pointer;opacity:.4">✅ Confirmer</button>
   </div>
@@ -15324,8 +15317,8 @@
   <div style="flex:1;position:relative;overflow:hidden;background:#c8c8c8">
     <div id="plan-viewer-wrap" style="position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab">
       <div id="plan-viewer-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:10px">
-        <div style="font-size:36px">🏗️</div>
-        <div style="font-size:13px;font-weight:700;color:#aaa">Plan non disponible</div>
+        <div style="font-size:36px">⏳</div>
+        <div style="font-size:13px;font-weight:700;color:#aaa">Chargement du plan…</div>
       </div>
       <div id="plan-viewer-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
         <img id="plan-viewer-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
@@ -15347,8 +15340,9 @@
 let _ppScale=1,_ppOX=0,_ppOY=0,_pvScale=1,_pvOX=0,_pvOY=0;
 let _ppUid=null,_ppX=null,_ppY=null,_ppCtrl=null,_pvCtrl=null;
 
-function ppGetImg(){try{return localStorage.getItem('gb_plan_image')||sessionStorage.getItem('gb_plan_image')||null;}catch(e){return null;}}
-function ppSaveImg(src){try{localStorage.setItem('gb_plan_image',src);return;}catch(e){}try{sessionStorage.setItem('gb_plan_image',src);}catch(e){}}
+const PLAN_URL = 'https://raw.githubusercontent.com/fbouyerguerin-hub/Chantier-APP/refs/heads/main/Plan%20Appli.bmp';
+function ppGetImg(){ return PLAN_URL; }
+function ppSaveImg(src){ /* image hébergée sur GitHub, pas de localStorage */ }
 
 function makePPCtrl(wrapId,innerId,gs,ss,gox,sox,goy,soy,onTap){
   function applyT(){const i=document.getElementById(innerId);if(i)i.style.transform=`translate(${gox()}px,${goy()}px) scale(${gs()})`;}
@@ -15395,12 +15389,7 @@ function ppShowImg(src){
   img.src=src;
 }
 
-function planPointLoadImage(input){
-  const file=input.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{ppSaveImg(e.target.result);ppShowImg(e.target.result);};
-  reader.readAsDataURL(file);
-}
+/* planPointLoadImage supprimé — plan hébergé sur GitHub */
 
 function ppPlaceMarker(xP,yP){
   _ppX=xP;_ppY=yP;
