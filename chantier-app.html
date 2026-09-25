@@ -15361,80 +15361,62 @@ function makePPCtrl(wrapId,innerId,gs,ss,gox,sox,goy,soy,onTap){
       panMoved=false;
     });
     wrap.addEventListener('wheel',e=>{e.preventDefault();const rect=wrap.getBoundingClientRect();zoomAt(gs()*(e.deltaY<0?1.15:0.87),e.clientX-rect.left,e.clientY-rect.top);},{passive:false});
-    // Touch : pointer events pour gérer pinch + pan proprement
-    const ptrs={};
-    function ptrsArr(){return Object.values(ptrs);}
-    wrap.addEventListener('pointerdown',e=>{
-      wrap.setPointerCapture(e.pointerId);
-      ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
-      const all=ptrsArr();
-      if(all.length===1){
-        // Démarrage pan 1 doigt — snapshot de l'offset actuel
-        ptrs[e.pointerId].ox=gox();ptrs[e.pointerId].oy=goy();
-      }
-      if(all.length===2){
-        // Démarrage pinch — snapshot distance et scale
-        const [a,b]=all;
-        ptrs._pinchD0=Math.hypot(b.x-a.x,b.y-a.y);
-        ptrs._pinchS0=gs();
-        ptrs._pinchOX=gox();ptrs._pinchOY=goy();
-        ptrs._pinchMidX=(a.x+b.x)/2;ptrs._pinchMidY=(a.y+b.y)/2;
-      }
-      ptrs[e.pointerId].moved=false;
+    // Touch : gestion séparée pan 1 doigt / pinch 2 doigts
+    let t1=null,t2=null,pinchD0=0,pinchS0=1,panOX=0,panOY=0,tapStartX=0,tapStartY=0,tapMoved=false,isPinching=false;
+    wrap.addEventListener('touchstart',e=>{
       e.preventDefault();
+      if(e.touches.length===1&&!isPinching){
+        t1={id:e.touches[0].identifier,x:e.touches[0].clientX,y:e.touches[0].clientY};
+        panOX=gox();panOY=goy();
+        tapStartX=t1.x;tapStartY=t1.y;tapMoved=false;
+      }
+      if(e.touches.length===2){
+        isPinching=true;tapMoved=true;
+        const a=e.touches[0],b=e.touches[1];
+        pinchD0=Math.hypot(b.clientX-a.clientX,b.clientY-a.clientY);
+        pinchS0=gs();
+        t2={id:e.touches[1].identifier,x:e.touches[1].clientX,y:e.touches[1].clientY};
+      }
     },{passive:false});
-    wrap.addEventListener('pointermove',e=>{
-      if(!ptrs[e.pointerId])return;
-      const all=ptrsArr().filter(p=>p.ox!==undefined||ptrs._pinchD0);
-      if(ptrsArr().length===2&&ptrs._pinchD0){
+    wrap.addEventListener('touchmove',e=>{
+      e.preventDefault();
+      if(e.touches.length===2){
         // Pinch zoom
-        ptrs[e.pointerId].x=e.clientX;ptrs[e.pointerId].y=e.clientY;
-        const vals=ptrsArr().filter(p=>typeof p.x==='number'&&!p._pinchD0);
-        if(vals.length<2)return;
-        const [a,b]=vals;
-        const d=Math.hypot(b.x-a.x,b.y-a.y);
+        isPinching=true;tapMoved=true;
+        const a=e.touches[0],b=e.touches[1];
+        const d=Math.hypot(b.clientX-a.clientX,b.clientY-a.clientY);
         const rect=wrap.getBoundingClientRect();
-        const midX=(a.x+b.x)/2-rect.left,midY=(a.y+b.y)/2-rect.top;
-        zoomAt(ptrs._pinchS0*(d/ptrs._pinchD0),midX,midY);
-        ptrs[e.pointerId].moved=true;
-      } else if(ptrsArr().length===1){
+        const midX=(a.clientX+b.clientX)/2-rect.left;
+        const midY=(a.clientY+b.clientY)/2-rect.top;
+        zoomAt(pinchS0*(d/pinchD0),midX,midY);
+      } else if(e.touches.length===1&&!isPinching&&t1){
         // Pan 1 doigt
-        const p=ptrs[e.pointerId];if(!p||p.ox===undefined)return;
-        const dx=e.clientX-p.x,dy=e.clientY-p.y;
-        if(Math.abs(e.clientX-p.x)>3||Math.abs(e.clientY-p.y)>3) p.moved=true;
-        if(!p.moved)return;
-        sox(p.ox+(e.clientX-(p.startX||p.x)));soy(p.oy+(e.clientY-(p.startY||p.y)));
-        if(!p.startX){p.startX=p.x;p.startY=p.y;}
-        sox(p.ox+e.clientX-p.startX);soy(p.oy+e.clientY-p.startY);
-        clamp();applyT();
+        const dx=e.touches[0].clientX-t1.x,dy=e.touches[0].clientY-t1.y;
+        if(Math.abs(dx)>4||Math.abs(dy)>4) tapMoved=true;
+        sox(panOX+dx);soy(panOY+dy);clamp();applyT();
       }
-      e.preventDefault();
     },{passive:false});
-    wrap.addEventListener('pointerup',e=>{
-      const p=ptrs[e.pointerId];
-      const wasPinch=ptrsArr().length===2;
-      // Tap simple = pas bougé, pas de pinch, 1 seul pointeur
-      if(p&&!p.moved&&!wasPinch&&onTap){
-        const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);
-        if(inner&&inner.style.display!=='none'){
-          const xP=((e.clientX-rect.left-gox())/gs()/inner.clientWidth)*100;
-          const yP=((e.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;
-          if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);
+    wrap.addEventListener('touchend',e=>{
+      e.preventDefault();
+      if(e.touches.length===0){
+        // Tous les doigts levés
+        if(!tapMoved&&onTap&&t1){
+          const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);
+          if(inner&&inner.style.display!=='none'){
+            const xP=((tapStartX-rect.left-gox())/gs()/inner.clientWidth)*100;
+            const yP=((tapStartY-rect.top-goy())/gs()/inner.clientHeight)*100;
+            if(xP>=0&&xP<=100&&yP>=0&&yP<=100) onTap(xP,yP);
+          }
         }
+        t1=null;t2=null;isPinching=false;tapMoved=false;
+      } else if(e.touches.length===1){
+        // Un doigt levé après pinch — reprendre pan depuis position actuelle
+        isPinching=false;tapMoved=true;
+        t1={id:e.touches[0].identifier,x:e.touches[0].clientX,y:e.touches[0].clientY};
+        panOX=gox();panOY=goy();
+        t2=null;
       }
-      delete ptrs[e.pointerId];
-      // Après levée d'un doigt du pinch, reset snapshot pinch et snapshot pan 1 doigt
-      if(ptrsArr().filter(p=>!p._pinchD0).length===1){
-        delete ptrs._pinchD0;delete ptrs._pinchS0;
-        delete ptrs._pinchOX;delete ptrs._pinchOY;
-        delete ptrs._pinchMidX;delete ptrs._pinchMidY;
-        // Reprendre pan 1 doigt depuis la position actuelle
-        const rem=ptrsArr().find(p=>typeof p.x==='number');
-        if(rem){rem.ox=gox();rem.oy=goy();rem.startX=e.clientX;rem.startY=e.clientY;rem.moved=false;}
-      }
-      e.preventDefault();
     },{passive:false});
-    wrap.addEventListener('pointercancel',e=>{delete ptrs[e.pointerId];},{passive:false});
   }
   return{applyT,zoomAt,reset,zoomStep,clamp};
 }
