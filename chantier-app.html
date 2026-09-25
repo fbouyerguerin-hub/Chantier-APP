@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -675,9 +675,29 @@
   function normaliserTexteStatut(s) {
     return (s || '').toString().trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   }
+  // Réception partielle, quelle que soit la forme stockée dans Baserow
+  // ("Réception partielle", "Reception partielle", "Réceptionné partiellement"…).
+  function estStatutCommandePartiel(statutBrut) {
+    return normaliserTexteStatut(statutBrut).includes('partiel');
+  }
+  // Une commande est "partielle" si son statut l'indique, OU si au moins un
+  // de ses articles est encore pointé "Non réceptionné" alors qu'elle a déjà
+  // fait l'objet d'une réception (sécurité : une commande avec des manquants
+  // ne doit jamais se retrouver en "En attente réception" ou "Réceptionnées").
+  function estCommandePartielle(r) {
+    const statutBrut = extraireValeurChamp(r['Statut'], 'En attente AR');
+    if (estStatutCommandePartiel(statutBrut)) return true;
+    const s = normaliserTexteStatut(statutBrut);
+    if (s === 'en attente ar') return false;
+    const dejaReceptionnee = !!(r['Receptionne par'] || r['1ere reception par']);
+    if (!dejaReceptionnee) return false;
+    const lignes = (typeof _commandesLignesCache !== 'undefined' && _commandesLignesCache[r.id]) || [];
+    return lignes.some(l => l['Non réceptionné']);
+  }
   function estStatutCommandeReceptionne(statutBrut) {
     const s = normaliserTexteStatut(statutBrut);
     if (!s) return false;
+    if (estStatutCommandePartiel(statutBrut)) return false;
     if (s.startsWith('receptionne')) return true; // couvre les variantes de "Réceptionné(e) en atelier / sur chantier"
     if (s.startsWith('envoye sur chantier')) return true;
     if (s.startsWith('livree')) return true;
@@ -3348,8 +3368,8 @@
       return;
     }
 
-    const enCours = commandes.filter(r => !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
-    const receptionnees = commandes.filter(r => estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const enCours = commandes.filter(r => estCommandePartielle(r) || !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const receptionnees = commandes.filter(r => !estCommandePartielle(r) && estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
 
     const trier = (liste) => [...liste].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
@@ -9552,7 +9572,7 @@
     const recherche = (document.getElementById('commandes-receptionnees-recherche')?.value || '').trim().toLowerCase();
     const peutVoirPrix = _peutVoirPrixActuel;
 
-    let filtrees = _commandesCache.filter(r => estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    let filtrees = _commandesCache.filter(r => !estCommandePartielle(r) && estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (recherche) {
       filtrees = filtrees.filter(r => {
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
@@ -9842,7 +9862,7 @@
     let filtrees = _commandesCache.filter(r =>
       !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')) &&
       extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR' &&
-      extraireValeurChamp(r['Statut'], 'En attente AR') !== 'Réception partielle'
+      !estCommandePartielle(r)
     );
     if (recherche) {
       filtrees = filtrees.filter(r => {
@@ -9896,7 +9916,7 @@
     const recherche = (document.getElementById('commandes-partielle-recherche')?.value || '').trim().toLowerCase();
     const peutVoirPrix = _peutVoirPrixActuel;
 
-    let filtrees = _commandesCache.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') === 'Réception partielle');
+    let filtrees = _commandesCache.filter(r => estCommandePartielle(r));
     if (recherche) {
       filtrees = filtrees.filter(r => {
         const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
@@ -10298,7 +10318,7 @@
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
     const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
-    const statut = extraireValeurChamp(r['Statut'], 'En attente AR');
+    const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
     const couleur = couleurStatutCommande(statut);
     const chantierNom = (r['Chantier'] || [])[0]?.value || '—';
     const montantHT = Number(r['Montant total HT']) || 0;
@@ -10382,8 +10402,23 @@
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
     const contenuDetails = `
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
-      ${premiereReceptionPar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 1er arrivage réceptionné par : ${premiereReceptionPar}${premiereReceptionDate ? ` (${formaterDate(premiereReceptionDate)})` : ''}</div>` : (receptionnePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Réceptionné partiellement par' : 'Réceptionné par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : '')}
-      ${(premiereReceptionPar && receptionnePar && (premiereReceptionPar !== receptionnePar || dateReceptionEffective !== premiereReceptionDate)) ? `<div style="font-size:10px;color:#aaa;margin-top:2px">📥 ${statut === 'Réception partielle' ? 'Dernier complément réceptionné par' : 'Réception complétée par'} : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>` : ''}
+      ${(() => {
+        const st = 'font-size:10px;color:#aaa;margin-top:2px';
+        const quand = d => d ? ` le ${formaterDate(d)}` : '';
+        const qui = n => n ? ` par ${n}` : '';
+        const plusieursArrivages = premiereReceptionPar && receptionnePar && (premiereReceptionPar !== receptionnePar || dateReceptionEffective !== premiereReceptionDate);
+        // Réception totale : une seule ligne "Réceptionné le … par …"
+        if (receptionnePar && statut !== 'Réception partielle') {
+          return `<div style="${st}">📥 Réceptionné${quand(dateReceptionEffective)}${qui(receptionnePar)}</div>`
+            + (plusieursArrivages ? `<div style="${st}">↳ 1er arrivage partiel${quand(premiereReceptionDate)}${qui(premiereReceptionPar)}</div>` : '');
+        }
+        // Réception partielle : historique des arrivages
+        let h = '';
+        if (premiereReceptionPar) h += `<div style="${st}">📥 1er arrivage réceptionné par : ${premiereReceptionPar}${premiereReceptionDate ? ` (${formaterDate(premiereReceptionDate)})` : ''}</div>`;
+        else if (receptionnePar) h += `<div style="${st}">📥 Réceptionné partiellement par : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>`;
+        if (plusieursArrivages) h += `<div style="${st}">📥 Dernier complément réceptionné par : ${receptionnePar}${dateReceptionEffective ? ` (${formaterDate(dateReceptionEffective)})` : ''}</div>`;
+        return h;
+      })()}
       ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}${dateEnvoiChantier ? ` (${formaterDate(dateEnvoiChantier)})` : ''}</div>` : ''}
       ${lignesHTML}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
