@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -10712,9 +10712,9 @@
     const premiereReception = statutAvant !== 'Réception partielle';
     const lieuInput = document.getElementById('reception-lieu-' + uid);
     const lieu = lieuInput ? lieuInput.value.trim() : '';
-    if (!lieu) { alert("Merci d'indiquer l'emplacement de réception."); return; }
     const planX = parseFloat(document.getElementById('reception-plan-x-' + uid)?.value || '') || null;
     const planY = parseFloat(document.getElementById('reception-plan-y-' + uid)?.value || '') || null;
+    if (!lieu && planX === null) { alert("Merci d'indiquer un emplacement (texte) ou de placer un point sur le plan."); return; }
     const partielle = document.getElementById('reception-partielle-' + uid)?.checked;
     const noteInput = document.getElementById('reception-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
@@ -15358,13 +15358,13 @@ function makePPCtrl(wrapId,innerId,gs,ss,gox,sox,goy,soy,onTap){
     document.addEventListener('mouseup',e=>{
       if(!isPan)return;isPan=false;wrap.style.cursor=onTap?'crosshair':'grab';
       if(!panMoved&&onTap){const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((e.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((e.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}
-      const now=Date.now();if(now-lastClick<300)reset();lastClick=now;panMoved=false;
+      panMoved=false;
     });
     wrap.addEventListener('wheel',e=>{e.preventDefault();const rect=wrap.getBoundingClientRect();zoomAt(gs()*(e.deltaY<0?1.15:0.87),e.clientX-rect.left,e.clientY-rect.top);},{passive:false});
     let tMoved=false,tpsx,tpsy,tpsox,tpsoy,pinchD0,pinchS0,lastTap=0;
     wrap.addEventListener('touchstart',e=>{tMoved=false;if(e.touches.length===2){e.preventDefault();pinchD0=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY);pinchS0=gs();}else{tpsx=e.touches[0].clientX;tpsy=e.touches[0].clientY;tpsox=gox();tpsoy=goy();}},{passive:false});
     wrap.addEventListener('touchmove',e=>{e.preventDefault();tMoved=true;if(e.touches.length===2){const d=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY),rect=wrap.getBoundingClientRect();zoomAt(pinchS0*(d/pinchD0),(e.touches[0].clientX+e.touches[1].clientX)/2-rect.left,(e.touches[0].clientY+e.touches[1].clientY)/2-rect.top);}else{sox(tpsox+e.touches[0].clientX-tpsx);soy(tpsoy+e.touches[0].clientY-tpsy);clamp();applyT();}},{passive:false});
-    wrap.addEventListener('touchend',e=>{const now=Date.now();if(now-lastTap<300)reset();lastTap=now;if(!tMoved&&onTap&&e.changedTouches.length===1){const t=e.changedTouches[0];e.preventDefault();const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((t.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((t.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}},{passive:false});
+    wrap.addEventListener('touchend',e=>{if(!tMoved&&onTap&&e.changedTouches.length===1){const t=e.changedTouches[0];e.preventDefault();const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((t.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((t.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}},{passive:false});
   }
   return{applyT,zoomAt,reset,zoomStep,clamp};
 }
