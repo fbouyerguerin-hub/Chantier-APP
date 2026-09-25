@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6729,7 +6729,22 @@
       const lundi = new Date(lundiStr + 'T12:00:00');
       const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
       const collabId = feuilleCollab?.id;
-      const saisies = await fetchSaisiesPeriodeRtt(dateYMD(lundi), dateYMD(vendredi), collabId);
+      const lundiYMD = dateYMD(lundi), vendrediYMD = dateYMD(vendredi);
+      const [saisies, congesSemaine] = await Promise.all([
+        fetchSaisiesPeriodeRtt(lundiYMD, vendrediYMD, collabId),
+        // Demandes de congés / absences du collaborateur qui chevauchent la semaine (hors refusées)
+        collabId
+          ? fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=${collabId}`)
+              .then(rows => rows.filter(r => {
+                if (!(r['Collaborateurs'] || []).some(c => c.id === collabId)) return false;
+                if ((r['Statut']?.value || '') === 'Refusé') return false;
+                const deb = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
+                const fin = String(finConge(r) || '').split('T')[0];
+                return deb && deb <= vendrediYMD && fin >= lundiYMD;
+              }))
+              .catch(() => [])
+          : Promise.resolve([])
+      ]);
 
       const parJour = {};
       let total = 0;
@@ -6738,8 +6753,11 @@
         const dateStr = String(r['Date']).split('T')[0];
         const heures = parseFloat(r['Heures Normales']) || 0;
         const chantierNom = (r['Chantiers'] || r['Chantier'] || [])[0]?.value || '—';
+        const typeTache = (r['Type de taches'] || [])[0]?.value || '';
+        const sousTache = (r['Sous Taches'] || [])[0]?.value || '';
+        const estAbsence = chantierNom.trim().toUpperCase() === 'ABSENCE';
         if (!parJour[dateStr]) parJour[dateStr] = [];
-        parJour[dateStr].push({ chantier: chantierNom, heures });
+        parJour[dateStr].push({ chantier: chantierNom, heures, estAbsence, motif: [typeTache, sousTache].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' / ') });
         total += heures;
       });
 
@@ -6749,12 +6767,31 @@
         const dStr = dateYMD(d);
         const entries = parJour[dStr] || [];
         const totalJour = entries.reduce((s, e) => s + e.heures, 0);
-        const detail = entries.length
-          ? entries.map(e => `${e.chantier} (${formatJoursRtt(e.heures)} h)`).join(', ')
-          : 'Aucune saisie';
+        const badgeAbs = (txt) => `<span style="display:inline-block;padding:1px 7px;border-radius:9px;background:#fff4e0;border:1px solid #f0d9a8;color:#a5761f;font-weight:700;white-space:nowrap">${txt}</span>`;
+        const detailSaisies = entries.map(e => e.estAbsence
+          ? `${badgeAbs(labelAbsence(e.motif || 'Absence (motif non précisé)'))} (${formatJoursRtt(e.heures)} h)`
+          : `${e.chantier} (${formatJoursRtt(e.heures)} h)`);
+        // Demandes de congés / absences couvrant ce jour, non déjà reflétées par une saisie ABSENCE du même motif
+        const motifsSaisis = entries.filter(e => e.estAbsence).map(e => (e.motif || '').toLowerCase());
+        const detailConges = congesSemaine
+          .filter(cg => String(cg['Date de début']).split('T')[0] <= dStr && String(finConge(cg)).split('T')[0] >= dStr)
+          .filter(cg => {
+            const t = (cg['Type de demande']?.value || '').toLowerCase();
+            return !t || !motifsSaisis.some(m => m.includes(t));
+          })
+          .map(cg => {
+            const type = cg['Type de demande']?.value || 'Absence';
+            const statut = cg['Statut']?.value || 'En attente';
+            const partielle = estAbsencePartielle(cg) ? ` — ${formatJoursRtt(parseFloat(cg["Nombre d'heures"]))} h` : ' — journée';
+            return badgeAbs(`${labelAbsence(type)}${partielle} (${statut.toLowerCase()})`);
+          });
+        const ferie = nomJourFerie(dStr);
+        const morceaux = [...(ferie ? [badgeAbs('🎉 Férié : ' + ferie)] : []), ...detailConges, ...detailSaisies];
+        const detail = morceaux.length ? morceaux.join(', ') : 'Aucune saisie';
+        const justifie = totalJour > 0 || detailConges.length || ferie;
         return `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #f0f0f0;font-size:12px">
-          <span style="color:var(--gris)"><strong>${nom}</strong> — ${detail}</span>
-          <span style="font-weight:700;flex-shrink:0;color:${totalJour === 0 ? '#c0392b' : 'var(--gris)'}">${formatJoursRtt(totalJour)} h</span>
+          <span style="color:var(--gris);line-height:1.7"><strong>${nom}</strong> — ${detail}</span>
+          <span style="font-weight:700;flex-shrink:0;color:${justifie ? 'var(--gris)' : '#c0392b'}">${formatJoursRtt(totalJour)} h</span>
         </div>`;
       }).join('');
 
@@ -10373,7 +10410,10 @@
           <button id="btn-reception-chantier-${uid}" onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
         </div>
         <div id="reception-form-${uid}" style="display:none;margin-top:8px" data-type="" data-statut-avant="${statut}">
-          <input type="text" id="reception-lieu-${uid}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
+          <input type="text" id="reception-lieu-${uid}" placeholder="Emplacement de réception…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:4px" />
+          <input type="hidden" id="reception-plan-x-${uid}" value="" />
+          <input type="hidden" id="reception-plan-y-${uid}" value="" />
+          <button type="button" onclick="ouvrirPlanPoint('${uid}')" id="btn-plan-point-${uid}" style="width:100%;margin-bottom:6px;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;color:#4a7c3f;cursor:pointer;text-align:left">🗺️ <span id="plan-point-label-${uid}">Placer sur le plan (facultatif)</span></button>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gris-moyen);margin-bottom:6px;cursor:pointer">
             <input type="checkbox" id="reception-partielle-${uid}" onchange="toggleReceptionNoteObligatoire('${uid}')" />
             🔶 Réception partielle (il manque des articles)
@@ -10384,8 +10424,13 @@
         </div>`;
     } else {
       let extras = '';
-      if (lieu) {
-        extras += `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>`;
+      const planX = parseFloat(r['Plan_X']) || null;
+      const planY = parseFloat(r['Plan_Y']) || null;
+      if (lieu || planX !== null) {
+        extras += `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+          ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
+          ${planX !== null ? `<button type="button" onclick="voirPointSurPlan(${planX},${planY},'${(lieu||'Emplacement').replace(/'/g,"\'")}')" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+        </div>`;
       }
       if (statut === 'Réceptionné en atelier') {
         extras += `
@@ -10667,7 +10712,9 @@
     const premiereReception = statutAvant !== 'Réception partielle';
     const lieuInput = document.getElementById('reception-lieu-' + uid);
     const lieu = lieuInput ? lieuInput.value.trim() : '';
-    if (!lieu) { alert('Merci d\'indiquer l\'emplacement de réception.'); return; }
+    if (!lieu) { alert("Merci d'indiquer l'emplacement de réception."); return; }
+    const planX = parseFloat(document.getElementById('reception-plan-x-' + uid)?.value || '') || null;
+    const planY = parseFloat(document.getElementById('reception-plan-y-' + uid)?.value || '') || null;
     const partielle = document.getElementById('reception-partielle-' + uid)?.checked;
     const noteInput = document.getElementById('reception-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
@@ -10679,6 +10726,8 @@
     const statutCible = partielle ? 'Réception partielle' : (type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier');
     const dateAujourdhui = dateYMD(new Date());
     const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateAujourdhui };
+    if (planX !== null) payload['Plan_X'] = planX;
+    if (planY !== null) payload['Plan_Y'] = planY;
     // On ne renseigne "1ere reception par/date" qu'au tout premier arrivage :
     // les réceptions suivantes (complément d'une commande déjà partielle)
     // mettent uniquement à jour "Receptionne par" / "Date reception" ci-dessus,
@@ -15218,6 +15267,187 @@
     <button onclick="changerMotDePasse()" id="btn-changer-mdp" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Enregistrer</button>
   </div>
 </div>
+
+<!-- MODALE PLAN PLACEMENT -->
+<div id="modal-plan-point" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.7);flex-direction:column">
+  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+    <div>
+      <div style="font-size:14px;font-weight:800;color:#fff">🗺️ Placer sur le plan</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.7);margin-top:2px">Tapez l'endroit exact où vous déposez la commande</div>
+    </div>
+    <button onclick="fermerPlanPoint(false)" style="background:rgba(255,255,255,.15);border:none;border-radius:7px;padding:6px 10px;font-size:15px;cursor:pointer;color:#fff">✕</button>
+  </div>
+  <div style="flex:1;position:relative;overflow:hidden;background:#c8c8c8">
+    <div id="plan-point-wrap" style="position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:crosshair">
+      <div id="plan-point-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:12px">
+        <div style="font-size:44px">🏗️</div>
+        <div style="font-size:13px;font-weight:700;color:#aaa">Aucun plan chargé</div>
+        <label style="background:#4a7c3f;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:12px;font-weight:700;cursor:pointer;display:inline-block">
+          📂 Charger le plan de l'atelier
+          <input type="file" accept="image/*" style="display:none" onchange="planPointLoadImage(this)" />
+        </label>
+      </div>
+      <div id="plan-point-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
+        <img id="plan-point-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
+        <div id="plan-point-marker" style="display:none;position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:5">
+          <div style="width:22px;height:22px;background:#e74c3c;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>
+        </div>
+      </div>
+      <div id="plan-point-hint" style="display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;border-radius:8px;padding:6px 14px;pointer-events:none;white-space:nowrap">Tapez pour placer le point</div>
+      <div style="position:absolute;bottom:10px;left:10px;display:flex;flex-direction:column;gap:4px;z-index:10">
+        <button onclick="ppZoomStep(1.25)" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">+</button>
+        <button onclick="ppZoomStep(0.8)" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">−</button>
+        <button onclick="ppResetZoom()" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">⌂</button>
+      </div>
+    </div>
+  </div>
+  <div style="background:#fff;padding:12px 16px;display:flex;gap:10px;align-items:center;flex-shrink:0;border-top:1px solid #eee">
+    <div id="plan-point-ft-label" style="flex:1;font-size:13px;font-weight:700;color:#888">Tapez sur le plan pour placer le point</div>
+    <label style="background:#f5f0e8;border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;color:#3a3530;cursor:pointer;white-space:nowrap">
+      🔄 Changer le plan
+      <input type="file" accept="image/*" style="display:none" onchange="planPointLoadImage(this)" />
+    </label>
+    <button onclick="fermerPlanPoint(false)" style="background:#f5f0e8;border:1.5px solid #ddd5c5;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;color:#3a3530;cursor:pointer">Annuler</button>
+    <button onclick="fermerPlanPoint(true)" id="plan-point-confirm-btn" disabled style="background:#4a7c3f;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;color:#fff;cursor:pointer;opacity:.4">✅ Confirmer</button>
+  </div>
+</div>
+
+<!-- MODALE PLAN VIEWER -->
+<div id="modal-plan-viewer" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.7);flex-direction:column">
+  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+    <div>
+      <div id="plan-viewer-title" style="font-size:14px;font-weight:800;color:#fff">Emplacement</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.7);margin-top:2px">Localisation sur le plan</div>
+    </div>
+    <button onclick="fermerPlanViewer()" style="background:rgba(255,255,255,.15);border:none;border-radius:7px;padding:6px 10px;font-size:15px;cursor:pointer;color:#fff">✕</button>
+  </div>
+  <div style="flex:1;position:relative;overflow:hidden;background:#c8c8c8">
+    <div id="plan-viewer-wrap" style="position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab">
+      <div id="plan-viewer-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:10px">
+        <div style="font-size:36px">🏗️</div>
+        <div style="font-size:13px;font-weight:700;color:#aaa">Plan non disponible</div>
+      </div>
+      <div id="plan-viewer-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
+        <img id="plan-viewer-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
+        <div id="plan-viewer-marker" style="display:none;position:absolute;transform:translate(-50%,-50%);pointer-events:none;z-index:5">
+          <div style="width:22px;height:22px;background:#e74c3c;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.5)"></div>
+        </div>
+      </div>
+      <div style="position:absolute;bottom:10px;left:10px;display:flex;flex-direction:column;gap:4px;z-index:10">
+        <button onclick="pvZoomStep(1.25)" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:16px;font-weight:700;cursor:pointer">+</button>
+        <button onclick="pvZoomStep(0.8)" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:16px;font-weight:700;cursor:pointer">−</button>
+        <button onclick="pvResetZoom()" style="background:rgba(255,255,255,.92);border:1px solid #ddd;border-radius:6px;width:32px;height:32px;font-size:11px;font-weight:700;cursor:pointer">⌂</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══ MODULE PLAN POINT ══
+let _ppScale=1,_ppOX=0,_ppOY=0,_pvScale=1,_pvOX=0,_pvOY=0;
+let _ppUid=null,_ppX=null,_ppY=null,_ppCtrl=null,_pvCtrl=null;
+
+function ppGetImg(){try{return localStorage.getItem('gb_plan_image')||sessionStorage.getItem('gb_plan_image')||null;}catch(e){return null;}}
+function ppSaveImg(src){try{localStorage.setItem('gb_plan_image',src);return;}catch(e){}try{sessionStorage.setItem('gb_plan_image',src);}catch(e){}}
+
+function makePPCtrl(wrapId,innerId,gs,ss,gox,sox,goy,soy,onTap){
+  function applyT(){const i=document.getElementById(innerId);if(i)i.style.transform=`translate(${gox()}px,${goy()}px) scale(${gs()})`;}
+  function clamp(){const w=document.getElementById(wrapId),i=document.getElementById(innerId);if(!w||!i)return;const iw=i.clientWidth*gs(),ih=i.clientHeight*gs(),mg=40;sox(Math.max(-(iw-mg),Math.min(iw-mg,gox())));soy(Math.max(-(ih-mg),Math.min(ih-mg,goy())));}
+  function zoomAt(ns,cx,cy){ns=Math.max(1,Math.min(8,ns));const r=ns/gs();sox(cx-r*(cx-gox()));soy(cy-r*(cy-goy()));ss(ns);clamp();applyT();}
+  function reset(){ss(1);sox(0);soy(0);applyT();}
+  function zoomStep(f){const w=document.getElementById(wrapId);if(w)zoomAt(gs()*f,w.clientWidth/2,w.clientHeight/2);}
+  const wrap=document.getElementById(wrapId);
+  if(wrap){
+    let isPan=false,panMoved=false,psx,psy,psox,psoy,lastClick=0;
+    wrap.addEventListener('mousedown',e=>{isPan=true;panMoved=false;psx=e.clientX;psy=e.clientY;psox=gox();psoy=goy();e.preventDefault();});
+    document.addEventListener('mousemove',e=>{if(!isPan)return;const dx=e.clientX-psx,dy=e.clientY-psy;if(Math.abs(dx)>4||Math.abs(dy)>4){panMoved=true;wrap.style.cursor='grabbing';}if(!panMoved)return;sox(psox+dx);soy(psoy+dy);clamp();applyT();});
+    document.addEventListener('mouseup',e=>{
+      if(!isPan)return;isPan=false;wrap.style.cursor=onTap?'crosshair':'grab';
+      if(!panMoved&&onTap){const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((e.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((e.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}
+      const now=Date.now();if(now-lastClick<300)reset();lastClick=now;panMoved=false;
+    });
+    wrap.addEventListener('wheel',e=>{e.preventDefault();const rect=wrap.getBoundingClientRect();zoomAt(gs()*(e.deltaY<0?1.15:0.87),e.clientX-rect.left,e.clientY-rect.top);},{passive:false});
+    let tMoved=false,tpsx,tpsy,tpsox,tpsoy,pinchD0,pinchS0,lastTap=0;
+    wrap.addEventListener('touchstart',e=>{tMoved=false;if(e.touches.length===2){e.preventDefault();pinchD0=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY);pinchS0=gs();}else{tpsx=e.touches[0].clientX;tpsy=e.touches[0].clientY;tpsox=gox();tpsoy=goy();}},{passive:false});
+    wrap.addEventListener('touchmove',e=>{e.preventDefault();tMoved=true;if(e.touches.length===2){const d=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY),rect=wrap.getBoundingClientRect();zoomAt(pinchS0*(d/pinchD0),(e.touches[0].clientX+e.touches[1].clientX)/2-rect.left,(e.touches[0].clientY+e.touches[1].clientY)/2-rect.top);}else{sox(tpsox+e.touches[0].clientX-tpsx);soy(tpsoy+e.touches[0].clientY-tpsy);clamp();applyT();}},{passive:false});
+    wrap.addEventListener('touchend',e=>{const now=Date.now();if(now-lastTap<300)reset();lastTap=now;if(!tMoved&&onTap&&e.changedTouches.length===1){const t=e.changedTouches[0];e.preventDefault();const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((t.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((t.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}},{passive:false});
+  }
+  return{applyT,zoomAt,reset,zoomStep,clamp};
+}
+
+function ouvrirPlanPoint(uid){
+  _ppUid=uid;_ppX=null;_ppY=null;
+  const modal=document.getElementById('modal-plan-point');
+  modal.style.display='flex';
+  document.getElementById('plan-point-confirm-btn').disabled=true;
+  document.getElementById('plan-point-confirm-btn').style.opacity='0.4';
+  document.getElementById('plan-point-ft-label').textContent='Tapez sur le plan pour placer le point';
+  document.getElementById('plan-point-marker').style.display='none';
+  const src=ppGetImg();
+  if(src){ppShowImg(src);}else{document.getElementById('plan-point-empty').style.display='flex';document.getElementById('plan-point-inner').style.display='none';document.getElementById('plan-point-hint').style.display='none';}
+  if(!_ppCtrl){_ppCtrl=makePPCtrl('plan-point-wrap','plan-point-inner',()=>_ppScale,v=>{_ppScale=v},()=>_ppOX,v=>{_ppOX=v},()=>_ppOY,v=>{_ppOY=v},(xP,yP)=>ppPlaceMarker(xP,yP));}
+  else{_ppScale=1;_ppOX=0;_ppOY=0;_ppCtrl.applyT();}
+}
+
+function ppShowImg(src){
+  const img=document.getElementById('plan-point-img');
+  img.onload=()=>{document.getElementById('plan-point-empty').style.display='none';document.getElementById('plan-point-inner').style.display='block';document.getElementById('plan-point-hint').style.display='block';_ppScale=1;_ppOX=0;_ppOY=0;if(_ppCtrl)_ppCtrl.applyT();};
+  img.src=src;
+}
+
+function planPointLoadImage(input){
+  const file=input.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{ppSaveImg(e.target.result);ppShowImg(e.target.result);};
+  reader.readAsDataURL(file);
+}
+
+function ppPlaceMarker(xP,yP){
+  _ppX=xP;_ppY=yP;
+  const m=document.getElementById('plan-point-marker');
+  m.style.left=xP+'%';m.style.top=yP+'%';m.style.display='block';
+  document.getElementById('plan-point-confirm-btn').disabled=false;
+  document.getElementById('plan-point-confirm-btn').style.opacity='1';
+  document.getElementById('plan-point-ft-label').textContent='\uD83D\uDCCD Point plac\u00E9 \u2014 Confirmez ou tapez ailleurs pour d\u00E9placer';
+  document.getElementById('plan-point-hint').style.display='none';
+}
+
+function ppZoomStep(f){_ppCtrl&&_ppCtrl.zoomStep(f);}
+function ppResetZoom(){_ppScale=1;_ppOX=0;_ppOY=0;_ppCtrl&&_ppCtrl.applyT();}
+
+function fermerPlanPoint(confirmer){
+  document.getElementById('modal-plan-point').style.display='none';
+  if(!confirmer||_ppX===null||!_ppUid)return;
+  const hx=document.getElementById('reception-plan-x-'+_ppUid),hy=document.getElementById('reception-plan-y-'+_ppUid);
+  if(hx)hx.value=_ppX.toFixed(4);if(hy)hy.value=_ppY.toFixed(4);
+  const lbl=document.getElementById('plan-point-label-'+_ppUid);if(lbl)lbl.textContent='\u2705 Point plac\u00E9 sur le plan';
+  const btn=document.getElementById('btn-plan-point-'+_ppUid);if(btn){btn.style.background='#e8f0e7';btn.style.borderColor='#4a7c3f';btn.style.color='#4a7c3f';}
+  _ppUid=null;
+}
+
+function voirPointSurPlan(planX,planY,label){
+  document.getElementById('plan-viewer-title').textContent=label||'Emplacement';
+  const modal=document.getElementById('modal-plan-viewer');
+  modal.style.display='flex';
+  const src=ppGetImg();
+  if(src){
+    const img=document.getElementById('plan-viewer-img');
+    img.onload=()=>{
+      document.getElementById('plan-viewer-empty').style.display='none';
+      document.getElementById('plan-viewer-inner').style.display='block';
+      const m=document.getElementById('plan-viewer-marker');m.style.left=planX+'%';m.style.top=planY+'%';m.style.display='block';
+      setTimeout(()=>{const wrap=document.getElementById('plan-viewer-wrap'),inner=document.getElementById('plan-viewer-inner');if(wrap&&inner&&_pvCtrl){_pvScale=2.5;_pvOX=wrap.clientWidth/2-(planX/100)*inner.clientWidth*_pvScale;_pvOY=wrap.clientHeight/2-(planY/100)*inner.clientHeight*_pvScale;_pvCtrl.clamp();_pvCtrl.applyT();}},80);
+    };
+    img.src=src;
+  }else{document.getElementById('plan-viewer-empty').style.display='flex';document.getElementById('plan-viewer-inner').style.display='none';}
+  if(!_pvCtrl){_pvCtrl=makePPCtrl('plan-viewer-wrap','plan-viewer-inner',()=>_pvScale,v=>{_pvScale=v},()=>_pvOX,v=>{_pvOX=v},()=>_pvOY,v=>{_pvOY=v},null);}
+  else{_pvScale=1;_pvOX=0;_pvOY=0;_pvCtrl.applyT();}
+}
+
+function pvZoomStep(f){_pvCtrl&&_pvCtrl.zoomStep(f);}
+function pvResetZoom(){_pvScale=1;_pvOX=0;_pvOY=0;_pvCtrl&&_pvCtrl.applyT();}
+function fermerPlanViewer(){document.getElementById('modal-plan-viewer').style.display='none';}
+</script>
 
 </body>
 </html>
