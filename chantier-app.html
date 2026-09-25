@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -15361,10 +15361,80 @@ function makePPCtrl(wrapId,innerId,gs,ss,gox,sox,goy,soy,onTap){
       panMoved=false;
     });
     wrap.addEventListener('wheel',e=>{e.preventDefault();const rect=wrap.getBoundingClientRect();zoomAt(gs()*(e.deltaY<0?1.15:0.87),e.clientX-rect.left,e.clientY-rect.top);},{passive:false});
-    let tMoved=false,tpsx,tpsy,tpsox,tpsoy,pinchD0,pinchS0,lastTap=0;
-    wrap.addEventListener('touchstart',e=>{tMoved=false;if(e.touches.length===2){e.preventDefault();pinchD0=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY);pinchS0=gs();}else{tpsx=e.touches[0].clientX;tpsy=e.touches[0].clientY;tpsox=gox();tpsoy=goy();}},{passive:false});
-    wrap.addEventListener('touchmove',e=>{e.preventDefault();tMoved=true;if(e.touches.length===2){const d=Math.hypot(e.touches[1].clientX-e.touches[0].clientX,e.touches[1].clientY-e.touches[0].clientY),rect=wrap.getBoundingClientRect();zoomAt(pinchS0*(d/pinchD0),(e.touches[0].clientX+e.touches[1].clientX)/2-rect.left,(e.touches[0].clientY+e.touches[1].clientY)/2-rect.top);}else{sox(tpsox+e.touches[0].clientX-tpsx);soy(tpsoy+e.touches[0].clientY-tpsy);clamp();applyT();}},{passive:false});
-    wrap.addEventListener('touchend',e=>{if(!tMoved&&onTap&&e.changedTouches.length===1){const t=e.changedTouches[0];e.preventDefault();const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);if(inner&&inner.style.display!=='none'){const xP=((t.clientX-rect.left-gox())/gs()/inner.clientWidth)*100,yP=((t.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);}}},{passive:false});
+    // Touch : pointer events pour gérer pinch + pan proprement
+    const ptrs={};
+    function ptrsArr(){return Object.values(ptrs);}
+    wrap.addEventListener('pointerdown',e=>{
+      wrap.setPointerCapture(e.pointerId);
+      ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+      const all=ptrsArr();
+      if(all.length===1){
+        // Démarrage pan 1 doigt — snapshot de l'offset actuel
+        ptrs[e.pointerId].ox=gox();ptrs[e.pointerId].oy=goy();
+      }
+      if(all.length===2){
+        // Démarrage pinch — snapshot distance et scale
+        const [a,b]=all;
+        ptrs._pinchD0=Math.hypot(b.x-a.x,b.y-a.y);
+        ptrs._pinchS0=gs();
+        ptrs._pinchOX=gox();ptrs._pinchOY=goy();
+        ptrs._pinchMidX=(a.x+b.x)/2;ptrs._pinchMidY=(a.y+b.y)/2;
+      }
+      ptrs[e.pointerId].moved=false;
+      e.preventDefault();
+    },{passive:false});
+    wrap.addEventListener('pointermove',e=>{
+      if(!ptrs[e.pointerId])return;
+      const all=ptrsArr().filter(p=>p.ox!==undefined||ptrs._pinchD0);
+      if(ptrsArr().length===2&&ptrs._pinchD0){
+        // Pinch zoom
+        ptrs[e.pointerId].x=e.clientX;ptrs[e.pointerId].y=e.clientY;
+        const vals=ptrsArr().filter(p=>typeof p.x==='number'&&!p._pinchD0);
+        if(vals.length<2)return;
+        const [a,b]=vals;
+        const d=Math.hypot(b.x-a.x,b.y-a.y);
+        const rect=wrap.getBoundingClientRect();
+        const midX=(a.x+b.x)/2-rect.left,midY=(a.y+b.y)/2-rect.top;
+        zoomAt(ptrs._pinchS0*(d/ptrs._pinchD0),midX,midY);
+        ptrs[e.pointerId].moved=true;
+      } else if(ptrsArr().length===1){
+        // Pan 1 doigt
+        const p=ptrs[e.pointerId];if(!p||p.ox===undefined)return;
+        const dx=e.clientX-p.x,dy=e.clientY-p.y;
+        if(Math.abs(e.clientX-p.x)>3||Math.abs(e.clientY-p.y)>3) p.moved=true;
+        if(!p.moved)return;
+        sox(p.ox+(e.clientX-(p.startX||p.x)));soy(p.oy+(e.clientY-(p.startY||p.y)));
+        if(!p.startX){p.startX=p.x;p.startY=p.y;}
+        sox(p.ox+e.clientX-p.startX);soy(p.oy+e.clientY-p.startY);
+        clamp();applyT();
+      }
+      e.preventDefault();
+    },{passive:false});
+    wrap.addEventListener('pointerup',e=>{
+      const p=ptrs[e.pointerId];
+      const wasPinch=ptrsArr().length===2;
+      // Tap simple = pas bougé, pas de pinch, 1 seul pointeur
+      if(p&&!p.moved&&!wasPinch&&onTap){
+        const rect=wrap.getBoundingClientRect(),inner=document.getElementById(innerId);
+        if(inner&&inner.style.display!=='none'){
+          const xP=((e.clientX-rect.left-gox())/gs()/inner.clientWidth)*100;
+          const yP=((e.clientY-rect.top-goy())/gs()/inner.clientHeight)*100;
+          if(xP>=0&&xP<=100&&yP>=0&&yP<=100)onTap(xP,yP);
+        }
+      }
+      delete ptrs[e.pointerId];
+      // Après levée d'un doigt du pinch, reset snapshot pinch et snapshot pan 1 doigt
+      if(ptrsArr().filter(p=>!p._pinchD0).length===1){
+        delete ptrs._pinchD0;delete ptrs._pinchS0;
+        delete ptrs._pinchOX;delete ptrs._pinchOY;
+        delete ptrs._pinchMidX;delete ptrs._pinchMidY;
+        // Reprendre pan 1 doigt depuis la position actuelle
+        const rem=ptrsArr().find(p=>typeof p.x==='number');
+        if(rem){rem.ox=gox();rem.oy=goy();rem.startX=e.clientX;rem.startY=e.clientY;rem.moved=false;}
+      }
+      e.preventDefault();
+    },{passive:false});
+    wrap.addEventListener('pointercancel',e=>{delete ptrs[e.pointerId];},{passive:false});
   }
   return{applyT,zoomAt,reset,zoomStep,clamp};
 }
