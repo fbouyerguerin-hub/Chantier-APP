@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3650,6 +3650,55 @@
     }
   }
 
+  // ── Commandes dans la modale d'affectation : lecture simplifiée "où est mon matériel ?" ──
+  // L'emplacement est mis en avant (gros badge + bouton plan en un clic) ; les
+  // commandes déjà localisées passent en tête, celles pas encore arrivées en dessous.
+  let _commandesAffectationCache = [];
+  function echapperHTMLAff(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+  function renderCommandesAffectationPoseur(commandes) {
+    const infos = commandes.map(c => {
+      const statut = estCommandePartielle(c) ? 'Réception partielle' : extraireValeurChamp(c['Statut'], '');
+      const lieu = (c['Lieu de réception'] || '').trim();
+      const planX = parseFloat(c['Plan_X']);
+      const planY = parseFloat(c['Plan_Y']);
+      const aPlan = !isNaN(planX) && !isNaN(planY);
+      return { c, statut, lieu, planX, planY, aPlan, localisee: !!lieu || aPlan };
+    }).sort((a, b) => (b.localisee - a.localisee) || (b.c['Date commande'] || '').localeCompare(a.c['Date commande'] || ''));
+    _commandesAffectationCache = infos;
+
+    const nbLocalisees = infos.filter(i => i.localisee).length;
+    const resume = `<div style="font-size:12px;font-weight:700;color:${nbLocalisees ? '#4a7c3f' : '#a5761f'};margin-bottom:6px">${nbLocalisees ? `📍 ${nbLocalisees} commande${nbLocalisees > 1 ? 's' : ''} localisée${nbLocalisees > 1 ? 's' : ''}` : 'Aucune commande localisée pour le moment'}${infos.length - nbLocalisees ? ` · ${infos.length - nbLocalisees} pas encore arrivée${infos.length - nbLocalisees > 1 ? 's' : ''}` : ''}</div>`;
+
+    return resume + infos.map((i, idx) => {
+      const c = i.c;
+      const entete = `<div style="font-size:12px;color:#7a746a"><b style="color:#3a3530">${echapperHTMLAff(c['Fournisseur'] || 'Fournisseur ?')}</b>${c['Numero commande'] ? ' · N° ' + echapperHTMLAff(c['Numero commande']) : ''}${i.statut ? ' · ' + echapperHTMLAff(i.statut) : ''}</div>`;
+      let emplacement;
+      if (i.localisee) {
+        emplacement = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+          <div style="flex:1;min-width:0;padding:8px 12px;border-radius:10px;background:#e8f0e7;border:1.5px solid #c5d9c3;font-size:15px;font-weight:800;color:#2f5a27">📍 ${echapperHTMLAff(i.lieu || 'Point sur le plan')}</div>
+          ${i.aPlan ? `<button type="button" onclick="voirEmplacementCommandeAffectation(${idx})" style="background:var(--vert);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap">🗺️ Plan</button>` : ''}
+        </div>`;
+      } else {
+        const prevue = c['Date reception prevue'] ? ' · prévue le ' + new Date(c['Date reception prevue'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+        emplacement = `<div style="margin-top:6px;font-size:12px;font-weight:600;color:#aaa">⏳ Pas encore réceptionnée${prevue}</div>`;
+      }
+      return `<div style="${idx ? 'border-top:1px solid #eee;' : ''}padding:9px 0">${entete}${emplacement}</div>`;
+    }).join('');
+  }
+  function voirEmplacementCommandeAffectation(idx) {
+    const i = _commandesAffectationCache[idx];
+    if (!i || !i.aPlan) return;
+    voirPointSurPlan(i.planX, i.planY, {
+      lieu: i.lieu || 'Emplacement',
+      chantier: (i.c['Chantier'] || [])[0]?.value || '',
+      fourn: i.c['Fournisseur'] || '',
+      num: i.c['Numero commande'] || '',
+      statut: i.statut
+    });
+  }
+
   // Affiche le détail de l'affectation (commentaire, fichiers, commandes) dans une modale à l'intérieur
   // de l'appli, sur le même modèle que la modale "Commandes" (plutôt qu'une fenêtre séparée).
   async function ouvrirAffectationFenetre(index) {
@@ -3684,13 +3733,7 @@
         const zone = document.getElementById('modal-affectation-detail-commandes');
         if (!zone) return;
         if (!commandes.length) { zone.innerHTML = 'Aucune commande pour ce chantier'; return; }
-        zone.innerHTML = commandes
-          .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''))
-          .map(c => `<div style="border-top:1px solid #eee;padding:8px 0;font-size:13px;color:#3a3530"><b style="display:block;font-size:13px">${c['Fournisseur'] || 'Fournisseur ?'} — ${c['Numero commande'] || ''}</b><div>${extraireValeurChamp(c['Statut'], '') || ''}${c['Date commande'] ? ' · ' + c['Date commande'] : ''}</div><div style="margin-top:3px;color:${c['Lieu de réception'] ? '#4a7c3f' : '#aaa'};font-weight:600">📍 ${c['Lieu de réception'] || 'Emplacement non renseigné'}</div></div>`)
-          .join('');
-        // Retire la bordure du premier élément
-        const premier = zone.firstElementChild;
-        if (premier) premier.style.borderTop = 'none';
+        zone.innerHTML = renderCommandesAffectationPoseur(commandes);
       } catch(e) {
         const zone = document.getElementById('modal-affectation-detail-commandes');
         if (zone) zone.textContent = 'Erreur de chargement des commandes';
