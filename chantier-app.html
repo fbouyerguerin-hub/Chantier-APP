@@ -378,6 +378,17 @@
 <!-- PAGE FORMULAIRE -->
 <div id="page-form" class="page">
 
+  <!-- Validation hebdomadaire des heures (responsables) -->
+  <div id="widget-validation-heures" style="display:none;margin:12px 16px 0;background:#fff;border:2px solid #c5d9c3;border-radius:14px;padding:12px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div style="min-width:0">
+        <div style="font-size:14px;font-weight:800;color:var(--gris)">✅ Validation des heures</div>
+        <div id="widget-validation-compteur" style="font-size:12px;color:#888;margin-top:3px">Chargement…</div>
+      </div>
+      <button onclick="ouvrirValidationHeures()" style="flex-shrink:0;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:9px 12px;font-size:12px;font-weight:700;cursor:pointer">✍️ Vérifier</button>
+    </div>
+  </div>
+
   <div class="section">
     <div class="section-title">📋 Informations générales</div>
     <div class="field">
@@ -642,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -880,6 +891,9 @@
     // Vérifier signature vendredi
     verifierSignatureVendredi().then(bloquer => {
       if (!bloquer) showPage('page-form');
+      // Lundi/mardi : validation des heures de la semaine précédente par les responsables
+      if (!bloquer) verifierValidationHeuresDebutSemaine();
+      else majWidgetValidationHeures();
     });
   }
 
@@ -1461,13 +1475,12 @@
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Collaborateur__link_row_has=${feuilleCollab.id}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
       const [res, resSig] = await Promise.all([
         fetch(url, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } })
+        chargerIndexSignatures().catch(() => [])
       ]);
       const data = await res.json();
       const rows = data.results || [];
-      const sigData = await resSig.json();
       const semainesSignees = new Set(
-        (sigData.results || [])
+        resSig
           .filter(s => (s['Collaborateur'] || [])[0]?.id === feuilleCollab.id)
           .map(s => String(s['Semaine'] || '').trim())
       );
@@ -1591,6 +1604,11 @@
   }
 
   function seDeconnecter() {
+    const wValidation = document.getElementById('widget-validation-heures');
+    if (wValidation) wValidation.style.display = 'none';
+    const mValidation = document.getElementById('modal-validation-heures');
+    if (mValidation) mValidation.style.display = 'none';
+    _validationAutoOuverte = null;
     connectedCollab = null;
     connectedViewId = null;
     feuilleCollab = null;
@@ -6680,11 +6698,8 @@
     const lundiAVerifier = getLundiSemaine(lundiPrecedent);
 
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
-      });
-      const data = await res.json();
-      const signatureExistante = (data.results || []).find(r => {
+      const lignesSig = await chargerIndexSignatures();
+      const signatureExistante = lignesSig.find(r => {
         const collabId = (r['Collaborateur'] || [])[0]?.id;
         return String(r['Semaine'] || '') === lundiAVerifier && collabId && collabId === feuilleCollab.id;
       });
@@ -6716,11 +6731,8 @@
 
     // Vérifier si signature existe
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
-      });
-      const data = await res.json();
-      const signatureExistante = (data.results || []).find(r => {
+      const lignesSig = await chargerIndexSignatures();
+      const signatureExistante = lignesSig.find(r => {
         const collabId = (r['Collaborateur'] || [])[0]?.id;
         return String(r['Semaine'] || '') === lundiAVerifier && collabId && feuilleCollab && collabId === feuilleCollab.id;
       });
@@ -6901,7 +6913,7 @@
     if (vide) { alert('⚠️ Veuillez signer avant de valider.'); return; }
 
     const signatureBase64 = _signatureCanvas.toDataURL('image/png');
-    const today = new Date().toISOString().split('T')[0];
+    const today = dateYMD(new Date());
 
     try {
       await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true`, {
@@ -6921,6 +6933,7 @@
       if (btnSigner) btnSigner.style.display = 'none';
       showPage('page-form');
       alert('✅ Signature enregistrée. Bonne journée !');
+      verifierValidationHeuresDebutSemaine();
     } catch(e) {
       alert("❌ Erreur lors de l'enregistrement de la signature.");
     }
@@ -6939,6 +6952,338 @@
   function ouvrirSignatureSemaineEnCours() {
     const lundiStr = getLundiSemaine(new Date());
     afficherModalSignature(lundiStr);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ── VALIDATION HEBDOMADAIRE DES HEURES PAR LES RESPONSABLES ──
+  // Le lundi et le mardi, les valideurs (Chargés d'affaires, Responsable de
+  // production, Direction des opérations = droits Gestionnaire/Administrateur)
+  // vérifient les heures de la semaine précédente et apposent leur signature.
+  // La validation est stockée sur la ligne de signature du collaborateur
+  // (TABLE_SIGNATURES) : une feuille ne peut être validée qu'une fois signée
+  // par le collaborateur → chaque feuille porte les deux signatures dans l'export Excel.
+  //
+  // ⚠️ Champs à créer dans Baserow, table Signatures (1099211) :
+  //   - "Signature validation" : Texte long (image PNG base64 du visa)
+  //   - "Valide par"           : Texte (nom du responsable)
+  //   - "Date validation"      : Date (format ISO)
+  // ══════════════════════════════════════════════════════════════════════
+  const DROITS_VALIDEURS_HEURES = ['Administrateur', 'Gestionnaire'];
+  function estValideurHeures() { return DROITS_VALIDEURS_HEURES.includes(connectedDroit); }
+
+  // Liste légère (sans images) de toutes les lignes de signature : paginée,
+  // la table dépasse vite 200 lignes (≈ 30 collaborateurs × 52 semaines).
+  async function chargerIndexSignatures() {
+    const base = `https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`;
+    const url = base + `&include=${encodeURIComponent('Collaborateur,Semaine,Date signature')}`;
+    // Sécurité : si le filtrage de champs est refusé par Baserow, repli sur la lecture complète
+    const test = await fetch(url + '&page=1', { headers: HEADERS });
+    if (!test.ok) return fetchToutesLesPages(base);
+    return fetchToutesLesPages(url);
+  }
+  // Lecture complète (avec images) d'une sélection de lignes, 6 requêtes à la fois.
+  async function lireSignaturesParIds(ids) {
+    const resultats = new Array(ids.length);
+    let suivant = 0;
+    const travailleur = async () => {
+      while (suivant < ids.length) {
+        const i = suivant++;
+        try {
+          const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${ids[i]}/?user_field_names=true`, { headers: HEADERS });
+          resultats[i] = r.ok ? await r.json() : null;
+        } catch (e) { resultats[i] = null; }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, ids.length) }, travailleur));
+    return resultats.filter(Boolean);
+  }
+
+  function lundiSemainePrecedente() {
+    const d = new Date(); d.setDate(d.getDate() - 7);
+    return getLundiSemaine(d);
+  }
+  function formatDateFr(ymd) {
+    if (!ymd) return '';
+    return new Date(String(ymd).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR');
+  }
+
+  let _validationLundi = null;
+  let _validationDonnees = [];
+  let _validationCanvas = null;
+  let _validationAutoOuverte = null; // semaine déjà proposée automatiquement pendant cette session
+
+  // Construit la liste des feuilles de la semaine : heures par jour, état de
+  // signature collaborateur et de validation responsable.
+  async function chargerDonneesValidation(lundiStr) {
+    const lundi = new Date(lundiStr + 'T12:00:00');
+    const dimanche = new Date(lundi); dimanche.setDate(lundi.getDate() + 6);
+    const [saisies, indexSig, collabs, users] = await Promise.all([
+      fetchSaisiesPeriodeRtt(lundiStr, dateYMD(dimanche)),
+      chargerIndexSignatures(),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/?user_field_names=true&size=200`),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`)
+    ]);
+    const inactifs = getInactifsCollabIds(users, collabs);
+    // Les Administrateurs ne signent pas leur semaine : ils ne sont pas à valider
+    const nomsAdmins = new Set(users
+      .filter(u => (u['Droit']?.value || u['Droit'] || '') === 'Administrateur')
+      .map(u => (u['Nom complet'] || '').trim().toLowerCase()));
+
+    const sigSemaine = indexSig.filter(s => String(s['Semaine'] || '').split('T')[0] === lundiStr);
+    const sigComplete = await lireSignaturesParIds(sigSemaine.map(s => s.id));
+    const sigParCollab = {};
+    sigComplete.forEach(s => {
+      const cid = (s['Collaborateur'] || [])[0]?.id;
+      if (!cid) return;
+      // En cas de doublon, on garde la ligne déjà validée, sinon la plus récente
+      const existante = sigParCollab[cid];
+      if (!existante || (!existante['Valide par'] && (s['Valide par'] || s.id > existante.id))) sigParCollab[cid] = s;
+    });
+
+    const parCollab = {};
+    saisies.forEach(r => {
+      const cid = (r['Collaborateur'] || [])[0]?.id;
+      if (!cid || !r['Date']) return;
+      const dStr = String(r['Date']).split('T')[0];
+      const h = parseFloat(r['Heures Normales']) || 0;
+      if (!parCollab[cid]) parCollab[cid] = { jours: {}, total: 0 };
+      if (!parCollab[cid].jours[dStr]) parCollab[cid].jours[dStr] = [];
+      const chantier = (r['Chantiers'] || r['Chantier'] || [])[0]?.value || '—';
+      const tache = [(r['Type de taches'] || [])[0]?.value, (r['Sous Taches'] || [])[0]?.value].filter(Boolean).join(' / ');
+      parCollab[cid].jours[dStr].push({ chantier, tache, heures: h });
+      parCollab[cid].total += h;
+    });
+
+    const ids = new Set([...Object.keys(parCollab), ...Object.keys(sigParCollab)].map(Number));
+    const nomMoi = (connectedCollab || '').trim().toLowerCase();
+    const liste = [];
+    ids.forEach(id => {
+      if (inactifs.has(String(id))) return;
+      const c = collabs.find(cc => cc.id === id);
+      const nom = c?.['Nom Complet'] || (sigParCollab[id]?.['Collaborateur'] || [])[0]?.value || 'Collaborateur ' + id;
+      if (nomsAdmins.has(nom.trim().toLowerCase())) return;
+      const sig = sigParCollab[id] || null;
+      liste.push({
+        collabId: id,
+        nom,
+        poste: c?.['Poste / Métier'] || '',
+        jours: parCollab[id]?.jours || {},
+        total: parCollab[id]?.total || 0,
+        sig,
+        signe: !!sig,
+        valide: !!(sig && sig['Valide par']),
+        estMoi: nom.trim().toLowerCase() === nomMoi
+      });
+    });
+    liste.sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+    return liste;
+  }
+
+  function feuillesAValider(liste) {
+    return liste.filter(f => f.signe && !f.valide && !f.estMoi);
+  }
+
+  // Appelé à la connexion (et après la signature de sa propre semaine) :
+  // lundi et mardi, propose automatiquement la validation s'il reste des feuilles.
+  async function verifierValidationHeuresDebutSemaine() {
+    majWidgetValidationHeures();
+    if (!estValideurHeures()) return;
+    const jour = new Date().getDay();
+    if (jour !== 1 && jour !== 2) return;
+    const lundiStr = lundiSemainePrecedente();
+    if (_validationAutoOuverte === lundiStr) return;
+    try {
+      const liste = await chargerDonneesValidation(lundiStr);
+      if (!feuillesAValider(liste).length) return;
+      // Ne pas empiler par-dessus la signature obligatoire du valideur lui-même
+      if (document.getElementById('modal-signature')?.style.display === 'flex') return;
+      _validationAutoOuverte = lundiStr;
+      ouvrirValidationHeures(lundiStr, liste);
+    } catch (e) { console.error('Vérification validation heures', e); }
+  }
+
+  // Carte sur l'écran d'accueil (visible pour les valideurs) avec le nombre de feuilles en attente.
+  async function majWidgetValidationHeures() {
+    const w = document.getElementById('widget-validation-heures');
+    if (!w) return;
+    if (!estValideurHeures()) { w.style.display = 'none'; return; }
+    w.style.display = 'block';
+    const compteur = document.getElementById('widget-validation-compteur');
+    const jour = new Date().getDay();
+    w.style.borderColor = (jour === 1 || jour === 2) ? '#e65100' : '#c5d9c3';
+    try {
+      const liste = await chargerDonneesValidation(lundiSemainePrecedente());
+      const n = feuillesAValider(liste).length;
+      const nonSignees = liste.filter(f => !f.signe).length;
+      compteur.innerHTML = n
+        ? `<b style="color:#e65100">${n} feuille${n > 1 ? 's' : ''} à valider</b> pour la semaine dernière${nonSignees ? ` · ${nonSignees} non signée${nonSignees > 1 ? 's' : ''} par le collaborateur` : ''}`
+        : `<span style="color:#4a7c3f">✔ Semaine dernière entièrement validée</span>${nonSignees ? ` · ${nonSignees} non signée${nonSignees > 1 ? 's' : ''} par le collaborateur` : ''}`;
+    } catch (e) {
+      compteur.textContent = 'Impossible de charger le suivi des validations.';
+    }
+  }
+
+  async function ouvrirValidationHeures(lundiStr, listePrechargee) {
+    _validationLundi = lundiStr || lundiSemainePrecedente();
+    document.getElementById('modal-validation-heures').style.display = 'flex';
+    initValidationPad();
+    await rafraichirValidationHeures(listePrechargee);
+  }
+  function fermerValidationHeures() {
+    document.getElementById('modal-validation-heures').style.display = 'none';
+    majWidgetValidationHeures();
+  }
+  function changerSemaineValidation(delta) {
+    const d = new Date(_validationLundi + 'T12:00:00');
+    d.setDate(d.getDate() + delta * 7);
+    const nouveau = getLundiSemaine(d);
+    if (nouveau > getLundiSemaine(new Date())) return; // pas de semaine future
+    _validationLundi = nouveau;
+    rafraichirValidationHeures();
+  }
+
+  async function rafraichirValidationHeures(listePrechargee) {
+    const lundi = new Date(_validationLundi + 'T12:00:00');
+    const dimanche = new Date(lundi); dimanche.setDate(lundi.getDate() + 6);
+    const { week } = fhISOWeek(_validationLundi);
+    document.getElementById('validation-semaine-label').textContent =
+      `Semaine ${week} — du ${lundi.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })} au ${dimanche.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}`;
+    const btnSuiv = document.getElementById('validation-semaine-suivante');
+    if (btnSuiv) btnSuiv.disabled = _validationLundi >= getLundiSemaine(new Date());
+    const cont = document.getElementById('validation-liste');
+    cont.innerHTML = '<div style="text-align:center;font-size:12px;color:#999;padding:16px">⏳ Chargement des feuilles d\'heures…</div>';
+    try {
+      _validationDonnees = listePrechargee || await chargerDonneesValidation(_validationLundi);
+      renderValidationHeures();
+    } catch (e) {
+      console.error(e);
+      cont.innerHTML = '<div style="font-size:12px;color:#c0392b;padding:12px">❌ Erreur de chargement des feuilles d\'heures.</div>';
+    }
+  }
+
+  function renderValidationHeures() {
+    const cont = document.getElementById('validation-liste');
+    const lundi = new Date(_validationLundi + 'T12:00:00');
+    const jours = Array.from({ length: 7 }, (_, i) => { const d = new Date(lundi); d.setDate(lundi.getDate() + i); return dateYMD(d); });
+    const initiales = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+    const aValider = feuillesAValider(_validationDonnees).length;
+    const nbValidees = _validationDonnees.filter(f => f.valide).length;
+    const nbNonSignees = _validationDonnees.filter(f => !f.signe).length;
+
+    if (!_validationDonnees.length) {
+      cont.innerHTML = '<div style="text-align:center;font-size:13px;color:#999;padding:16px">Aucune saisie ni signature pour cette semaine.</div>';
+    } else {
+      const resume = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;font-size:11px;font-weight:700">
+        <span style="background:#fff4e0;color:#a5761f;border-radius:10px;padding:3px 9px">✍️ ${aValider} à valider</span>
+        <span style="background:#e8f0e7;color:#2f5a27;border-radius:10px;padding:3px 9px">✅ ${nbValidees} validée${nbValidees > 1 ? 's' : ''}</span>
+        ${nbNonSignees ? `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:3px 9px">⏳ ${nbNonSignees} non signée${nbNonSignees > 1 ? 's' : ''} par le collaborateur</span>` : ''}
+      </div>
+      ${aValider ? `<div style="display:flex;gap:8px;margin-bottom:8px">
+        <button type="button" onclick="cocherToutValidation(true)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">☑ Tout cocher</button>
+        <button type="button" onclick="cocherToutValidation(false)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">☐ Tout décocher</button>
+      </div>` : ''}`;
+
+      const lignes = _validationDonnees.map((f, idx) => {
+        const selectionnable = f.signe && !f.valide && !f.estMoi;
+        let etat;
+        if (f.valide) etat = `<span style="color:#2f5a27">✅ Validée par ${echapperHTMLAff(f.sig['Valide par'])} le ${formatDateFr(f.sig['Date validation'])}</span>`;
+        else if (f.estMoi && f.signe) etat = `<span style="color:#888">👤 Votre feuille — à valider par un autre responsable</span>`;
+        else if (f.signe) etat = `<span style="color:#a5761f">✍️ Signée par le collaborateur le ${formatDateFr(f.sig['Date signature'])} — à valider</span>`;
+        else etat = `<span style="color:#c0392b">⏳ Pas encore signée par le collaborateur</span>`;
+
+        const miniJours = jours.map((d, i) => {
+          const h = (f.jours[d] || []).reduce((s, e) => s + e.heures, 0);
+          const weekend = i >= 5;
+          if (weekend && !h) return '';
+          const ferie = nomJourFerie(d);
+          return `<span title="${ferie ? 'Férié : ' + ferie : ''}" style="display:inline-block;min-width:34px;text-align:center;padding:2px 4px;border-radius:6px;font-size:10px;background:${h ? '#f0f5ef' : (ferie ? '#fff4e0' : '#fdecea')};color:${h ? '#3a3530' : (ferie ? '#a5761f' : '#c0392b')}"><b>${initiales[i]}</b> ${formatJoursRtt(h)}</span>`;
+        }).join(' ');
+
+        const detail = jours.map((d, i) => {
+          const entrees = f.jours[d] || [];
+          if (!entrees.length) return '';
+          const nomJour = new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric' });
+          return `<div style="padding:3px 0;border-bottom:1px dotted #eee"><b style="text-transform:capitalize">${nomJour}</b> — ${entrees.map(e => `${echapperHTMLAff(e.chantier)}${e.tache ? ' <span style="color:#999">(' + echapperHTMLAff(e.tache) + ')</span>' : ''} : <b>${formatJoursRtt(e.heures)} h</b>`).join(' · ')}</div>`;
+        }).join('') || '<div style="color:#aaa">Aucune saisie</div>';
+
+        return `<div style="border:1.5px solid ${f.valide ? '#c5d9c3' : (selectionnable ? '#f0d9a8' : '#eee')};border-radius:10px;padding:9px 10px;margin-bottom:8px;background:${f.valide ? '#f7fbf6' : '#fff'}">
+          <div style="display:flex;align-items:flex-start;gap:9px">
+            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? 'checked' : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;justify-content:space-between;gap:8px">
+                <span style="font-size:14px;font-weight:800;color:var(--gris)">${echapperHTMLAff(f.nom)}${f.poste ? ` <span style="font-size:11px;font-weight:400;color:#999">${echapperHTMLAff(f.poste)}</span>` : ''}</span>
+                <span style="font-size:14px;font-weight:800;color:var(--vert);white-space:nowrap">${formatJoursRtt(f.total)} h</span>
+              </div>
+              <div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px">${miniJours}</div>
+              <div style="margin-top:5px;font-size:11px;font-weight:600">${etat}</div>
+              <details style="margin-top:4px"><summary style="font-size:11px;color:var(--vert);cursor:pointer;font-weight:700">Détail des saisies</summary>
+                <div style="font-size:11px;color:#555;margin-top:4px">${detail}</div>
+              </details>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      cont.innerHTML = resume + lignes;
+    }
+    const blocSig = document.getElementById('validation-bloc-signature');
+    if (blocSig) blocSig.style.display = aValider ? 'block' : 'none';
+  }
+
+  function cocherToutValidation(etat) {
+    document.querySelectorAll('#validation-liste .validation-check:not(:disabled)').forEach(cb => { cb.checked = etat; });
+  }
+
+  // Pad de signature du responsable (coordonnées corrigées de l'échelle CSS → canvas)
+  function initValidationPad() {
+    const canvas = document.getElementById('validation-canvas');
+    if (!canvas) return;
+    _validationCanvas = canvas;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#0B3C1E'; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    let dessin = false;
+    const pos = e => {
+      const r = canvas.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      return { x: (t.clientX - r.left) * canvas.width / r.width, y: (t.clientY - r.top) * canvas.height / r.height };
+    };
+    canvas.onmousedown = canvas.ontouchstart = e => { e.preventDefault(); dessin = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); };
+    canvas.onmousemove = canvas.ontouchmove = e => { e.preventDefault(); if (!dessin) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); };
+    canvas.onmouseup = canvas.ontouchend = canvas.onmouseleave = () => { dessin = false; };
+  }
+  function effacerSignatureValidation() {
+    if (_validationCanvas) _validationCanvas.getContext('2d').clearRect(0, 0, _validationCanvas.width, _validationCanvas.height);
+  }
+
+  async function validerHeuresSelection() {
+    const idxs = [...document.querySelectorAll('#validation-liste .validation-check:checked:not(:disabled)')].map(cb => parseInt(cb.dataset.idx));
+    const feuilles = idxs.map(i => _validationDonnees[i]).filter(f => f && f.signe && !f.valide && !f.estMoi);
+    if (!feuilles.length) { alert('⚠️ Cochez au moins une feuille d\'heures à valider.'); return; }
+    const ctx = _validationCanvas.getContext('2d');
+    const pixels = ctx.getImageData(0, 0, _validationCanvas.width, _validationCanvas.height).data;
+    if (!pixels.some((p, i) => i % 4 === 3 && p > 0)) { alert('⚠️ Veuillez apposer votre signature avant de valider.'); return; }
+    if (!confirm(`Valider et signer ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures pour la semaine du ${formatDateFr(_validationLundi)} ?`)) return;
+
+    const btn = document.getElementById('btn-valider-heures');
+    btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
+    const signatureBase64 = _validationCanvas.toDataURL('image/png');
+    const payload = { 'Signature validation': signatureBase64, 'Valide par': connectedCollab || '', 'Date validation': dateYMD(new Date()) };
+    const resultats = await Promise.allSettled(feuilles.map(f =>
+      fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${f.sig.id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
+      }).then(async r => { if (!r.ok) throw new Error(await r.text()); return r; })
+    ));
+    btn.disabled = false; btn.textContent = '✅ Valider et signer la sélection';
+    const echecs = resultats.map((r, i) => r.status === 'rejected' ? feuilles[i].nom : null).filter(Boolean);
+    if (echecs.length) {
+      console.error('Échecs validation heures', resultats.filter(r => r.status === 'rejected').map(r => r.reason));
+      alert(`⚠️ ${feuilles.length - echecs.length} feuille(s) validée(s), ${echecs.length} en échec :\n${echecs.join(', ')}\n\nVérifiez que les champs "Signature validation", "Valide par" et "Date validation" existent dans la table Signatures.`);
+    } else {
+      alert(`✅ ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures validée${feuilles.length > 1 ? 's' : ''}.`);
+    }
+    effacerSignatureValidation();
+    await rafraichirValidationHeures();
+    majWidgetValidationHeures();
   }
 
   let _editChantiersCache = [];
@@ -13570,10 +13915,30 @@
     cFooter.font = { name:'Arial', size:7, italic:true, color:{argb:'FF888888'} };
     cFooter.alignment = { horizontal:'center' };
 
-    // Ajouter les signatures si disponibles
+    const fmtDateSig = v => v ? new Date(String(v).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+    const ajouterImageSig = (b64, col, row0, w, h) => {
+      if (!b64) return false;
+      try {
+        const id = wb.addImage({ base64: b64.replace(/^data:image\/\w+;base64,/, ''), extension: 'png' });
+        ws.addImage(id, { tl: { col, row: row0 }, ext: { width: w, height: h } });
+        return true;
+      } catch (e) { return false; }
+    };
+
+    // Export d'une seule semaine : les deux signatures dans les cadres du bas de fiche
+    if (signatures && signatures.length === 1) {
+      const sig = signatures[0];
+      ajouterImageSig(sig.signatureBase64, 1, SIG, 170, 56);   // cadre B:C
+      ajouterImageSig(sig.validationBase64, 7, SIG, 170, 56);  // cadre H:J
+      ws.getCell('B' + (SIG + 2)).value = 'Date : ' + (fmtDateSig(sig.dateSignature) || '_______________');
+      ws.getCell('G' + (SIG + 2)).value = sig.validePar
+        ? `Date : ${fmtDateSig(sig.dateValidation)}  —  ${sig.validePar}`
+        : 'Date : _______________';
+    }
+
+    // Détail semaine par semaine : signature du collaborateur + visa du responsable
     if (signatures && signatures.length > 0) {
       const lastRow = ws.lastRow ? ws.lastRow.number + 2 : ws.rowCount + 2;
-      // Ligne titre signatures
       ws.mergeCells(`A${lastRow}:J${lastRow}`);
       const cSigTitre = ws.getCell(`A${lastRow}`);
       cSigTitre.value = 'SIGNATURES DE VALIDATION HEBDOMADAIRE';
@@ -13583,26 +13948,32 @@
       ws.getRow(lastRow).height = 18;
 
       signatures.forEach((sig, idx) => {
-        const rowNum = lastRow + 1 + (idx * 6);
-        // Label semaine
-        ws.mergeCells(`A${rowNum}:J${rowNum}`);
-        const cLabel = ws.getCell(`A${rowNum}`);
-        const dateLabel = sig.semaine ? new Date(sig.semaine + 'T12:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }) : sig.semaine;
-        cLabel.value = `Semaine du ${dateLabel}  —  Signé le ${sig.dateSignature || ''}`;
-        cLabel.font = { name:'Arial', size:8, italic:true, color:{argb:'FF555555'} };
-        cLabel.alignment = { horizontal:'left' };
-        ws.getRow(rowNum).height = 14;
+        const r0 = lastRow + 1 + idx * 4; // semaine | libellés | cadre signatures | espace
+        const dateLabel = sig.semaine ? new Date(sig.semaine + 'T12:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }) : '';
+        ws.mergeCells(`A${r0}:J${r0}`);
+        const cSem = ws.getCell(`A${r0}`);
+        cSem.value = `Semaine du ${dateLabel}` + (sig.validePar ? '  —  validée' : '  —  ⚠ visa du responsable manquant');
+        cSem.font = { name:'Arial', size:9, bold:true, color:{argb: sig.validePar ? 'FF2D6A2D' : 'FFC0392B'} };
+        cSem.border = { top: { style:'thin', color:{argb:'FFCCCCCC'} } };
+        ws.getRow(r0).height = 16;
 
-        // Image signature
-        if (sig.signatureBase64) {
-          const base64Data = sig.signatureBase64.replace(/^data:image\/\w+;base64,/, '');
-          try {
-            const sigImageId = wb.addImage({ base64: base64Data, extension: 'png' });
-            ws.addImage(sigImageId, { tl: { col: 0, row: rowNum }, ext: { width: 300, height: 80 } });
-            ws.getRow(rowNum + 1).height = 60;
-            ws.mergeCells(`A${rowNum+1}:J${rowNum+4}`);
-          } catch(e) {}
-        }
+        ws.mergeCells(`A${r0+1}:E${r0+1}`);
+        ws.mergeCells(`F${r0+1}:J${r0+1}`);
+        const cCol = ws.getCell(`A${r0+1}`);
+        cCol.value = `Signature du collaborateur — le ${fmtDateSig(sig.dateSignature)}`;
+        const cResp = ws.getCell(`F${r0+1}`);
+        cResp.value = sig.validePar ? `Visa du responsable : ${sig.validePar} — le ${fmtDateSig(sig.dateValidation)}` : 'Visa du responsable : non validé';
+        [cCol, cResp].forEach(c => { c.font = { name:'Arial', size:8, italic:true, color:{argb:'FF555555'} }; c.alignment = { horizontal:'left', vertical:'middle' }; });
+        ws.getRow(r0 + 1).height = 14;
+
+        ws.mergeCells(`A${r0+2}:E${r0+2}`);
+        ws.mergeCells(`F${r0+2}:J${r0+2}`);
+        ['A', 'F'].forEach(col => { ws.getCell(`${col}${r0+2}`).border = FH_BORDER; });
+        ws.getRow(r0 + 2).height = 62;
+        // tl.row est 0-indexé : r0+1 correspond à la ligne Excel r0+2
+        ajouterImageSig(sig.signatureBase64, 1, r0 + 1, 220, 76);
+        ajouterImageSig(sig.validationBase64, 5.2, r0 + 1, 220, 76);
+        ws.getRow(r0 + 3).height = 6;
       });
     }
 
@@ -13619,14 +13990,17 @@
     const wb = new ExcelJS.Workbook();
 
     // Charger toutes les signatures de la période
+    // Index léger paginé, puis lecture complète (images) des seules signatures utiles
     let toutesSignatures = [];
     try {
-      const resSig = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      const idsCollabsExport = new Set(Object.values(dataParCollab).map(d => d.collabId));
+      const index = await chargerIndexSignatures();
+      const utiles = index.filter(s => {
+        const semaine = String(s['Semaine'] || '').split('T')[0];
+        return idsCollabsExport.has((s['Collaborateur'] || [])[0]?.id) && semaine >= periode.dateDebut && semaine <= periode.dateFin;
       });
-      const dataSig = await resSig.json();
-      toutesSignatures = dataSig.results || [];
-    } catch(e) {}
+      toutesSignatures = await lireSignaturesParIds(utiles.map(s => s.id));
+    } catch(e) { console.error('Chargement signatures export', e); }
 
     const collabsSorted = Object.keys(dataParCollab).sort();
     collabsSorted.forEach(collab => {
@@ -13639,9 +14013,12 @@
           return sCollabId === collabId && semaine >= periode.dateDebut && semaine <= periode.dateFin;
         })
         .map(s => ({
-          semaine: s['Semaine'],
+          semaine: String(s['Semaine'] || '').split('T')[0],
           dateSignature: s['Date signature'],
-          signatureBase64: s['Signature']
+          signatureBase64: s['Signature'],
+          validePar: s['Valide par'] || '',
+          dateValidation: s['Date validation'] || '',
+          validationBase64: s['Signature validation'] || ''
         }))
         .sort((a, b) => (a.semaine || '').localeCompare(b.semaine || ''));
       creerFicheExcelJS(wb, null, collab, lignes, periode, poste, signaturesCollab);
@@ -14864,6 +15241,37 @@
     <div style="text-align:center;margin-top:12px;font-size:10px;color:#aaa">
       Ce document est conservé à titre de preuve de validation
     </div>
+  </div>
+</div>
+
+<!-- MODAL VALIDATION DES HEURES PAR LES RESPONSABLES -->
+<div id="modal-validation-heures" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:490;align-items:center;justify-content:center;padding:12px">
+  <div style="background:#fff;border-radius:20px;width:100%;max-width:560px;padding:20px;max-height:92vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:17px;font-weight:800;color:var(--gris)">✅ Validation des heures</div>
+        <div style="font-size:12px;color:#888;margin-top:2px">Vérifiez les heures saisies et signées par les collaborateurs, puis apposez votre visa.</div>
+      </div>
+      <button onclick="fermerValidationHeures()" style="background:#f0f0f0;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">✕</button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:#f7f2ea;border-radius:10px;padding:6px 8px;margin-bottom:12px">
+      <button onclick="changerSemaineValidation(-1)" style="background:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">◀</button>
+      <div id="validation-semaine-label" style="font-size:12px;font-weight:700;color:#8a6d3b;text-align:center"></div>
+      <button id="validation-semaine-suivante" onclick="changerSemaineValidation(1)" style="background:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">▶</button>
+    </div>
+    <div id="validation-liste"></div>
+    <div id="validation-bloc-signature" style="display:none;margin-top:6px">
+      <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:11px;color:#5d4037;line-height:1.5">
+        En signant, vous attestez avoir vérifié les heures des feuilles cochées. Votre visa figurera à côté de la signature du collaborateur sur chaque fiche d'heures exportée.
+      </div>
+      <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:6px">Votre signature (visa du responsable) :</div>
+      <canvas id="validation-canvas" width="420" height="150" style="width:100%;border:2px solid #ddd;border-radius:10px;touch-action:none;cursor:crosshair;background:#f9f9f9"></canvas>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button onclick="effacerSignatureValidation()" style="flex:0 0 auto;background:#f0f0f0;border:none;border-radius:10px;padding:12px 14px;font-size:13px;cursor:pointer">🗑️ Effacer</button>
+        <button id="btn-valider-heures" onclick="validerHeuresSelection()" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">✅ Valider et signer la sélection</button>
+      </div>
+    </div>
+    <button onclick="fermerValidationHeures()" style="width:100%;margin-top:10px;background:none;border:1.5px solid #ddd;border-radius:10px;padding:10px;font-size:13px;color:#888;cursor:pointer">Plus tard</button>
   </div>
 </div>
 
