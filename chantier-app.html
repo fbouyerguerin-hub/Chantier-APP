@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -807,7 +807,7 @@
     if (btn) { btn.textContent = 'Connexion…'; btn.disabled = true; }
 
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, {
+      const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, {
         headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
       });
       const data = await res.json();
@@ -1017,9 +1017,47 @@
   // peuvent être silencieusement absentes des résultats.
   // Lit toutes les pages d'une table. La 1re page donne le nombre total de lignes : les pages
   // suivantes sont alors demandées en parallèle (4 à la fois) au lieu d'une par une.
+  // Lecture d'une page avec 3 tentatives (Baserow renvoie parfois 429/5xx
+  // quand plusieurs pages partent en même temps). Une page qui échoue
+  // définitivement lève une erreur au lieu d'être ignorée : mieux vaut un
+  // message d'erreur qu'une liste tronquée (absences manquantes, etc.).
+  async function fetchPageBaserow(url, options) {
+    let derniere;
+    for (let essai = 0; essai < 3; essai++) {
+      if (essai) await new Promise(r => setTimeout(r, 400 * essai));
+      try {
+        const r = await fetch(url, options);
+        if (r.ok) return await r.json();
+        derniere = new Error('Baserow ' + r.status);
+      } catch (e) { derniere = e; }
+    }
+    throw new Error('Lecture Baserow incomplète (' + (derniere?.message || 'erreur') + ')');
+  }
+
+  // Remplaçant transparent de fetch() pour les lectures de liste Baserow :
+  // renvoie une Response dont le JSON contient TOUTES les lignes (results
+  // concaténés, next = null), quel que soit le nombre de pages. Le code
+  // appelant (res.ok, res.json(), data.results) reste inchangé.
+  async function fetchListeComplete(url, options = { headers: HEADERS }) {
+    const res = await fetch(url, options);
+    if (!res.ok) return res;
+    let data;
+    try { data = await res.clone().json(); } catch (e) { return res; }
+    if (!data || !data.next || !Array.isArray(data.results)) return res;
+    let resultats = data.results;
+    let next = data.next.replace('http://', 'https://');
+    while (next) {
+      const d = await fetchPageBaserow(next, options);
+      resultats = resultats.concat(d.results || []);
+      next = d.next ? d.next.replace('http://', 'https://') : null;
+    }
+    return new Response(JSON.stringify({ ...data, count: resultats.length, next: null, previous: null, results: resultats }), {
+      status: 200, headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
   async function fetchToutesLesPages(url) {
-    const res = await fetch(url, { headers: HEADERS });
-    const data = await res.json();
+    const data = await fetchPageBaserow(url, { headers: HEADERS });
     const premiere = data.results || [];
     if (!data.next) return premiere;
     const taillePage = premiere.length;
@@ -1028,7 +1066,7 @@
       // Repli : lecture page par page
       let resultats = premiere, next = data.next.replace('http://', 'https://');
       while (next) {
-        const d = await (await fetch(next, { headers: HEADERS })).json();
+        const d = await fetchPageBaserow(next, { headers: HEADERS });
         resultats = resultats.concat(d.results || []);
         next = d.next ? d.next.replace('http://', 'https://') : null;
       }
@@ -1046,8 +1084,7 @@
     const travailleur = async () => {
       while (suivant < urls.length) {
         const i = suivant++;
-        const r = await fetch(urls[i], { headers: HEADERS });
-        pages[i] = r.ok ? ((await r.json()).results || []) : [];
+        pages[i] = (await fetchPageBaserow(urls[i], { headers: HEADERS })).results || [];
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, urls.length) }, travailleur));
@@ -1482,7 +1519,7 @@
       // Filtrer directement par collaborateur + période (sans view_id pour éviter conflits de filtres)
       const url = `https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Collaborateur__link_row_has=${feuilleCollab.id}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`;
       const [res, resSig] = await Promise.all([
-        fetch(url, { headers: HEADERS }),
+        fetchListeComplete(url, { headers: HEADERS }),
         chargerIndexSignatures().catch(() => [])
       ]);
       const data = await res.json();
@@ -1819,7 +1856,7 @@
   // lorsqu'un collaborateur soumet une nouvelle demande d'absence.
   async function notifierAdminsNouvelleDemande(typeDemande, debut, fin, collabNom) {
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
+      const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
       if (!res.ok) return;
       const data = await res.json();
       const admins = (data.results || []).filter(u => {
@@ -1874,7 +1911,7 @@
     try {
       if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=100&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
       const rowsToutes = await fetchToutesLesPages(url);
 
       // Filtrer par collaborateur connecté (sécurité, en plus du filtre serveur ci-dessus)
@@ -2455,8 +2492,7 @@
         '&filter__Date__date_after_or_equal=' + dateDebut +
         '&filter__Date__date_before_or_equal=' + dateFin;
       if (collabId) url += '&filter__Collaborateur__link_row_has=' + collabId;
-      const res = await fetch(url, { headers: HEADERS });
-      const data = await res.json();
+      const data = await fetchPageBaserow(url, { headers: HEADERS });
       allRows = allRows.concat(data.results || []);
       hasMore = !!data.next;
       page++;
@@ -2901,7 +2937,7 @@
     const container = document.getElementById('rtt-admin-content');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const resCollabs = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const collabs = (await resCollabs.json()).results || [];
 
       const conges = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200');
@@ -3571,8 +3607,8 @@
       const byDateSaisies = {};
 
       const [resPlan, resSaisies, chantiersAvecCommandes] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
         obtenirChantiersAvecCommandes()
       ]);
 
@@ -3845,8 +3881,8 @@
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
       const [resMsg, resUsers] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
       ]);
       const dataMsg = await resMsg.json();
       const dataUsers = await resUsers.json();
@@ -3979,7 +4015,7 @@
     const collabId = currentConversation.id;
     const container = document.getElementById('conv-content');
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+      const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
         headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
       });
       const dataMsg = await res.json();
@@ -4066,7 +4102,7 @@
   async function updateBadgeMessages() {
     if (!connectedViewId) return;
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+      const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
         headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
       });
       const data = await res.json();
@@ -4085,10 +4121,10 @@
     if (!connectedViewId) return;
     try {
       const [resMsg, resUsers] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, {
           headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
         }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
       ]);
       const data = await resMsg.json();
       const dataUsers = await resUsers.json();
@@ -4133,8 +4169,8 @@
     try {
       // Charger messages et utilisateurs en parallèle
       const [resMsg, resUsers] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
       ]);
       const dataMsg = await resMsg.json();
       const dataUsers = await resUsers.json();
@@ -4203,8 +4239,8 @@
     container.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#aaa">Chargement…</div>';
     try {
       const [resUsers, resCollabs] = await Promise.all([
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })
       ]);
       const data = await resUsers.json();
       const dataCollabs = await resCollabs.json();
@@ -4456,9 +4492,9 @@
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     // Charger affaires et collabs
     const [resCollabs, resCharge, resUsers] = await Promise.all([
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
     ]);
     const allCollabs = (await resCollabs.json()).results || [];
     const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -4529,9 +4565,9 @@
       const todayStrCharge = dateYMD(new Date());
 
       const [resCollabs, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -4543,8 +4579,7 @@
       let allConges = [];
       let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrl) {
-        const resC = await fetch(congesUrl, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrl, { headers: HEADERS });
         allConges = allConges.concat(dataC.results || []);
         congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -4750,9 +4785,9 @@
     const todayStrCharge = dateYMD(new Date());
     try {
       const [resCollabs, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -4766,8 +4801,7 @@
       let allConges = [];
       let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrl) {
-        const resC = await fetch(congesUrl, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrl, { headers: HEADERS });
         allConges = allConges.concat(dataC.results || []);
         congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -5095,9 +5129,9 @@
       const dateFin = annee + '-' + pad2(mois + 1) + '-' + pad2(new Date(annee, mois + 1, 0).getDate());
 
       const [resCollabs, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -5109,8 +5143,7 @@
       let allConges = [];
       let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrl) {
-        const resC = await fetch(congesUrl, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrl, { headers: HEADERS });
         allConges = allConges.concat(dataC.results || []);
         congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -5319,9 +5352,9 @@
       const dateFinAn = annee + '-12-31';
 
       const [resCollabs, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabs = (await resCollabs.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -5334,8 +5367,7 @@
       let allConges = [];
       let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrl) {
-        const resC = await fetch(congesUrl, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrl, { headers: HEADERS });
         allConges = allConges.concat(dataC.results || []);
         congesUrl = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -5574,9 +5606,9 @@
       const dateFinAn = annee + '-12-31';
 
       const [resCollabsAll, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabsGantt = (await resCollabsAll.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -5589,8 +5621,7 @@
       let allCongesGantt = [];
       let congesUrlGantt = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrlGantt) {
-        const resC = await fetch(congesUrlGantt, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrlGantt, { headers: HEADERS });
         allCongesGantt = allCongesGantt.concat(dataC.results || []);
         congesUrlGantt = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -5855,9 +5886,9 @@
       const dateFinAn = annee + '-12-31';
 
       const [resCollabsAll, resCharge, resUsers] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const allCollabsGp = (await resCollabsAll.json()).results || [];
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
@@ -5869,8 +5900,7 @@
       let allCongesGp = [];
       let congesUrlGp = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrlGp) {
-        const resC = await fetch(congesUrlGp, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(congesUrlGp, { headers: HEADERS });
         allCongesGp = allCongesGp.concat(dataC.results || []);
         congesUrlGp = dataC.next ? dataC.next.replace('http://', 'https://') : null;
       }
@@ -6105,8 +6135,7 @@
     let allSaisies = [];
     let urlSaisies = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200';
     while (urlSaisies) {
-      const res = await fetch(urlSaisies, { headers: HEADERS });
-      const data = await res.json();
+      const data = await fetchPageBaserow(urlSaisies, { headers: HEADERS });
       allSaisies = allSaisies.concat(data.results || []);
       urlSaisies = data.next ? data.next.replace('http://', 'https://') : null;
     }
@@ -6250,20 +6279,19 @@
         .sort((a,b) => a.nom.localeCompare(b.nom));
     } catch(e) {}
     try {
-      const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const resC = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       _collabsChargeCache = (await resC.json()).results || [];
     } catch(e) { _collabsChargeCache = _collabsChargeCache || []; }
     // Pour la détection de conflit de capacité : les autres affaires déjà planifiées + les congés
     try {
-      const resA = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const resA = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
       _affairesChargeCache = (await resA.json()).results || [];
     } catch(e) { _affairesChargeCache = _affairesChargeCache || []; }
     try {
       let allConges = [];
       let congesUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (congesUrl) {
-        const resCg = await fetch(congesUrl, { headers: HEADERS });
-        const dataCg = await resCg.json();
+        const dataCg = await fetchPageBaserow(congesUrl, { headers: HEADERS });
         allConges = allConges.concat(dataCg.results || []);
         congesUrl = dataCg.next ? dataCg.next.replace('http://', 'https://') : null;
       }
@@ -6428,7 +6456,7 @@
     if (!container) return;
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const res = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200', { headers: HEADERS });
       const idsChantiersTermines = await obtenirIdsChantiersTermines();
       _affairesListeCache = filtrerAffairesChantiersActifs((await res.json()).results || [], idsChantiersTermines);
       await assurerCacheCaChantiers();
@@ -6545,8 +6573,7 @@
     let allSaisies = [];
     let urlSaisies = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE + '/?user_field_names=true&size=200';
     while (urlSaisies) {
-      const res = await fetch(urlSaisies, { headers: HEADERS });
-      const data = await res.json();
+      const data = await fetchPageBaserow(urlSaisies, { headers: HEADERS });
       allSaisies = allSaisies.concat(data.results || []);
       urlSaisies = data.next ? data.next.replace('http://', 'https://') : null;
     }
@@ -6563,8 +6590,7 @@
     let allCommandesSuivi = [];
     let urlCommandesSuivi = 'https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200';
     while (urlCommandesSuivi) {
-      const res = await fetch(urlCommandesSuivi, { headers: HEADERS });
-      const data = await res.json();
+      const data = await fetchPageBaserow(urlCommandesSuivi, { headers: HEADERS });
       allCommandesSuivi = allCommandesSuivi.concat(data.results || []);
       urlCommandesSuivi = data.next ? data.next.replace('http://', 'https://') : null;
     }
@@ -7452,7 +7478,7 @@
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`),
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.TypeTaches.id}/?user_field_names=true&size=200`),
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.SousTaches.id}/?user_field_names=true&size=200`),
-        fetch(`https://api.baserow.io/api/database/rows/table/${TABLES.Zones.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLES.Zones.id}/?user_field_names=true&size=200`, { headers: HEADERS }),
       ]).then(async ([a,b,c,d,z]) => { _editZonesBrut = (await z.json()).results || []; return [a,b,c,d]; });
       const r = await resSaisie.json();
       _editTachesBrut = resTaches || [];
@@ -9146,8 +9172,8 @@
   async function loadPlanningAdmin() {
     if (!collabsAdminLoaded) {
       const [resC, resUsersActifAdmin] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const dataC = await resC.json();
       const usersDataActifAdmin = (await resUsersActifAdmin.json()).results || [];
@@ -9188,7 +9214,7 @@
     document.getElementById('planning-admin-grid').innerHTML = '';
 
     const [resP, congesResultatsAdmin] = await Promise.all([
-      fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
+      fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin, { headers: HEADERS }),
       fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_PLANNING + '/?user_field_names=true&size=200')
     ]);
     const dataP = await resP.json();
@@ -12157,7 +12183,7 @@
     document.getElementById('chantier-charge-apercu-periodes').innerHTML = '';
     if (!_collabsChargeCache || !_collabsChargeCache.length) {
       try {
-        const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const resC = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
         _collabsChargeCache = (await resC.json()).results || [];
       } catch(e) { _collabsChargeCache = _collabsChargeCache || []; }
     }
@@ -12184,7 +12210,7 @@
       } catch(e) {}
       // Charger un éventuel plan de charge déjà existant pour ce chantier
       try {
-        const resPC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200&filter__Chantier__link_row_has=' + rowId, { headers: HEADERS });
+        const resPC = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200&filter__Chantier__link_row_has=' + rowId, { headers: HEADERS });
         const dataPC = await resPC.json();
         const pc = (dataPC.results || [])[0];
         if (pc) {
@@ -12401,8 +12427,8 @@
     if (searchEl) searchEl.value = '';
     try {
       const [resUsers, resCollabs] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })
       ]);
       const data = await resUsers.json();
       const dataCollabs = await resCollabs.json();
@@ -12437,7 +12463,7 @@
 
   async function chargerPostesSelect(valeurActuelle) {
     try {
-      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const res = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const data = await res.json();
       const postes = [...new Set((data.results || []).map(r => r['Poste / Métier'] || '').filter(p => p))].sort();
       ['user-poste', 'user-poste-modif'].forEach(id => {
@@ -12493,7 +12519,7 @@
         let collabFound = COLLABORATEURS_ADMIN.find(c => c.nom === nomUser);
         if (!collabFound) {
           try {
-            const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+            const resCollabs = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
             const dataCollabs = await resCollabs.json();
             const nomLower = nomUser.trim().toLowerCase();
             const row = (dataCollabs.results || []).find(c => (c['Nom Complet'] || '').trim().toLowerCase() === nomLower);
@@ -12567,7 +12593,7 @@
 
         // Recharger COLLABORATEURS_ADMIN
         try {
-          const resC = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+          const resC = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
           const dataC = await resC.json();
           COLLABORATEURS_ADMIN.length = 0;
           (dataC.results || []).forEach(r => COLLABORATEURS_ADMIN.push({
@@ -12767,7 +12793,7 @@
       });
     } else {
       try {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const res = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
         const data = await res.json();
         (data.results || []).sort((a,b) => (a['Nom Complet']||'').localeCompare(b['Nom Complet']||'')).forEach(c => {
           const opt = document.createElement('option');
@@ -12880,7 +12906,7 @@
     let collabs = COLLABORATEURS_ADMIN;
     if (!collabs.length) {
       try {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const res = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
         const data = await res.json();
         collabs = (data.results || []).map(r => ({ nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '' }));
       } catch(e) {}
@@ -12961,8 +12987,7 @@
       let allCongesRows = [];
       let pageUrl = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200';
       while (pageUrl) {
-        const resPage = await fetch(pageUrl, { headers: HEADERS });
-        const dataPage = await resPage.json();
+        const dataPage = await fetchPageBaserow(pageUrl, { headers: HEADERS });
         allCongesRows = allCongesRows.concat(dataPage.results || []);
         pageUrl = dataPage.next ? dataPage.next.replace('http://', 'https://') : null;
       }
@@ -12977,8 +13002,8 @@
 
       // Charger les collaborateurs en excluant ceux dont l'utilisateur lié est inactif
       const [rc, resUsersPlanning] = await Promise.all([
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
-        fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
       ]);
       const dc = await rc.json();
       const usersDataPlanning = (await resUsersPlanning.json()).results || [];
@@ -13566,7 +13591,7 @@
       const anneeEnCours = new Date().getFullYear();
       const aujourdHuiStr = dateYMD(new Date());
 
-      const resCollabs = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      const resCollabs = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
       const collabs = (await resCollabs.json()).results || [];
 
       const conges = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200');
@@ -14126,7 +14151,7 @@
     // S'assurer que COLLABORATEURS_ADMIN est chargé (sans toucher au select)
     if (!COLLABORATEURS_ADMIN.length) {
       try {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        const res = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
         const data = await res.json();
         COLLABORATEURS_ADMIN = (data.results || []).map(r => ({
           nom: r['Nom Complet'] || '', collabId: r.id, poste: r['Poste / Métier'] || '',
@@ -14213,8 +14238,7 @@
           '&filter__Date__date_after_or_equal=' + dateDebut +
           '&filter__Date__date_before_or_equal=' + dateFin;
         if (!tousLesCollabs) url += '&filter__Collaborateur__link_row_has=' + collabId;
-        const res = await fetch(url, { headers: HEADERS });
-        const data = await res.json();
+        const data = await fetchPageBaserow(url, { headers: HEADERS });
         allRows = allRows.concat(data.results || []);
         hasMore = !!data.next;
         page++;
@@ -14226,8 +14250,7 @@
         let urlC = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN +
           '/?user_field_names=true&size=200&page=' + pageC;
         if (!tousLesCollabs) urlC += '&filter__Collaborateurs__link_row_has=' + collabId;
-        const resC = await fetch(urlC, { headers: HEADERS });
-        const dataC = await resC.json();
+        const dataC = await fetchPageBaserow(urlC, { headers: HEADERS });
         allCongesRows = allCongesRows.concat(dataC.results || []);
         hasMoreC = !!dataC.next;
         pageC++;
@@ -14373,8 +14396,7 @@
           '&view_id=' + VUE_FEUILLE_HEURES;
         if (dateDebut) url += '&filter__Date__date_after_or_equal=' + dateDebut;
         if (dateFin) url += '&filter__Date__date_before_or_equal=' + dateFin;
-        const res = await fetch(url, { headers: HEADERS });
-        const data = await res.json();
+        const data = await fetchPageBaserow(url, { headers: HEADERS });
         allRows = allRows.concat(data.results || []);
         hasMore = !!data.next;
         page++;
@@ -14464,8 +14486,7 @@
         const url = 'https://api.baserow.io/api/database/rows/table/1014445/?user_field_names=true&size=200&page=' + page +
           '&filter__Date__date_after_or_equal=' + dateDebut +
           '&filter__Date__date_before_or_equal=' + dateFin;
-        const res = await fetch(url, { headers: HEADERS });
-        const data = await res.json();
+        const data = await fetchPageBaserow(url, { headers: HEADERS });
         allRows = allRows.concat(data.results || []);
         hasMore = !!data.next;
         page++;
@@ -14501,8 +14522,7 @@
       let page = 1;
       let hasMore = true;
       while (hasMore) {
-        const res = await fetch('https://api.baserow.io/api/database/rows/table/' + tableId + '/?user_field_names=true&size=200&page=' + page, { headers: HEADERS });
-        const data = await res.json();
+        const data = await fetchPageBaserow('https://api.baserow.io/api/database/rows/table/' + tableId + '/?user_field_names=true&size=200&page=' + page, { headers: HEADERS });
         allRows = allRows.concat(data.results || []);
         hasMore = !!data.next;
         page++;
