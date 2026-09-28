@@ -642,7 +642,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3674,6 +3674,8 @@
     return resume + infos.map((i, idx) => {
       const c = i.c;
       const entete = `<div style="font-size:12px;color:#7a746a"><b style="color:#3a3530">${echapperHTMLAff(c['Fournisseur'] || 'Fournisseur ?')}</b>${c['Numero commande'] ? ' · N° ' + echapperHTMLAff(c['Numero commande']) : ''}${i.statut ? ' · ' + echapperHTMLAff(i.statut) : ''}</div>`;
+      const refCmd = String(c['Reference complete'] || '').trim();
+      const description = refCmd ? `<div style="margin-top:3px;font-size:13px;font-weight:700;color:#3a3530;word-break:break-word">📝 ${echapperHTMLAff(refCmd)}</div>` : '';
       let emplacement;
       if (i.localisee) {
         emplacement = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
@@ -3684,7 +3686,7 @@
         const prevue = c['Date reception prevue'] ? ' · prévue le ' + new Date(c['Date reception prevue'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
         emplacement = `<div style="margin-top:6px;font-size:12px;font-weight:600;color:#aaa">⏳ Pas encore réceptionnée${prevue}</div>`;
       }
-      return `<div style="${idx ? 'border-top:1px solid #eee;' : ''}padding:9px 0">${entete}${emplacement}</div>`;
+      return `<div style="${idx ? 'border-top:1px solid #eee;' : ''}padding:9px 0">${entete}${description}${emplacement}</div>`;
     }).join('');
   }
   function voirEmplacementCommandeAffectation(idx) {
