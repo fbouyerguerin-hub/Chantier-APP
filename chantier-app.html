@@ -653,13 +653,21 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
   const TABLE_SIGNATURES = '1099211';
   const TABLE_COMMANDES_FOURNISSEURS = '1179060';
   const TABLE_COMMANDES_FOURNISSEURS_LIGNES = '1179061';
+  // ⚠️ Champ à CRÉER dans TABLE_COMMANDES_FOURNISSEURS_LIGNES :
+  //   - Quantite recue : nombre décimal (quantité cumulée réceptionnée sur une
+  //     ligne en réception partielle ; vide = ligne reçue en totalité).
+  const CHAMP_QTE_RECUE = 'Quantite recue';
+  function lireQteRecue(l) {
+    const v = l[CHAMP_QTE_RECUE];
+    return (v === undefined || v === null || v === '') ? null : Number(v);
+  }
   // ⚠️ Table Baserow "Commandes clients" (alimentée par la future route du Worker EBP, ex. /sync-clients).
   const TABLE_COMMANDES_CLIENTS = '1210899';
   // ⚠️ À CRÉER dans Baserow : table "Commandes clients lignes", structure attendue (miroir de
@@ -10212,18 +10220,36 @@
     const lignesHTML = lignes.length ? lignes.map(l => {
       const checked = !!l['Non réceptionné'];
       const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
-      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-bottom:1px dotted #eee;font-size:12px;color:${checked ? '#a5761f' : '#555'};cursor:pointer;${checked ? 'background:#fdf3e0' : ''}">
-        <input type="checkbox" data-ligne-id="${l.id}" class="manquant-ligne-check-${uid}" ${checked ? 'checked' : ''} style="margin-top:2px;width:16px;height:16px;accent-color:#e07b1f;cursor:pointer;flex-shrink:0" />
-        <span>
-          <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
-          ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
-          ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
-        </span>
-      </label>`;
+      const qteRecue = lireQteRecue(l);
+      // Saisie de la quantité réellement réceptionnée (cumul), affichée
+      // uniquement quand la ligne est cochée comme incomplète.
+      return `<div style="border-bottom:1px dotted #eee;${checked ? 'background:#fdf3e0' : ''}" id="manquant-bloc-${uid}-${l.id}">
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px 4px;font-size:12px;color:${checked ? '#a5761f' : '#555'};cursor:pointer">
+          <input type="checkbox" data-ligne-id="${l.id}" class="manquant-ligne-check-${uid}" ${checked ? 'checked' : ''} onchange="toggleQteRecueLigne('${uid}', ${l.id}, this.checked)" style="margin-top:2px;width:16px;height:16px;accent-color:#e07b1f;cursor:pointer;flex-shrink:0" />
+          <span>
+            <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
+            ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
+            ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
+          </span>
+        </label>
+        <div id="manquant-qte-${uid}-${l.id}" style="display:${checked ? 'flex' : 'none'};align-items:center;gap:6px;padding:0 4px 6px 28px;font-size:11px;color:#a5761f">
+          <span style="font-weight:700">Qté reçue :</span>
+          <input type="number" min="0" step="any" inputmode="decimal" data-ligne-id="${l.id}" class="manquant-qte-input-${uid}" value="${qteRecue !== null ? qteRecue : ''}" placeholder="0" style="width:70px;padding:4px 6px;border:1.5px solid #f0d9a8;border-radius:6px;font-size:12px;background:#fff" />
+          <span>${qte !== '' ? '/ ' + qte + ' ' + (l['Unite'] || '') : (l['Unite'] || '')}</span>
+        </div>
+      </div>`;
     }).join('') : '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucun article détaillé sur cette commande — précisez ce qui manque dans la note ci-dessous.</div>';
 
-    return `<div style="font-size:11px;color:#a5761f;font-weight:700;margin-bottom:4px">☑️ Cochez uniquement les articles NON réceptionnés (manquants)</div>
+    return `<div style="font-size:11px;color:#a5761f;font-weight:700;margin-bottom:4px">☑️ Cochez les articles non réceptionnés ou incomplets, puis indiquez la quantité reçue (cumul, 0 si rien reçu)</div>
       <div>${lignesHTML}</div>`;
+  }
+
+  function toggleQteRecueLigne(uid, ligneId, coche) {
+    const zone = document.getElementById(`manquant-qte-${uid}-${ligneId}`);
+    const bloc = document.getElementById(`manquant-bloc-${uid}-${ligneId}`);
+    if (zone) zone.style.display = coche ? 'flex' : 'none';
+    if (bloc) bloc.style.background = coche ? '#fdf3e0' : '';
+    if (coche) zone?.querySelector('input')?.focus();
   }
 
   function renderCarteRetourCommande(r) {
@@ -10479,7 +10505,9 @@
         const estManquante = enPartielle && !!l['Non réceptionné'];
         const badgeEtat = enPartielle
           ? (estManquante
-              ? ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 manquant</span>`
+              ? (lireQteRecue(l) > 0
+                  ? ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 reçu ${String(lireQteRecue(l)).replace('.', ',')}${qte !== '' ? ' / ' + qte : ''} ${l['Unite'] || ''}</span>`
+                  : ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 manquant</span>`)
               : ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#dceeda;color:#2f7d3c;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">✅ reçu</span>`)
           : '';
         const actionsAdmin = estAdmin ? `
@@ -11182,6 +11210,26 @@
     const lignes = _commandesLignesCache[id] || [];
     const checksManquants = document.querySelectorAll('.manquant-ligne-check-' + uid);
     const nbCocheManquant = [...checksManquants].filter(cb => cb.checked).length;
+    // Quantités reçues saisies sur les lignes cochées (réception partielle).
+    // Une ligne cochée dont la quantité reçue atteint la quantité commandée
+    // est considérée comme reçue en totalité.
+    const etatsLignes = {};
+    if (partielle) {
+      for (const l of lignes) {
+        const cb = document.querySelector(`.manquant-ligne-check-${uid}[data-ligne-id="${l.id}"]`);
+        if (!cb?.checked) { etatsLignes[l.id] = { manquant: false, qteRecue: null }; continue; }
+        const brut = (document.querySelector(`.manquant-qte-input-${uid}[data-ligne-id="${l.id}"]`)?.value || '').replace(',', '.').trim();
+        const qteRecue = brut === '' ? 0 : parseFloat(brut);
+        const qteCmd = parseFloat(l['Quantite']);
+        if (isNaN(qteRecue) || qteRecue < 0) { alert(`Quantité reçue invalide pour « ${l['Description'] || 'article'} ».`); return; }
+        if (!isNaN(qteCmd) && qteCmd > 0 && qteRecue > qteCmd) { alert(`La quantité reçue (${qteRecue}) dépasse la quantité commandée (${qteCmd}) pour « ${l['Description'] || 'article'} ».`); return; }
+        const complete = !isNaN(qteCmd) && qteCmd > 0 && qteRecue >= qteCmd;
+        etatsLignes[l.id] = complete ? { manquant: false, qteRecue: null } : { manquant: true, qteRecue };
+      }
+      if (lignes.length && nbCocheManquant && !Object.values(etatsLignes).some(e => e.manquant)) {
+        alert('Toutes les quantités saisies sont complètes : décochez « Réception partielle » pour valider une réception complète.'); return;
+      }
+    }
     if (partielle && lignes.length && !nbCocheManquant) { alert('Merci de cocher au moins un article non réceptionné (ou de préciser ce qui manque en note si aucun article détaillé n\'est disponible).'); return; }
     if (partielle && !lignes.length && !note) { alert('Merci de préciser ce qui manque (note obligatoire, aucun article détaillé sur cette commande).'); return; }
     const statutCible = partielle ? 'Réception partielle' : (type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier');
@@ -11202,20 +11250,25 @@
       // Met à jour, article par article, l'indicateur "Non réceptionné" : coché =
       // toujours manquant, décoché = arrivé. En réception complète (non
       // partielle), on réinitialise tout le monde à "reçu".
+      // La quantité reçue n'est conservée que sur les lignes encore
+      // incomplètes ; elle est vidée dès que la ligne est reçue en totalité.
       const misesAJourLignes = lignes.map(l => {
-        const cb = partielle ? document.querySelector(`.manquant-ligne-check-${uid}[data-ligne-id="${l.id}"]`) : null;
-        const nouvelEtat = partielle ? !!cb?.checked : false;
-        return !!l['Non réceptionné'] !== nouvelEtat ? { ligne: l, nouvelEtat } : null;
+        const etat = partielle ? etatsLignes[l.id] : { manquant: false, qteRecue: null };
+        const nouvelEtat = !!etat?.manquant;
+        const nouvelleQte = etat?.qteRecue ?? null;
+        const changeEtat = !!l['Non réceptionné'] !== nouvelEtat;
+        const changeQte = lireQteRecue(l) !== nouvelleQte;
+        return (changeEtat || changeQte) ? { ligne: l, nouvelEtat, nouvelleQte } : null;
       }).filter(Boolean);
 
-      const resultatsLignes = await Promise.all(misesAJourLignes.map(({ ligne, nouvelEtat }) =>
+      const resultatsLignes = await Promise.all(misesAJourLignes.map(({ ligne, nouvelEtat, nouvelleQte }) =>
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${ligne.id}/?user_field_names=true`, {
-          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Non réceptionné': nouvelEtat })
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Non réceptionné': nouvelEtat, [CHAMP_QTE_RECUE]: nouvelleQte })
         })
       ));
       const echecLigne = resultatsLignes.find(r => !r.ok);
       if (echecLigne) throw new Error('Baserow a refusé la mise à jour d\'un article (' + echecLigne.status + ') : ' + (await echecLigne.text()));
-      misesAJourLignes.forEach(({ ligne, nouvelEtat }) => { ligne['Non réceptionné'] = nouvelEtat; });
+      misesAJourLignes.forEach(({ ligne, nouvelEtat, nouvelleQte }) => { ligne['Non réceptionné'] = nouvelEtat; ligne[CHAMP_QTE_RECUE] = nouvelleQte; });
 
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
