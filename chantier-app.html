@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -6967,6 +6967,8 @@
   //   - "Signature validation" : Texte long (image PNG base64 du visa)
   //   - "Valide par"           : Texte (nom du responsable)
   //   - "Date validation"      : Date (format ISO)
+  //   - "Motif sans signature" : Texte (validation sans signature du collaborateur :
+  //                              absent toute la semaine pour maladie, congés, etc.)
   // ══════════════════════════════════════════════════════════════════════
   const DROITS_VALIDEURS_HEURES = ['Administrateur', 'Gestionnaire'];
   function estValideurHeures() { return DROITS_VALIDEURS_HEURES.includes(connectedDroit); }
@@ -7046,15 +7048,24 @@
       if (!cid || !r['Date']) return;
       const dStr = String(r['Date']).split('T')[0];
       const h = parseFloat(r['Heures Normales']) || 0;
-      if (!parCollab[cid]) parCollab[cid] = { jours: {}, total: 0 };
+      if (!parCollab[cid]) parCollab[cid] = { jours: {}, total: 0, travail: 0, motifsAbs: [] };
       if (!parCollab[cid].jours[dStr]) parCollab[cid].jours[dStr] = [];
       const chantier = (r['Chantiers'] || r['Chantier'] || [])[0]?.value || '—';
       const tache = [(r['Type de taches'] || [])[0]?.value, (r['Sous Taches'] || [])[0]?.value].filter(Boolean).join(' / ');
       parCollab[cid].jours[dStr].push({ chantier, tache, heures: h });
       parCollab[cid].total += h;
+      if (chantier.trim().toUpperCase() === 'ABSENCE') { if (tache) parCollab[cid].motifsAbs.push(tache); }
+      else parCollab[cid].travail += h;
     });
 
-    const ids = new Set([...Object.keys(parCollab), ...Object.keys(sigParCollab)].map(Number));
+    // Collaborateurs ayant un compte actif : inclus même sans aucune saisie
+    // (absent toute la semaine) pour pouvoir valider leur feuille sans signature.
+    const nomsActifs = new Set(users.filter(u => u['Actif'] === true).map(u => (u['Nom complet'] || '').trim().toLowerCase()));
+    const vueIdsActifs = new Set(users.filter(u => u['Actif'] === true).map(u => String(u['Vue ID'] || '').trim()).filter(Boolean));
+    const idsActifs = collabs
+      .filter(c => vueIdsActifs.has(String(c.id)) || nomsActifs.has((c['Nom Complet'] || '').trim().toLowerCase()))
+      .map(c => c.id);
+    const ids = new Set([...Object.keys(parCollab), ...Object.keys(sigParCollab), ...idsActifs].map(Number));
     const nomMoi = (connectedCollab || '').trim().toLowerCase();
     const liste = [];
     ids.forEach(id => {
@@ -7070,8 +7081,11 @@
         jours: parCollab[id]?.jours || {},
         total: parCollab[id]?.total || 0,
         sig,
-        signe: !!sig,
+        // Une ligne créée par un responsable (validation sans signature) n'a pas d'image collaborateur
+        signe: !!(sig && sig['Signature']),
         valide: !!(sig && sig['Valide par']),
+        absentSemaine: !(parCollab[id]?.travail > 0),
+        motifsAbs: parCollab[id]?.motifsAbs || [],
         estMoi: nom.trim().toLowerCase() === nomMoi
       });
     });
@@ -7079,8 +7093,19 @@
     return liste;
   }
 
+  // À valider : feuilles signées par le collaborateur, ou non signées d'un
+  // collaborateur absent toute la semaine (aucune heure travaillée).
   function feuillesAValider(liste) {
-    return liste.filter(f => f.signe && !f.valide && !f.estMoi);
+    return liste.filter(f => !f.valide && !f.estMoi && (f.signe || f.absentSemaine));
+  }
+  const MOTIFS_SANS_SIGNATURE = ['Maladie', 'Congés payés', 'Accident du travail', 'Congé maternité / paternité', "Départ de l’entreprise", 'Autre'];
+  function motifParDefautSansSignature(f) {
+    const t = f.motifsAbs.join(' ').toLowerCase();
+    if (t.includes('maladie')) return 'Maladie';
+    if (t.includes('accident')) return 'Accident du travail';
+    if (t.includes('maternit') || t.includes('paternit')) return 'Congé maternité / paternité';
+    if (t.includes('cong') || t.includes('cp')) return 'Congés payés';
+    return f.absentSemaine ? 'Maladie' : '';
   }
 
   // Appelé à la connexion (et après la signature de sa propre semaine) :
@@ -7114,7 +7139,7 @@
     try {
       const liste = await chargerDonneesValidation(lundiSemainePrecedente());
       const n = feuillesAValider(liste).length;
-      const nonSignees = liste.filter(f => !f.signe).length;
+      const nonSignees = liste.filter(f => !f.signe && !f.valide && !f.absentSemaine).length;
       compteur.innerHTML = n
         ? `<b style="color:#e65100">${n} feuille${n > 1 ? 's' : ''} à valider</b> pour la semaine dernière${nonSignees ? ` · ${nonSignees} non signée${nonSignees > 1 ? 's' : ''} par le collaborateur` : ''}`
         : `<span style="color:#4a7c3f">✔ Semaine dernière entièrement validée</span>${nonSignees ? ` · ${nonSignees} non signée${nonSignees > 1 ? 's' : ''} par le collaborateur` : ''}`;
@@ -7168,7 +7193,7 @@
     const initiales = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
     const aValider = feuillesAValider(_validationDonnees).length;
     const nbValidees = _validationDonnees.filter(f => f.valide).length;
-    const nbNonSignees = _validationDonnees.filter(f => !f.signe).length;
+    const nbNonSignees = _validationDonnees.filter(f => !f.signe && !f.valide).length;
 
     if (!_validationDonnees.length) {
       cont.innerHTML = '<div style="text-align:center;font-size:13px;color:#999;padding:16px">Aucune saisie ni signature pour cette semaine.</div>';
@@ -7178,18 +7203,30 @@
         <span style="background:#e8f0e7;color:#2f5a27;border-radius:10px;padding:3px 9px">✅ ${nbValidees} validée${nbValidees > 1 ? 's' : ''}</span>
         ${nbNonSignees ? `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:3px 9px">⏳ ${nbNonSignees} non signée${nbNonSignees > 1 ? 's' : ''} par le collaborateur</span>` : ''}
       </div>
-      ${aValider ? `<div style="display:flex;gap:8px;margin-bottom:8px">
+      ${_validationDonnees.some(f => !f.valide && !f.estMoi) ? `<div style="display:flex;gap:8px;margin-bottom:8px">
         <button type="button" onclick="cocherToutValidation(true)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">☑ Tout cocher</button>
         <button type="button" onclick="cocherToutValidation(false)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">☐ Tout décocher</button>
       </div>` : ''}`;
 
       const lignes = _validationDonnees.map((f, idx) => {
-        const selectionnable = f.signe && !f.valide && !f.estMoi;
+        const selectionnable = !f.valide && !f.estMoi;
+        const sansSignature = selectionnable && !f.signe;
+        const cocheeParDefaut = selectionnable && (f.signe || f.absentSemaine);
         let etat;
-        if (f.valide) etat = `<span style="color:#2f5a27">✅ Validée par ${echapperHTMLAff(f.sig['Valide par'])} le ${formatDateFr(f.sig['Date validation'])}</span>`;
-        else if (f.estMoi && f.signe) etat = `<span style="color:#888">👤 Votre feuille — à valider par un autre responsable</span>`;
+        if (f.valide) etat = `<span style="color:#2f5a27">✅ Validée par ${echapperHTMLAff(f.sig['Valide par'])} le ${formatDateFr(f.sig['Date validation'])}${f.signe ? '' : ` — sans signature du collaborateur (${echapperHTMLAff(f.sig['Motif sans signature'] || 'motif non précisé')})`}</span>`;
+        else if (f.estMoi) etat = `<span style="color:#888">👤 Votre feuille — à valider par un autre responsable</span>`;
         else if (f.signe) etat = `<span style="color:#a5761f">✍️ Signée par le collaborateur le ${formatDateFr(f.sig['Date signature'])} — à valider</span>`;
+        else if (f.absentSemaine) etat = `<span style="color:#a5761f">🏥 Absent toute la semaine — validation sans signature du collaborateur</span>`;
         else etat = `<span style="color:#c0392b">⏳ Pas encore signée par le collaborateur</span>`;
+        const motifDefaut = sansSignature ? motifParDefautSansSignature(f) : '';
+        const choixMotif = sansSignature ? `<div style="margin-top:6px;background:#fff8e1;border:1px solid #f0d9a8;border-radius:8px;padding:6px 8px">
+            <div style="font-size:11px;font-weight:700;color:#a5761f;margin-bottom:4px">Motif de validation sans signature :</div>
+            <select class="validation-motif" data-idx="${idx}" onchange="document.getElementById('validation-motif-autre-${idx}').style.display = this.value === 'Autre' ? 'block' : 'none'" style="width:100%;border:1.5px solid #f0d9a8;border-radius:6px;padding:5px;font-size:12px;background:#fff">
+              <option value="">— Choisir un motif —</option>
+              ${MOTIFS_SANS_SIGNATURE.map(m => `<option value="${echapperHTMLAff(m)}"${m === motifDefaut ? ' selected' : ''}>${echapperHTMLAff(m)}</option>`).join('')}
+            </select>
+            <input id="validation-motif-autre-${idx}" type="text" placeholder="Préciser le motif…" style="display:none;width:100%;box-sizing:border-box;margin-top:4px;border:1.5px solid #f0d9a8;border-radius:6px;padding:5px;font-size:12px">
+          </div>` : '';
 
         const miniJours = jours.map((d, i) => {
           const h = (f.jours[d] || []).reduce((s, e) => s + e.heures, 0);
@@ -7206,9 +7243,9 @@
           return `<div style="padding:3px 0;border-bottom:1px dotted #eee"><b style="text-transform:capitalize">${nomJour}</b> — ${entrees.map(e => `${echapperHTMLAff(e.chantier)}${e.tache ? ' <span style="color:#999">(' + echapperHTMLAff(e.tache) + ')</span>' : ''} : <b>${formatJoursRtt(e.heures)} h</b>`).join(' · ')}</div>`;
         }).join('') || '<div style="color:#aaa">Aucune saisie</div>';
 
-        return `<div style="border:1.5px solid ${f.valide ? '#c5d9c3' : (selectionnable ? '#f0d9a8' : '#eee')};border-radius:10px;padding:9px 10px;margin-bottom:8px;background:${f.valide ? '#f7fbf6' : '#fff'}">
+        return `<div style="border:1.5px solid ${f.valide ? '#c5d9c3' : (cocheeParDefaut ? '#f0d9a8' : '#eee')};border-radius:10px;padding:9px 10px;margin-bottom:8px;background:${f.valide ? '#f7fbf6' : '#fff'}">
           <div style="display:flex;align-items:flex-start;gap:9px">
-            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? 'checked' : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
+            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? (cocheeParDefaut ? 'checked' : '') : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
             <div style="flex:1;min-width:0">
               <div style="display:flex;justify-content:space-between;gap:8px">
                 <span style="font-size:14px;font-weight:800;color:var(--gris)">${echapperHTMLAff(f.nom)}${f.poste ? ` <span style="font-size:11px;font-weight:400;color:#999">${echapperHTMLAff(f.poste)}</span>` : ''}</span>
@@ -7216,6 +7253,7 @@
               </div>
               <div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:3px">${miniJours}</div>
               <div style="margin-top:5px;font-size:11px;font-weight:600">${etat}</div>
+              ${choixMotif}
               <details style="margin-top:4px"><summary style="font-size:11px;color:var(--vert);cursor:pointer;font-weight:700">Détail des saisies</summary>
                 <div style="font-size:11px;color:#555;margin-top:4px">${detail}</div>
               </details>
@@ -7226,7 +7264,8 @@
       cont.innerHTML = resume + lignes;
     }
     const blocSig = document.getElementById('validation-bloc-signature');
-    if (blocSig) blocSig.style.display = aValider ? 'block' : 'none';
+    const selectionnables = _validationDonnees.some(f => !f.valide && !f.estMoi);
+    if (blocSig) blocSig.style.display = selectionnables ? 'block' : 'none';
   }
 
   function cocherToutValidation(etat) {
@@ -7257,27 +7296,52 @@
 
   async function validerHeuresSelection() {
     const idxs = [...document.querySelectorAll('#validation-liste .validation-check:checked:not(:disabled)')].map(cb => parseInt(cb.dataset.idx));
-    const feuilles = idxs.map(i => _validationDonnees[i]).filter(f => f && f.signe && !f.valide && !f.estMoi);
+    const feuilles = idxs.map(i => ({ f: _validationDonnees[i], idx: i })).filter(x => x.f && !x.f.valide && !x.f.estMoi);
     if (!feuilles.length) { alert('⚠️ Cochez au moins une feuille d\'heures à valider.'); return; }
+
+    // Feuilles non signées par le collaborateur : motif obligatoire
+    const manquants = [];
+    feuilles.forEach(x => {
+      if (x.f.signe) return;
+      const sel = document.querySelector(`#validation-liste .validation-motif[data-idx="${x.idx}"]`);
+      let motif = sel ? sel.value : '';
+      if (motif === 'Autre') {
+        const precision = (document.getElementById('validation-motif-autre-' + x.idx)?.value || '').trim();
+        motif = precision ? 'Autre : ' + precision : '';
+      }
+      x.motif = motif;
+      if (!motif) manquants.push(x.f.nom);
+    });
+    if (manquants.length) { alert('⚠️ Indiquez le motif de validation sans signature pour :\n' + manquants.join(', ')); return; }
+
     const ctx = _validationCanvas.getContext('2d');
     const pixels = ctx.getImageData(0, 0, _validationCanvas.width, _validationCanvas.height).data;
     if (!pixels.some((p, i) => i % 4 === 3 && p > 0)) { alert('⚠️ Veuillez apposer votre signature avant de valider.'); return; }
-    if (!confirm(`Valider et signer ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures pour la semaine du ${formatDateFr(_validationLundi)} ?`)) return;
+    const nbSans = feuilles.filter(x => !x.f.signe).length;
+    if (!confirm(`Valider et signer ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures pour la semaine du ${formatDateFr(_validationLundi)} ?` +
+      (nbSans ? `\n\n⚠️ Dont ${nbSans} sans signature du collaborateur : votre visa engage seul la validation de ces heures.` : ''))) return;
 
     const btn = document.getElementById('btn-valider-heures');
     btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
     const signatureBase64 = _validationCanvas.toDataURL('image/png');
-    const payload = { 'Signature validation': signatureBase64, 'Valide par': connectedCollab || '', 'Date validation': dateYMD(new Date()) };
-    const resultats = await Promise.allSettled(feuilles.map(f =>
-      fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${f.sig.id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
-      }).then(async r => { if (!r.ok) throw new Error(await r.text()); return r; })
-    ));
+    const base = { 'Signature validation': signatureBase64, 'Valide par': connectedCollab || '', 'Date validation': dateYMD(new Date()) };
+    const envoyer = (url, method, body) => fetch(url, { method, headers: HEADERS, body: JSON.stringify(body) })
+      .then(async r => { if (!r.ok) throw new Error(await r.text()); return r; });
+    const resultats = await Promise.allSettled(feuilles.map(({ f, motif }) => {
+      if (f.sig) {
+        // Ligne existante (signée par le collaborateur, ou déjà créée sans signature)
+        const body = f.signe ? base : { ...base, 'Motif sans signature': motif };
+        return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${f.sig.id}/?user_field_names=true`, 'PATCH', body);
+      }
+      // Aucune ligne : création d'une feuille validée sans signature du collaborateur
+      return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true`, 'POST',
+        { 'Collaborateur': [f.collabId], 'Semaine': _validationLundi, ...base, 'Motif sans signature': motif });
+    }));
     btn.disabled = false; btn.textContent = '✅ Valider et signer la sélection';
-    const echecs = resultats.map((r, i) => r.status === 'rejected' ? feuilles[i].nom : null).filter(Boolean);
+    const echecs = resultats.map((r, i) => r.status === 'rejected' ? feuilles[i].f.nom : null).filter(Boolean);
     if (echecs.length) {
       console.error('Échecs validation heures', resultats.filter(r => r.status === 'rejected').map(r => r.reason));
-      alert(`⚠️ ${feuilles.length - echecs.length} feuille(s) validée(s), ${echecs.length} en échec :\n${echecs.join(', ')}\n\nVérifiez que les champs "Signature validation", "Valide par" et "Date validation" existent dans la table Signatures.`);
+      alert(`⚠️ ${feuilles.length - echecs.length} feuille(s) validée(s), ${echecs.length} en échec :\n${echecs.join(', ')}\n\nVérifiez que les champs "Signature validation", "Valide par", "Date validation" et "Motif sans signature" existent dans la table Signatures.`);
     } else {
       alert(`✅ ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures validée${feuilles.length > 1 ? 's' : ''}.`);
     }
@@ -13886,35 +13950,6 @@
     });
 
     const SIG = TOT + 2;
-    [[SIG,14],[SIG+1,45],[SIG+2,14]].forEach(([rr,hh]) => { ws.getRow(rr).height = hh; });
-
-    [['B'+SIG+':C'+SIG,'Signature du collaborateur'],['H'+SIG+':J'+SIG,'Visa du responsable']].forEach(([merge,txt]) => {
-      ws.mergeCells(merge);
-      const c = ws.getCell(merge.split(':')[0]);
-      c.value = txt;
-      c.font = { name:'Arial', size:10, bold:true, color:{argb:'FF3A3A3A'} };
-      c.alignment = { horizontal:'center', vertical:'middle' };
-    });
-
-    [['B'+(SIG+1)+':C'+(SIG+1)],['H'+(SIG+1)+':J'+(SIG+1)]].forEach(([merge]) => {
-      ws.mergeCells(merge);
-      const c = ws.getCell(merge.split(':')[0]);
-      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_GRIS_CLAIR} };
-      c.border = FH_BORDER;
-    });
-
-    ['B'+(SIG+2), 'G'+(SIG+2)].forEach(addr => {
-      ws.getCell(addr).value = 'Date : _______________';
-      ws.getCell(addr).font = { name:'Arial', size:9, color:{argb:'FF888888'} };
-    });
-
-    const NOTE = SIG + 4;
-    ws.mergeCells(`A${NOTE}:I${NOTE}`);
-    const cFooter = ws.getCell(`A${NOTE}`);
-    cFooter.value = "GUÉRIN BÂTIMENTS  ·  2 ZA Le Pont Girouard  ·  85 250 Saint-André-Goule-d'Oie  ·  Conserver ce document dans le dossier du salarié.";
-    cFooter.font = { name:'Arial', size:7, italic:true, color:{argb:'FF888888'} };
-    cFooter.alignment = { horizontal:'center' };
-
     const fmtDateSig = v => v ? new Date(String(v).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
     const ajouterImageSig = (b64, col, row0, w, h) => {
       if (!b64) return false;
@@ -13925,57 +13960,60 @@
       } catch (e) { return false; }
     };
 
-    // Export d'une seule semaine : les deux signatures dans les cadres du bas de fiche
-    if (signatures && signatures.length === 1) {
-      const sig = signatures[0];
-      ajouterImageSig(sig.signatureBase64, 1, SIG, 170, 56);   // cadre B:C
-      ajouterImageSig(sig.validationBase64, 7, SIG, 170, 56);  // cadre H:J
-      ws.getCell('B' + (SIG + 2)).value = 'Date : ' + (fmtDateSig(sig.dateSignature) || '_______________');
-      ws.getCell('G' + (SIG + 2)).value = sig.validePar
-        ? `Date : ${fmtDateSig(sig.dateValidation)}  —  ${sig.validePar}`
-        : 'Date : _______________';
-    }
+    ws.getRow(SIG).height = 14;
+    [['B'+SIG+':C'+SIG,'Signature du collaborateur'],['H'+SIG+':J'+SIG,'Visa du responsable']].forEach(([merge,txt]) => {
+      ws.mergeCells(merge);
+      const c = ws.getCell(merge.split(':')[0]);
+      c.value = txt;
+      c.font = { name:'Arial', size:10, bold:true, color:{argb:'FF3A3A3A'} };
+      c.alignment = { horizontal:'center', vertical:'middle' };
+    });
 
-    // Détail semaine par semaine : signature du collaborateur + visa du responsable
-    if (signatures && signatures.length > 0) {
-      const lastRow = ws.lastRow ? ws.lastRow.number + 2 : ws.rowCount + 2;
-      ws.mergeCells(`A${lastRow}:J${lastRow}`);
-      const cSigTitre = ws.getCell(`A${lastRow}`);
-      cSigTitre.value = 'SIGNATURES DE VALIDATION HEBDOMADAIRE';
-      cSigTitre.font = { name:'Arial', size:9, bold:true, color:{argb:'FF2D6A2D'} };
-      cSigTitre.alignment = { horizontal:'center' };
-      cSigTitre.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FFE8F5E9'} };
-      ws.getRow(lastRow).height = 18;
-
-      signatures.forEach((sig, idx) => {
-        const r0 = lastRow + 1 + idx * 4; // semaine | libellés | cadre signatures | espace
-        const dateLabel = sig.semaine ? new Date(sig.semaine + 'T12:00:00').toLocaleDateString('fr-FR', { day:'numeric', month:'long', year:'numeric' }) : '';
-        ws.mergeCells(`A${r0}:J${r0}`);
-        const cSem = ws.getCell(`A${r0}`);
-        cSem.value = `Semaine du ${dateLabel}` + (sig.validePar ? '  —  validée' : '  —  ⚠ visa du responsable manquant');
-        cSem.font = { name:'Arial', size:9, bold:true, color:{argb: sig.validePar ? 'FF2D6A2D' : 'FFC0392B'} };
-        cSem.border = { top: { style:'thin', color:{argb:'FFCCCCCC'} } };
-        ws.getRow(r0).height = 16;
-
-        ws.mergeCells(`A${r0+1}:E${r0+1}`);
-        ws.mergeCells(`F${r0+1}:J${r0+1}`);
-        const cCol = ws.getCell(`A${r0+1}`);
-        cCol.value = `Signature du collaborateur — le ${fmtDateSig(sig.dateSignature)}`;
-        const cResp = ws.getCell(`F${r0+1}`);
-        cResp.value = sig.validePar ? `Visa du responsable : ${sig.validePar} — le ${fmtDateSig(sig.dateValidation)}` : 'Visa du responsable : non validé';
-        [cCol, cResp].forEach(c => { c.font = { name:'Arial', size:8, italic:true, color:{argb:'FF555555'} }; c.alignment = { horizontal:'left', vertical:'middle' }; });
-        ws.getRow(r0 + 1).height = 14;
-
-        ws.mergeCells(`A${r0+2}:E${r0+2}`);
-        ws.mergeCells(`F${r0+2}:J${r0+2}`);
-        ['A', 'F'].forEach(col => { ws.getCell(`${col}${r0+2}`).border = FH_BORDER; });
-        ws.getRow(r0 + 2).height = 62;
-        // tl.row est 0-indexé : r0+1 correspond à la ligne Excel r0+2
-        ajouterImageSig(sig.signatureBase64, 1, r0 + 1, 220, 76);
-        ajouterImageSig(sig.validationBase64, 5.2, r0 + 1, 220, 76);
-        ws.getRow(r0 + 3).height = 6;
+    // Un cadre de signatures par semaine de la période (un seul cadre vide si aucune signature)
+    const sigsBloc = (signatures && signatures.length) ? signatures : [null];
+    const plusieurs = sigsBloc.length > 1;
+    sigsBloc.forEach((sig, k) => {
+      const R = SIG + 1 + k * 2;   // ligne du cadre
+      ws.getRow(R).height = 45;
+      ws.getRow(R + 1).height = 14;
+      ['B'+R+':C'+R, 'H'+R+':J'+R].forEach(merge => {
+        ws.mergeCells(merge);
+        const c = ws.getCell(merge.split(':')[0]);
+        c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:FH_GRIS_CLAIR} };
+        c.border = FH_BORDER;
       });
-    }
+      const prefixe = (plusieurs && sig?.semaine)
+        ? 'Sem. du ' + new Date(sig.semaine + 'T12:00:00').toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' }) + '  ·  '
+        : '';
+      let dateCollab = 'Date : _______________';
+      let dateResp = 'Date : _______________';
+      if (sig) {
+        // tl.row est 0-indexé : R-1 correspond à la ligne Excel R
+        if (ajouterImageSig(sig.signatureBase64, 1, R - 1, 170, 56)) {
+          dateCollab = 'Date : ' + (fmtDateSig(sig.dateSignature) || '_______________');
+        } else {
+          const cAbs = ws.getCell('B' + R);
+          cAbs.value = 'Non signée par le collaborateur' + (sig.motifSansSignature ? ' — motif : ' + sig.motifSansSignature : '');
+          cAbs.font = { name:'Arial', size:8, italic:true, color:{argb:'FFA5761F'} };
+          cAbs.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
+          dateCollab = '';
+        }
+        ajouterImageSig(sig.validationBase64, 7, R - 1, 170, 56);
+        if (sig.validePar) dateResp = `Date : ${fmtDateSig(sig.dateValidation)}  —  ${sig.validePar}`;
+      }
+      [['B', prefixe + dateCollab], ['G', prefixe + dateResp]].forEach(([col, txt]) => {
+        const c = ws.getCell(col + (R + 1));
+        c.value = txt;
+        c.font = { name:'Arial', size:9, color:{argb:'FF888888'} };
+      });
+    });
+
+    const NOTE = SIG + 1 + sigsBloc.length * 2 + 1;
+    ws.mergeCells(`A${NOTE}:I${NOTE}`);
+    const cFooter = ws.getCell(`A${NOTE}`);
+    cFooter.value = "GUÉRIN BÂTIMENTS  ·  2 ZA Le Pont Girouard  ·  85 250 Saint-André-Goule-d'Oie  ·  Conserver ce document dans le dossier du salarié.";
+    cFooter.font = { name:'Arial', size:7, italic:true, color:{argb:'FF888888'} };
+    cFooter.alignment = { horizontal:'center' };
 
     ws.pageSetup.orientation = 'portrait';
     ws.pageSetup.paperSize = 9;
@@ -14018,7 +14056,8 @@
           signatureBase64: s['Signature'],
           validePar: s['Valide par'] || '',
           dateValidation: s['Date validation'] || '',
-          validationBase64: s['Signature validation'] || ''
+          validationBase64: s['Signature validation'] || '',
+          motifSansSignature: s['Motif sans signature'] || ''
         }))
         .sort((a, b) => (a.semaine || '').localeCompare(b.semaine || ''));
       creerFicheExcelJS(wb, null, collab, lignes, periode, poste, signaturesCollab);
