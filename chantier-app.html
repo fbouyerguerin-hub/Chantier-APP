@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -7211,6 +7211,8 @@
       const lignes = _validationDonnees.map((f, idx) => {
         const selectionnable = !f.valide && !f.estMoi;
         const sansSignature = selectionnable && !f.signe;
+        // Aucune feuille cochée par défaut : le responsable sélectionne explicitement.
+        // (sert uniquement au surlignage des feuilles prêtes à valider)
         const cocheeParDefaut = selectionnable && (f.signe || f.absentSemaine);
         let etat;
         if (f.valide) etat = `<span style="color:#2f5a27">✅ Validée par ${echapperHTMLAff(f.sig['Valide par'])} le ${formatDateFr(f.sig['Date validation'])}${f.signe ? '' : ` — sans signature du collaborateur (${echapperHTMLAff(f.sig['Motif sans signature'] || 'motif non précisé')})`}</span>`;
@@ -7245,7 +7247,7 @@
 
         return `<div style="border:1.5px solid ${f.valide ? '#c5d9c3' : (cocheeParDefaut ? '#f0d9a8' : '#eee')};border-radius:10px;padding:9px 10px;margin-bottom:8px;background:${f.valide ? '#f7fbf6' : '#fff'}">
           <div style="display:flex;align-items:flex-start;gap:9px">
-            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? (cocheeParDefaut ? 'checked' : '') : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
+            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? '' : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
             <div style="flex:1;min-width:0">
               <div style="display:flex;justify-content:space-between;gap:8px">
                 <span style="font-size:14px;font-weight:800;color:var(--gris)">${echapperHTMLAff(f.nom)}${f.poste ? ` <span style="font-size:11px;font-weight:400;color:#999">${echapperHTMLAff(f.poste)}</span>` : ''}</span>
