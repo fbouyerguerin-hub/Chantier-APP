@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3296,12 +3296,22 @@
   // mis en cache pour éviter de refaire l'appel à chaque changement d'onglet du
   // Plan de charge. _idsChantiersTerminesCache = null force un rechargement.
   let _idsChantiersTerminesCache = null;
+  let _chantiersTousCache = [];
+  // Cache de 2 min (un chantier créé depuis EBP ou Baserow finit par apparaître
+  // sans recharger l'appli) ; une seule lecture en vol à la fois.
+  let _idsChantiersTerminesDate = 0, _idsChantiersTerminesPromesse = null;
   async function obtenirIdsChantiersTermines() {
-    if (_idsChantiersTerminesCache) return _idsChantiersTerminesCache;
-    const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200';
-    const tousChantiers = await fetchToutesLesPages(url);
-    _idsChantiersTerminesCache = new Set(tousChantiers.filter(c => ((c['Statue']?.value || c['Statue'] || '') === 'Terminé')).map(c => c.id));
-    return _idsChantiersTerminesCache;
+    if (_idsChantiersTerminesCache && Date.now() - _idsChantiersTerminesDate < 120000) return _idsChantiersTerminesCache;
+    if (_idsChantiersTerminesPromesse) return _idsChantiersTerminesPromesse;
+    _idsChantiersTerminesPromesse = (async () => {
+      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200';
+      const tousChantiers = await fetchToutesLesPages(url);
+      _chantiersTousCache = tousChantiers;
+      _idsChantiersTerminesCache = new Set(tousChantiers.filter(c => ((c['Statue']?.value || c['Statue'] || '') === 'Terminé')).map(c => c.id));
+      _idsChantiersTerminesDate = Date.now();
+      return _idsChantiersTerminesCache;
+    })();
+    try { return await _idsChantiersTerminesPromesse; } finally { _idsChantiersTerminesPromesse = null; }
   }
   // Retire du tableau les lignes de Plan de charge (TABLE_PLAN_CHARGE) rattachées
   // à un chantier Terminé — les chantiers clôturés ne doivent plus apparaître
@@ -6263,7 +6273,7 @@
     chargerLienDevisPourChantierId(id);
   }
 
-  async function ouvrirFormCharge(rowId) {
+  async function ouvrirFormCharge(rowId, chantierIdPreselect, chantierNomPreselect) {
     document.getElementById('charge-row-id').value = rowId || '';
     document.getElementById('charge-modal-titre').textContent = rowId ? 'Modifier affaire' : 'Nouvelle affaire';
     document.getElementById('charge-date-livraison').value = '';
@@ -6318,6 +6328,7 @@
         document.getElementById('charge-p-pose').value = r['Personnes Pose'] || '';
       } catch(e) {}
     }
+    if (!rowId && chantierIdPreselect) selectionnerChantierCharge(chantierIdPreselect, chantierNomPreselect || '');
     document.getElementById('modal-charge').style.display = 'flex';
     mettreAJourApercuCharge();
   }
@@ -6437,10 +6448,11 @@
     };
     try {
       const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + (rowId ? rowId + '/' : '') + '?user_field_names=true';
-      await fetch(url, { method: rowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      const res = await fetch(url, { method: rowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error('Baserow ' + res.status + ' : ' + (await res.text()));
       fermerFormCharge();
       chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge();
-    } catch(e) { alert('Erreur lors de la sauvegarde'); }
+    } catch(e) { alert('Erreur lors de la sauvegarde du plan de charge : ' + e.message); }
   }
 
   async function supprimerCharge(rowId) {
@@ -6468,18 +6480,48 @@
     renderListeAffaires(valeur);
   }
 
+  // Chantiers "En cours" qui n'ont encore aucune ligne de plan de charge :
+  // ils existent côté Chantiers mais n'apparaissent pas dans le Plan de charge
+  // tant qu'une affaire (date de pose + heures) n'a pas été créée.
+  function htmlChantiersAPlanifier(filtre) {
+    const idsPlanifies = new Set(_affairesListeCache.map(a => (a['Chantier'] || [])[0]?.id).filter(Boolean));
+    const aPlanifier = (_chantiersTousCache || [])
+      .filter(c => (c['Statue']?.value || c['Statue'] || '') === 'En cours' && !idsPlanifies.has(c.id))
+      .filter(c => !filtre || (c['Nom du chantier'] || '').toLowerCase().includes(filtre))
+      .sort((a, b) => b.id - a.id); // les plus récents d'abord
+    if (!aPlanifier.length) return '';
+    const ouvert = !!filtre || _aPlanifierOuvert;
+    const lignes = aPlanifier.slice(0, 50).map(c => {
+      const nom = c['Nom du chantier'] || '#' + c.id;
+      const nomJs = nom.replace(/\\/g, '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #f3e6cf">
+        <span style="font-size:12px;font-weight:600;color:var(--gris)">${nom}</span>
+        <button onclick="ouvrirFormCharge(null, ${c.id}, '${nomJs}')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">+ Planifier</button>
+      </div>`;
+    }).join('');
+    return `<div style="background:#fff8ec;border:1.5px solid #f0d9a8;border-radius:12px;margin:8px 0 12px;overflow:hidden">
+      <div onclick="_aPlanifierOuvert=!_aPlanifierOuvert;renderListeAffaires()" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;padding:10px 12px;font-size:12px;font-weight:700;color:#a5761f">
+        <span>🗂️ Chantiers en cours à planifier (${aPlanifier.length})</span><span>${ouvert ? '▾' : '▸'}</span>
+      </div>
+      ${ouvert ? lignes + (aPlanifier.length > 50 ? `<div style="padding:8px 12px;font-size:11px;color:#aaa">… ${aPlanifier.length - 50} autres, utilisez la recherche</div>` : '') : ''}
+    </div>`;
+  }
+  let _aPlanifierOuvert = false;
+
   function renderListeAffaires(filtreParam) {
     const container = document.getElementById('charge-affaires-liste');
     if (!container) return;
-    if (!_affairesListeCache.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucune affaire — cliquez sur + Affaire pour commencer</div>'; return; }
-    const filtre = (filtreParam !== undefined ? filtreParam : (document.getElementById('charge-affaires-recherche')?.value || '')).toLowerCase().trim();
+    const filtreAP = (filtreParam !== undefined ? filtreParam : (document.getElementById('charge-affaires-recherche')?.value || '')).toLowerCase().trim();
+    const blocAPlanifier = htmlChantiersAPlanifier(filtreAP);
+    if (!_affairesListeCache.length) { container.innerHTML = blocAPlanifier + '<div class="feuille-empty" style="padding:16px">Aucune affaire — cliquez sur + Affaire pour commencer</div>'; return; }
+    const filtre = filtreAP;
     const affaires = _affairesListeCache.filter(a => {
       if (!filtre) return true;
       const nom = (a['Chantier']||[])[0]?.value || '';
       return nom.toLowerCase().includes(filtre) || normaliserTexteCa(nomCaChantier((a['Chantier']||[])[0]?.id)).includes(normaliserTexteCa(filtre));
     });
-    if (!affaires.length) { container.innerHTML = '<div class="feuille-empty" style="padding:16px">Aucun chantier ne correspond à cette recherche</div>'; return; }
-    let html = '<div style="padding:8px 0 0">';
+    if (!affaires.length) { container.innerHTML = blocAPlanifier + '<div class="feuille-empty" style="padding:16px">Aucune affaire planifiée ne correspond à cette recherche</div>'; return; }
+    let html = blocAPlanifier + '<div style="padding:8px 0 0">';
     affaires.sort((a,b) => (a['Date livraison']||'').localeCompare(b['Date livraison']||'')).forEach(a => {
       const nom = (a['Chantier']||[])[0]?.value || 'Sans nom';
       const livraison = a['Date livraison'] || '';
@@ -6491,6 +6533,7 @@
             ${nomCaChantier((a['Chantier']||[])[0]?.id) ? `<div style="margin-bottom:4px">${badgeCaHtml(nomCaChantier((a['Chantier']||[])[0]?.id))}</div>` : ''}
             ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🔨 Pose ${livraison}</div>` : ''}
             <div>${postes}</div>
+            ${(!livraison || !postes) ? `<div style="margin-top:6px;font-size:10px;font-weight:700;color:#c0392b">⚠️ Non visible sur le planning : ${!livraison && !postes ? 'date de pose et heures manquantes' : (!livraison ? 'date de pose manquante' : 'aucune heure saisie')}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;margin-left:8px">
             <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
@@ -12276,11 +12319,16 @@
     try {
       const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/' + (chargeRowId ? chargeRowId + '/' : '') + '?user_field_names=true';
       const res = await fetch(url, { method: chargeRowId ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-      if (res.ok && !chargeRowId) {
+      if (!res.ok) throw new Error('Baserow ' + res.status + ' : ' + (await res.text()));
+      if (!chargeRowId) {
         const savedPC = await res.json();
         document.getElementById('chantier-charge-row-id').value = savedPC.id;
       }
-    } catch(e) { /* la création du chantier reste valide même si le plan de charge échoue */ }
+      if (!dateLivraison) alert('ℹ️ Plan de charge enregistré sans date de pose : l\'affaire apparaît dans la liste des affaires mais pas sur le planning tant que la date de pose n\'est pas renseignée.');
+    } catch(e) {
+      // Le chantier reste créé ; on prévient que le plan de charge, lui, n'a pas été enregistré.
+      alert('⚠️ Chantier enregistré, mais le plan de charge n\'a pas pu être enregistré : ' + e.message);
+    }
   }
 
   async function sauvegarderChantier() {
@@ -12306,6 +12354,7 @@
       if (!res.ok) throw new Error(await res.text());
       const saved = await res.json();
       const chantierId = rowId || saved.id;
+      _idsChantiersTerminesCache = null; // chantier créé/modifié : le Plan de charge relira la liste des chantiers
       await sauvegarderPlanChargeChantier(chantierId);
       if (!rowId) {
         // Nouveau chantier créé - proposer d'ajouter des fichiers
