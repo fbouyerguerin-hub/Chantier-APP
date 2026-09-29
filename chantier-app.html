@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V8';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1508,12 +1508,20 @@
   }
 
   function switchRepertoireOnglet(onglet) {
-    _repertoireOnglet = onglet;
+    _repertoireOnglet = repertoireAccesComplet() ? onglet : 'guerin';
     majBoutonsRepertoireOnglet();
     renderRepertoireFiltres();
     renderRepertoire();
   }
+  // Rôle Utilisateur (collaborateurs) : accès limité aux téléphones GUÉRIN BÂTIMENTS.
+  // Administrateur / Gestionnaire : répertoire complet (clients, fournisseurs, e-mails…).
+  function repertoireAccesComplet() {
+    return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+  }
   function majBoutonsRepertoireOnglet() {
+    if (!repertoireAccesComplet()) _repertoireOnglet = 'guerin';
+    const tabExt = document.getElementById('tab-repertoire-externes');
+    if (tabExt) tabExt.style.display = repertoireAccesComplet() ? '' : 'none';
     [['externes', 'tab-repertoire-externes'], ['guerin', 'tab-repertoire-guerin']].forEach(([o, id]) => {
       const b = document.getElementById(id);
       if (!b) return;
@@ -1552,7 +1560,7 @@
     const rows = _repertoireCollabsCache
       .filter(c => {
         if (!q) return true;
-        const txt = normRep([c['Nom Complet'], valeurChampRep(c['Poste / Métier']), c['Courriel']].join(' '));
+        const txt = normRep([c['Nom Complet'], valeurChampRep(c['Poste / Métier']), repertoireAccesComplet() ? c['Courriel'] : ''].join(' '));
         if (q.split(/\s+/).every(m => txt.includes(m))) return true;
         return qTel.length >= 3 && telLien(c['Telephone']).includes(qTel);
       })
@@ -1572,14 +1580,14 @@
       const actions = [
         tel ? `<a href="tel:${telLien(tel)}" onclick="event.stopPropagation()" title="Appeler" style="${styleBtnRep()}">📞</a>` : '',
         tel ? `<a href="sms:${telLien(tel)}" onclick="event.stopPropagation()" title="SMS" style="${styleBtnRep()}">💬</a>` : '',
-        c['Courriel'] ? `<a href="mailto:${escRep(c['Courriel'])}" onclick="event.stopPropagation()" title="E-mail" style="${styleBtnRep()}">✉️</a>` : ''
+        (c['Courriel'] && repertoireAccesComplet()) ? `<a href="mailto:${escRep(c['Courriel'])}" onclick="event.stopPropagation()" title="E-mail" style="${styleBtnRep()}">✉️</a>` : ''
       ].join('');
       const initiales = (c['Nom Complet'] || '').trim().split(/\s+/).map(m => m.charAt(0)).slice(0, 2).join('').toUpperCase();
       return entete + `<div onclick="ouvrirCollabRepertoire(${c.id})" style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid var(--vert);display:flex;align-items:center;gap:10px;cursor:pointer">
         <div style="width:36px;height:36px;border-radius:50%;background:var(--vert-clair);color:var(--vert);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${escRep(initiales)}</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:13px;font-weight:700;color:var(--gris);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escRep(c['Nom Complet'])}</div>
-          <div style="font-size:11px;color:var(--gris-moyen);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escRep(tel || c['Courriel'] || '')}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escRep(tel || (repertoireAccesComplet() ? c['Courriel'] : '') || '')}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">${actions}</div>
       </div>`;
@@ -1593,7 +1601,7 @@
     document.getElementById('modal-repertoire-titre').textContent = '🏢 ' + (c['Nom Complet'] || 'Collaborateur');
     document.getElementById('modal-repertoire-contenu').innerHTML =
       ligne('Nom', c['Nom Complet']) + ligne('Poste / Métier', valeurChampRep(c['Poste / Métier']))
-      + ligne('Téléphone', c['Telephone'], 'tel:' + telLien(c['Telephone'])) + ligne('E-mail', c['Courriel'], 'mailto:' + (c['Courriel'] || ''))
+      + ligne('Téléphone', c['Telephone'], 'tel:' + telLien(c['Telephone'])) + (repertoireAccesComplet() ? ligne('E-mail', c['Courriel'], 'mailto:' + (c['Courriel'] || '')) : '')
       + `<div style="font-size:11px;color:var(--gris-moyen);text-align:center;margin-top:8px">Coordonnées modifiables par un administrateur dans Gestion → Utilisateurs.</div>`;
     document.getElementById('modal-repertoire').style.display = 'flex';
   }
@@ -1622,7 +1630,9 @@
     // Chargements indépendants : si la table Répertoire est inaccessible, l'onglet
     // GUÉRIN BÂTIMENTS s'affiche quand même, et l'erreur exacte est indiquée.
     const [resRep, resCollabs, resUsers] = await Promise.allSettled([
-      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/?user_field_names=true&size=200`),
+      repertoireAccesComplet()
+        ? fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/?user_field_names=true&size=200`)
+        : Promise.resolve([]),
       fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/?user_field_names=true&size=200`),
       fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`)
     ]);
