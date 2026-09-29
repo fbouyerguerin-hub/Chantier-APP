@@ -653,7 +653,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V8';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -887,6 +887,8 @@
     if (navCommandes) navCommandes.style.display = 'flex'; // Visible pour tous : réception atelier/chantier
     const navCommandesClients = document.getElementById('nav-commandes-clients');
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
+    const navRepertoire = document.getElementById('nav-repertoire');
+    if (navRepertoire) navRepertoire.style.display = 'flex'; // Visible pour tous (édition réservée Admin/Gestionnaire)
     const tabCommandesChantier = document.getElementById('tab-commandes-chantier');
     if (tabCommandesChantier) tabCommandesChantier.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
     peutVoirPrixCommandes().then(peutVoir => {
@@ -1459,6 +1461,410 @@
       const rechercheClients = document.getElementById('commandes-clients-recherche');
       if (rechercheClients) rechercheClients.value = '';
       chargerCommandesClientsPage();
+    } else if (nav === 'repertoire') {
+      showPage('page-repertoire');
+      chargerRepertoirePage();
+    }
+  }
+
+  // ── RÉPERTOIRE ──
+  // ⚠️ Table Baserow « Répertoire » à CRÉER, puis remplacer l'ID ci-dessous. Champs attendus (noms exacts, sans accents) :
+  //   - Nom        : texte (champ principal) — nom du contact
+  //   - Societe    : texte
+  //   - Categorie  : texte (Client, Fournisseur, Sous-traitant, Collaborateur, Administration, Autre)
+  //   - Fonction   : texte
+  //   - Telephone  : texte (ou numéro de téléphone)
+  //   - Mobile     : texte (ou numéro de téléphone)
+  //   - Email      : texte (ou e-mail)
+  //   - Adresse    : texte long
+  //   - Notes      : texte long (jamais écrasé par la synchro EBP)
+  //   - Code EBP   : texte (clé de synchro, ex. « C:CL00012 » / « F:FO0045 ») — vide pour un contact saisi à la main
+  //   - Source     : texte (« EBP » ou « Manuel »)
+  // Les clients et fournisseurs EBP sont poussés dans cette table par le Worker (route /sync-contacts, + cron).
+  // ID mémorisé si l'appli l'a retrouvé automatiquement (voir resoudreTableRepertoire)
+  let TABLE_REPERTOIRE = (() => { try { return localStorage.getItem('gb_table_repertoire') || '2442130'; } catch (e) { return '2442130'; } })();
+  const REPERTOIRE_CATEGORIES = ['Client', 'Fournisseur', 'Sous-traitant', 'Collaborateur', 'Administration', 'Autre'];
+  const REPERTOIRE_COULEURS = {
+    'Client': '#2e7d32', 'Fournisseur': '#1565c0', 'Sous-traitant': '#ef6c00',
+    'Collaborateur': '#6a1b9a', 'Administration': '#546e7a', 'Autre': '#8d6e63'
+  };
+  let _repertoireCache = [];
+  let _repertoireFiltre = 'Tous';
+  let _repertoireOnglet = 'externes';     // 'externes' (Répertoire EBP/manuel) ou 'guerin' (collaborateurs)
+  let _repertoireCollabsCache = [];
+  let _repertoireErreur = '';
+  let _repertoireCollabsErreur = '';
+
+  // Recherche l'ID de la table « Répertoire » parmi les tables accessibles au token Baserow de l'appli
+  async function resoudreTableRepertoire() {
+    try {
+      const r = await fetch('https://api.baserow.io/api/database/tables/all-tables/', { headers: HEADERS });
+      if (!r.ok) return null;
+      const tables = await r.json();
+      const t = (Array.isArray(tables) ? tables : []).find(x => normRep(x.name).trim() === 'repertoire')
+        || (Array.isArray(tables) ? tables : []).find(x => normRep(x.name).includes('repertoire'));
+      return t ? String(t.id) : null;
+    } catch (e) { return null; }
+  }
+
+  function switchRepertoireOnglet(onglet) {
+    _repertoireOnglet = onglet;
+    majBoutonsRepertoireOnglet();
+    renderRepertoireFiltres();
+    renderRepertoire();
+  }
+  function majBoutonsRepertoireOnglet() {
+    [['externes', 'tab-repertoire-externes'], ['guerin', 'tab-repertoire-guerin']].forEach(([o, id]) => {
+      const b = document.getElementById(id);
+      if (!b) return;
+      const actif = o === _repertoireOnglet;
+      b.style.background = actif ? 'var(--vert)' : 'none';
+      b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    const edit = repertoirePeutEditer() && _repertoireOnglet === 'externes';
+    const btnNouveau = document.getElementById('btn-repertoire-nouveau');
+    if (btnNouveau) btnNouveau.style.display = edit ? '' : 'none';
+    const btnSync = document.getElementById('btn-sync-ebp-repertoire');
+    if (btnSync) btnSync.style.display = edit ? 'flex' : 'none';
+    const rech = document.getElementById('repertoire-recherche');
+    if (rech) rech.placeholder = _repertoireOnglet === 'guerin'
+      ? '🔍 Rechercher un collaborateur (nom, poste, téléphone…)'
+      : '🔍 Rechercher (nom, société, fonction, téléphone, ville…)';
+  }
+  // « Poste / Métier » peut être un texte, une sélection ou un lien selon la table
+  function valeurChampRep(v) {
+    if (Array.isArray(v)) return v.map(x => (x && typeof x === 'object') ? (x.value || '') : x).filter(Boolean).join(', ');
+    if (v && typeof v === 'object') return v.value || '';
+    return v || '';
+  }
+
+  function renderRepertoireGuerin() {
+    const listeEl = document.getElementById('repertoire-liste');
+    const resumeEl = document.getElementById('repertoire-resume');
+    if (!listeEl) return;
+    if (_repertoireCollabsErreur) {
+      if (resumeEl) resumeEl.textContent = '';
+      listeEl.innerHTML = `<div style="color:#c0392b;font-size:12px;text-align:center;padding:14px">Table Collaborateurs illisible : ${escRep(_repertoireCollabsErreur)}</div>`;
+      return;
+    }
+    const q = normRep(document.getElementById('repertoire-recherche')?.value || '').trim();
+    const qTel = telLien(q);
+    const rows = _repertoireCollabsCache
+      .filter(c => {
+        if (!q) return true;
+        const txt = normRep([c['Nom Complet'], valeurChampRep(c['Poste / Métier']), c['Courriel']].join(' '));
+        if (q.split(/\s+/).every(m => txt.includes(m))) return true;
+        return qTel.length >= 3 && telLien(c['Telephone']).includes(qTel);
+      })
+      .sort((a, b) => normRep(valeurChampRep(a['Poste / Métier']) || 'zzz').localeCompare(normRep(valeurChampRep(b['Poste / Métier']) || 'zzz'))
+        || normRep(a['Nom Complet']).localeCompare(normRep(b['Nom Complet'])));
+    if (resumeEl) resumeEl.textContent = `${rows.length} collaborateur${rows.length > 1 ? 's' : ''}`;
+    if (!rows.length) {
+      listeEl.innerHTML = '<div style="color:var(--gris-moyen);font-size:13px;text-align:center;padding:24px">Aucun collaborateur.</div>';
+      return;
+    }
+    let groupe = null;
+    listeEl.innerHTML = rows.map(c => {
+      const poste = valeurChampRep(c['Poste / Métier']) || 'Autres';
+      let entete = '';
+      if (poste !== groupe) { groupe = poste; entete = `<div style="font-size:11px;font-weight:800;color:var(--beige);margin:12px 2px 4px;text-transform:uppercase">${escRep(poste)}</div>`; }
+      const tel = c['Telephone'];
+      const actions = [
+        tel ? `<a href="tel:${telLien(tel)}" onclick="event.stopPropagation()" title="Appeler" style="${styleBtnRep()}">📞</a>` : '',
+        tel ? `<a href="sms:${telLien(tel)}" onclick="event.stopPropagation()" title="SMS" style="${styleBtnRep()}">💬</a>` : '',
+        c['Courriel'] ? `<a href="mailto:${escRep(c['Courriel'])}" onclick="event.stopPropagation()" title="E-mail" style="${styleBtnRep()}">✉️</a>` : ''
+      ].join('');
+      const initiales = (c['Nom Complet'] || '').trim().split(/\s+/).map(m => m.charAt(0)).slice(0, 2).join('').toUpperCase();
+      return entete + `<div onclick="ouvrirCollabRepertoire(${c.id})" style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid var(--vert);display:flex;align-items:center;gap:10px;cursor:pointer">
+        <div style="width:36px;height:36px;border-radius:50%;background:var(--vert-clair);color:var(--vert);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">${escRep(initiales)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--gris);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escRep(c['Nom Complet'])}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escRep(tel || c['Courriel'] || '')}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">${actions}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function ouvrirCollabRepertoire(id) {
+    const c = _repertoireCollabsCache.find(x => x.id === id);
+    if (!c) return;
+    const ligne = (lbl, val, lien) => val ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:700;color:var(--gris-moyen)">${lbl}</div><div style="font-size:14px;color:var(--gris)">${lien ? `<a href="${lien}" style="color:var(--vert);font-weight:700;text-decoration:none">${escRep(val)}</a>` : escRep(val)}</div></div>` : '';
+    document.getElementById('modal-repertoire-titre').textContent = '🏢 ' + (c['Nom Complet'] || 'Collaborateur');
+    document.getElementById('modal-repertoire-contenu').innerHTML =
+      ligne('Nom', c['Nom Complet']) + ligne('Poste / Métier', valeurChampRep(c['Poste / Métier']))
+      + ligne('Téléphone', c['Telephone'], 'tel:' + telLien(c['Telephone'])) + ligne('E-mail', c['Courriel'], 'mailto:' + (c['Courriel'] || ''))
+      + `<div style="font-size:11px;color:var(--gris-moyen);text-align:center;margin-top:8px">Coordonnées modifiables par un administrateur dans Gestion → Utilisateurs.</div>`;
+    document.getElementById('modal-repertoire').style.display = 'flex';
+  }
+
+  function repertoirePeutEditer() {
+    return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+  }
+  function escRep(t) {
+    return (t == null ? '' : String(t)).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function normRep(s) {
+    return (s || '').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+  function telLien(t) { return (t || '').replace(/[^\d+]/g, ''); }
+
+  async function chargerRepertoirePage() {
+    majBoutonsRepertoireOnglet();
+    const resumeEl = document.getElementById('repertoire-resume');
+    const listeEl = document.getElementById('repertoire-liste');
+    if (!TABLE_REPERTOIRE || TABLE_REPERTOIRE === 'A_COMPLETER') {
+      if (resumeEl) resumeEl.textContent = '';
+      if (listeEl) listeEl.innerHTML = '<div style="color:#c0392b;font-size:12px;text-align:center;padding:14px">Table Baserow « Répertoire » non configurée (TABLE_REPERTOIRE).</div>';
+      return;
+    }
+    if (resumeEl) resumeEl.textContent = 'Chargement…';
+    // Chargements indépendants : si la table Répertoire est inaccessible, l'onglet
+    // GUÉRIN BÂTIMENTS s'affiche quand même, et l'erreur exacte est indiquée.
+    const [resRep, resCollabs, resUsers] = await Promise.allSettled([
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/?user_field_names=true&size=200`),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/?user_field_names=true&size=200`),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`)
+    ]);
+    let repRows = resRep.status === 'fulfilled' ? resRep.value : null;
+    _repertoireErreur = resRep.status === 'rejected' ? (resRep.reason?.message || 'erreur inconnue') : '';
+    // Table introuvable (404) : on la recherche par son nom parmi les tables accessibles au token
+    if (_repertoireErreur.includes('404')) {
+      const idTrouve = await resoudreTableRepertoire();
+      if (idTrouve && idTrouve !== TABLE_REPERTOIRE) {
+        TABLE_REPERTOIRE = idTrouve;
+        try { localStorage.setItem('gb_table_repertoire', idTrouve); } catch (e) {}
+        try {
+          repRows = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/?user_field_names=true&size=200`);
+          _repertoireErreur = '';
+        } catch (e) { _repertoireErreur = e.message; }
+      } else if (!idTrouve) {
+        _repertoireErreur += ' — aucune table nommée « Répertoire » accessible avec le token de l\'appli (vérifier ses droits dans Baserow → Jetons de base de données)';
+      }
+    }
+    _repertoireCache = repRows || [];
+    const collabs = resCollabs.status === 'fulfilled' ? resCollabs.value : [];
+    const users = resUsers.status === 'fulfilled' ? resUsers.value : [];
+    // Collaborateurs actifs uniquement (même règle que le reste de l'appli)
+    const inactifs = getInactifsCollabIds(users, collabs);
+    _repertoireCollabsCache = collabs.filter(c => (c['Nom Complet'] || '').trim() && !inactifs.has(String(c.id)));
+    _repertoireCollabsErreur = resCollabs.status === 'rejected' ? (resCollabs.reason?.message || 'erreur inconnue') : '';
+    majBoutonsRepertoireOnglet();
+    renderRepertoireFiltres();
+    renderRepertoire();
+  }
+
+  function renderRepertoireFiltres() {
+    const el = document.getElementById('repertoire-filtres');
+    if (!el) return;
+    el.style.display = _repertoireOnglet === 'guerin' ? 'none' : 'flex';
+    if (_repertoireOnglet === 'guerin') return;
+    const cats = ['Tous', ...REPERTOIRE_CATEGORIES];
+    el.innerHTML = cats.map(c => {
+      const actif = c === _repertoireFiltre;
+      const nb = c === 'Tous' ? _repertoireCache.length : _repertoireCache.filter(r => (r['Categorie'] || 'Autre') === c).length;
+      if (c !== 'Tous' && !nb) return '';
+      return `<button onclick="filtrerRepertoire('${c}')" style="flex:0 0 auto;white-space:nowrap;border:1px solid ${actif ? 'var(--vert)' : '#ddd5c5'};background:${actif ? 'var(--vert)' : 'var(--beige-clair)'};color:${actif ? '#fff' : 'var(--gris)'};border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer">${escRep(c)} <span style="opacity:.7">${nb}</span></button>`;
+    }).join('');
+  }
+  function filtrerRepertoire(cat) {
+    _repertoireFiltre = cat;
+    renderRepertoireFiltres();
+    renderRepertoire();
+  }
+
+  function renderRepertoire() {
+    if (_repertoireOnglet === 'guerin') { renderRepertoireGuerin(); return; }
+    const listeEl = document.getElementById('repertoire-liste');
+    const resumeEl = document.getElementById('repertoire-resume');
+    if (!listeEl) return;
+    if (_repertoireErreur) {
+      if (resumeEl) resumeEl.textContent = '';
+      listeEl.innerHTML = `<div style="color:#c0392b;font-size:12px;text-align:center;padding:14px">Table Répertoire (${escRep(TABLE_REPERTOIRE)}) illisible : ${escRep(_repertoireErreur)}</div>`;
+      return;
+    }
+    const q = normRep(document.getElementById('repertoire-recherche')?.value || '').trim();
+    const qTel = telLien(q);
+    const rows = _repertoireCache
+      .filter(r => _repertoireFiltre === 'Tous' || (r['Categorie'] || 'Autre') === _repertoireFiltre)
+      .filter(r => {
+        if (!q) return true;
+        const txt = normRep([r['Nom'], r['Societe'], r['Fonction'], r['Categorie'], r['Email'], r['Adresse'], r['Notes']].join(' '));
+        if (q.split(/\s+/).every(m => txt.includes(m))) return true;
+        return qTel.length >= 3 && (telLien(r['Telephone']).includes(qTel) || telLien(r['Mobile']).includes(qTel));
+      })
+      .sort((a, b) => normRep(a['Societe'] || a['Nom']).localeCompare(normRep(b['Societe'] || b['Nom'])) || normRep(a['Nom']).localeCompare(normRep(b['Nom'])));
+    if (resumeEl) resumeEl.textContent = `${rows.length} contact${rows.length > 1 ? 's' : ''}`;
+    if (!rows.length) {
+      listeEl.innerHTML = '<div style="color:var(--gris-moyen);font-size:13px;text-align:center;padding:24px">Aucun contact.</div>';
+      return;
+    }
+    let lettre = '';
+    listeEl.innerHTML = rows.map(r => {
+      const cle = (normRep(r['Societe'] || r['Nom']).charAt(0) || '#').toUpperCase();
+      let entete = '';
+      if (cle !== lettre) { lettre = cle; entete = `<div style="font-size:11px;font-weight:800;color:var(--beige);margin:12px 2px 4px">${escRep(cle)}</div>`; }
+      const cat = r['Categorie'] || 'Autre';
+      const coul = REPERTOIRE_COULEURS[cat] || '#8d6e63';
+      const titre = r['Societe'] ? escRep(r['Societe']) : escRep(r['Nom']);
+      // Nom affiché sous la société seulement s'il apporte une info (EBP recopie souvent la raison sociale)
+      const nomDistinct = r['Nom'] && normRep(r['Nom']) !== normRep(r['Societe']) ? r['Nom'] : '';
+      const sous = r['Societe'] ? [nomDistinct, r['Fonction']].filter(Boolean).map(escRep).join(' · ') : escRep(r['Fonction'] || '');
+      const tel = r['Mobile'] || r['Telephone'];
+      const actions = [
+        tel ? `<a href="tel:${telLien(tel)}" onclick="event.stopPropagation()" title="Appeler" style="${styleBtnRep()}">📞</a>` : '',
+        r['Email'] ? `<a href="mailto:${escRep(r['Email'])}" onclick="event.stopPropagation()" title="E-mail" style="${styleBtnRep()}">✉️</a>` : '',
+        r['Adresse'] ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r['Adresse'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Itinéraire" style="${styleBtnRep()}">📍</a>` : ''
+      ].join('');
+      return entete + `<div onclick="ouvrirContactRepertoire(${r.id})" style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:6px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${coul};display:flex;align-items:center;gap:10px;cursor:pointer">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--gris);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${titre}</div>
+          ${sous ? `<div style="font-size:11px;color:var(--gris-moyen);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${sous}</div>` : ''}
+          <div style="font-size:10px;font-weight:700;color:${coul};margin-top:2px">${escRep(cat)}${estContactEbp(r) ? ' <span style="background:#e8f0e7;color:var(--vert);border-radius:4px;padding:0 4px;margin-left:4px">EBP</span>' : ''}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">${actions}</div>
+      </div>`;
+    }).join('');
+  }
+  function styleBtnRep() {
+    return 'display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:var(--vert-clair);text-decoration:none;font-size:15px';
+  }
+
+  function ouvrirContactRepertoire(id) {
+    const r = id ? _repertoireCache.find(x => x.id === id) : null;
+    const edit = repertoirePeutEditer();
+    const modal = document.getElementById('modal-repertoire');
+    const contenu = document.getElementById('modal-repertoire-contenu');
+    document.getElementById('modal-repertoire-titre').textContent = r ? '📇 ' + (r['Societe'] || r['Nom'] || 'Contact') : '📇 Nouveau contact';
+    const ebp = estContactEbp(r);
+    if (!edit || ebp) {
+      // Fiche en lecture seule (contact EBP : seules les Notes restent modifiables dans l'appli)
+      const ligne = (lbl, val, lien) => val ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:700;color:var(--gris-moyen)">${lbl}</div><div style="font-size:14px;color:var(--gris);white-space:pre-wrap">${lien ? `<a href="${lien}" style="color:var(--vert);font-weight:700;text-decoration:none">${escRep(val)}</a>` : escRep(val)}</div></div>` : '';
+      contenu.innerHTML = ligne('Nom', r['Nom']) + ligne('Société', r['Societe']) + ligne('Catégorie', r['Categorie']) + ligne('Fonction', r['Fonction'])
+        + ligne('Téléphone', r['Telephone'], 'tel:' + telLien(r['Telephone'])) + ligne('Mobile', r['Mobile'], 'tel:' + telLien(r['Mobile']))
+        + ligne('E-mail', r['Email'], 'mailto:' + (r['Email'] || '')) + ligne('Adresse', r['Adresse'], r['Adresse'] ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(r['Adresse']) : '')
+        + (edit ? '' : ligne('Notes', r['Notes']));
+      if (edit && ebp) {
+        contenu.innerHTML += `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:4px">Notes</label><textarea id="rep-Notes" style="${styleChampRep()};min-height:60px;resize:vertical">${escRep(r['Notes'] || '')}</textarea></div>`
+          + `<button id="btn-rep-enregistrer" onclick="enregistrerNotesRepertoire(${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">Enregistrer les notes ✓</button>`
+          + `<div style="font-size:11px;color:var(--gris-moyen);text-align:center;margin-top:8px">Fiche synchronisée depuis EBP (${escRep(r['Code EBP'] || '')}) — coordonnées à modifier dans EBP.</div>`;
+      }
+    } else {
+      const v = k => escRep(r ? (r[k] || '') : '');
+      const champ = (k, lbl, type) => `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:4px">${lbl}</label>${type === 'area'
+        ? `<textarea id="rep-${k}" style="${styleChampRep()};min-height:60px;resize:vertical">${v(k)}</textarea>`
+        : `<input id="rep-${k}" type="${type || 'text'}" value="${v(k)}" style="${styleChampRep()}" />`}</div>`;
+      const catActuelle = r ? (r['Categorie'] || '') : '';
+      contenu.innerHTML = champ('Nom', 'Nom *') + champ('Societe', 'Société')
+        + `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:4px">Catégorie</label><select id="rep-Categorie" style="${styleChampRep()}">${REPERTOIRE_CATEGORIES.map(c => `<option ${c === catActuelle ? 'selected' : ''}>${c}</option>`).join('')}</select></div>`
+        + champ('Fonction', 'Fonction') + champ('Telephone', 'Téléphone', 'tel') + champ('Mobile', 'Mobile', 'tel')
+        + champ('Email', 'E-mail', 'email') + champ('Adresse', 'Adresse', 'area') + champ('Notes', 'Notes', 'area')
+        + `<button id="btn-rep-enregistrer" onclick="enregistrerContactRepertoire(${r ? r.id : 'null'})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;margin-top:4px">Enregistrer ✓</button>`
+        + (r ? `<button onclick="supprimerContactRepertoire(${r.id})" style="width:100%;background:none;color:#c0392b;border:1px solid #f1c4bf;border-radius:10px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;margin-top:8px">🗑 Supprimer</button>` : '');
+    }
+    modal.style.display = 'flex';
+  }
+  function styleChampRep() {
+    return 'width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;font-family:inherit;background:#fff';
+  }
+  function fermerContactRepertoire() {
+    document.getElementById('modal-repertoire').style.display = 'none';
+  }
+
+  async function enregistrerContactRepertoire(id) {
+    const get = k => (document.getElementById('rep-' + k)?.value || '').trim();
+    const payload = {};
+    ['Nom', 'Societe', 'Categorie', 'Fonction', 'Telephone', 'Mobile', 'Email', 'Adresse', 'Notes'].forEach(k => payload[k] = get(k));
+    if (!payload['Nom'] && !payload['Societe']) { alert('Renseignez au moins un nom ou une société.'); return; }
+    if (!payload['Nom']) payload['Nom'] = payload['Societe'];
+    if (!id) payload['Source'] = 'Manuel';
+    const btn = document.getElementById('btn-rep-enregistrer');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; }
+    try {
+      const base = `https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/`;
+      const res = await fetch(id ? `${base}${id}/?user_field_names=true` : `${base}?user_field_names=true`, {
+        method: id ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const ligne = await res.json();
+      if (id) _repertoireCache = _repertoireCache.map(x => x.id === id ? ligne : x);
+      else _repertoireCache.push(ligne);
+      fermerContactRepertoire();
+      renderRepertoireFiltres();
+      renderRepertoire();
+    } catch (e) {
+      alert('Erreur lors de l\'enregistrement : ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Enregistrer ✓'; }
+    }
+  }
+
+  function estContactEbp(r) {
+    return !!r && (r['Source'] === 'EBP' || !!r['Code EBP']);
+  }
+
+  async function enregistrerNotesRepertoire(id) {
+    const notes = (document.getElementById('rep-Notes')?.value || '').trim();
+    const btn = document.getElementById('btn-rep-enregistrer');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; }
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Notes': notes })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const ligne = await res.json();
+      _repertoireCache = _repertoireCache.map(x => x.id === id ? ligne : x);
+      fermerContactRepertoire();
+      renderRepertoire();
+    } catch (e) {
+      alert('Erreur lors de l\'enregistrement : ' + e.message);
+      if (btn) { btn.disabled = false; btn.textContent = 'Enregistrer les notes ✓'; }
+    }
+  }
+
+  async function syncEBPRepertoire() {
+    const btn = document.getElementById('btn-sync-ebp-repertoire');
+    const icon = document.getElementById('sync-icon-repertoire');
+    const label = document.getElementById('sync-label-repertoire');
+    const status = document.getElementById('sync-ebp-repertoire-status');
+    btn.disabled = true; label.textContent = 'Sync…'; status.style.display = 'none';
+    icon.style.animation = 'spin 1s linear infinite';
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 180000);
+      const resp = await fetch(`${EBP_WORKER}/sync-contacts`, { cache: 'no-store', signal: controller.signal });
+      clearTimeout(timeoutId);
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || ('HTTP ' + resp.status));
+      const nbErr = data.erreurs?.length || 0;
+      status.style.background = nbErr ? '#fff8e1' : '#e8f5e9';
+      status.style.color = nbErr ? '#8d6e00' : '#2e7d32';
+      status.style.border = '1px solid ' + (nbErr ? '#ffe082' : '#a5d6a7');
+      status.textContent = `${nbErr ? '⚠️' : '✅'} Sync terminée — ${data.contacts_crees ?? '?'} créé(s), ${data.contacts_maj ?? '?'} mis à jour${nbErr ? ', ' + nbErr + ' erreur(s)' : ''}`;
+      await chargerRepertoirePage();
+    } catch (e) {
+      status.style.background = '#fdecea'; status.style.color = '#c62828'; status.style.border = '1px solid #ef9a9a';
+      status.textContent = '❌ Erreur : ' + e.message;
+    }
+    btn.disabled = false; icon.style.animation = ''; label.textContent = 'Sync EBP';
+    status.style.display = 'block';
+    setTimeout(() => { status.style.display = 'none'; }, 10000);
+  }
+
+  async function supprimerContactRepertoire(id) {
+    if (!confirm('Supprimer ce contact du répertoire ?')) return;
+    const sauvegarde = _repertoireCache;
+    _repertoireCache = _repertoireCache.filter(x => x.id !== id); // mise à jour optimiste
+    fermerContactRepertoire();
+    renderRepertoireFiltres();
+    renderRepertoire();
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_REPERTOIRE}/${id}/`, { method: 'DELETE', headers: HEADERS });
+      if (!res.ok && res.status !== 204) throw new Error('HTTP ' + res.status);
+    } catch (e) {
+      _repertoireCache = sauvegarde; // rollback
+      renderRepertoireFiltres();
+      renderRepertoire();
+      alert('Erreur lors de la suppression : ' + e.message);
     }
   }
 
@@ -15665,6 +16071,10 @@
     <span class="nav-icon">🧾</span>
     Commandes clients
   </button>
+  <button class="nav-btn" id="nav-repertoire" style="display:none" onclick="switchPage('repertoire')">
+    <span class="nav-icon">📇</span>
+    Répertoire
+  </button>
   <button class="nav-btn" onclick="seDeconnecter()">
     <span class="nav-icon">🚪</span>
     Quitter
@@ -15780,6 +16190,43 @@
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   <div id="commandes-clients-liste" style="padding:0 16px 80px"></div>
+</div>
+
+<!-- PAGE RÉPERTOIRE (contacts clients, fournisseurs, sous-traitants…) — consultation pour tous, édition Admin/Gestionnaire -->
+<div id="page-repertoire" class="page" style="display:none">
+  <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">📇 Répertoire</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button id="btn-sync-ebp-repertoire" onclick="syncEBPRepertoire()" title="Synchroniser depuis EBP" style="display:none;background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);align-items:center;gap:5px;font-weight:700">
+        <span id="sync-icon-repertoire">🔄</span><span id="sync-label-repertoire">Sync EBP</span>
+      </button>
+      <button id="btn-repertoire-nouveau" onclick="ouvrirContactRepertoire(null)" style="display:none;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+    </div>
+  </div>
+  <div id="sync-ebp-repertoire-status" style="display:none;margin:4px 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
+  <div style="padding:6px 16px 4px">
+    <div style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;gap:2px">
+      <button id="tab-repertoire-externes" onclick="switchRepertoireOnglet('externes')" style="flex:1;padding:8px 10px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">📇 Clients & fournisseurs</button>
+      <button id="tab-repertoire-guerin" onclick="switchRepertoireOnglet('guerin')" style="flex:1;padding:8px 10px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">🏢 GUÉRIN BÂTIMENTS</button>
+    </div>
+  </div>
+  <div style="padding:6px 16px 8px">
+    <input type="text" id="repertoire-recherche" placeholder="🔍 Rechercher (nom, société, fonction, téléphone, ville…)" oninput="renderRepertoire()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+  </div>
+  <div id="repertoire-filtres" style="display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 16px 8px"></div>
+  <div id="repertoire-resume" style="padding:0 16px 6px;font-size:12px;color:var(--gris-moyen)"></div>
+  <div id="repertoire-liste" style="padding:0 16px 80px"></div>
+</div>
+
+<!-- MODAL CONTACT RÉPERTOIRE (fiche / édition) -->
+<div id="modal-repertoire" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:300;align-items:flex-end;justify-content:center">
+  <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:20px 20px 30px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div id="modal-repertoire-titre" style="font-size:15px;font-weight:800;color:var(--gris)">📇 Contact</div>
+      <button onclick="fermerContactRepertoire()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+    </div>
+    <div id="modal-repertoire-contenu"></div>
+  </div>
 </div>
 
 <!-- PAGE IMPRESSION COMMANDES (générée dynamiquement, visible uniquement à l'impression) -->
