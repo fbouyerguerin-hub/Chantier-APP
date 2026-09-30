@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1122,6 +1122,27 @@
   }
   window.addEventListener('resize', caleBandeauCommandes);
 
+  // ── ZONE REQUISE ──
+  // Une tâche OU une sous-tâche exige une zone si elle est cochée « Zone requise » dans Baserow
+  // (Type de tâche 1014444 / Sous-tâche 1015608), ou, par compatibilité, si son libellé est exactement « Pose ».
+  // Une ligne de saisie exige la zone dès que sa tâche ou sa sous-tâche l'exige. Permet aux tâches spécifiques à un
+  // chantier (ex. « Pose charpente », « Pose bardage ») d'exiger la zone comme la tâche Pose standard.
+  const CHAMP_ZONE_REQUISE = 'Zone requise';
+  function tacheExigeZone(row) {
+    if (!row) return false;
+    return !!row[CHAMP_ZONE_REQUISE] || String(row['Libellé'] || '').trim() === 'Pose';
+  }
+
+  function ligneExigeZone(l) {
+    return !!(l && ((l.typeTache && l.typeTache.zoneRequise) || (l.sousTache && l.sousTache.zoneRequise)));
+  }
+  function majZoneLigne(l) {
+    const zf = document.getElementById(`zone-field-${l.id}`);
+    const on = ligneExigeZone(l);
+    if (zf) zf.style.display = on ? 'block' : 'none';
+    if (!on && l.zone) { l.zone = null; const zv = document.getElementById(`val-Zones-${l.id}`); if (zv) { zv.textContent = 'Sélectionner…'; zv.classList.add('empty'); } }
+  }
+
   async function loadTable(key) {
     const { id, field } = TABLES[key];
     try {
@@ -1129,7 +1150,8 @@
       if (key === 'Chantiers') {
         rows = rows.filter(row => (row['Statue']?.value || row['Statue']) !== 'Terminé');
       }
-      tableData[key] = rows.map(row => ({ id: row.id, value: row[field] || `#${row.id}` }));
+      tableData[key] = rows.map(row => ({ id: row.id, value: row[field] || `#${row.id}`,
+        zoneRequise: (key === 'TypeTaches' || key === 'SousTaches') ? tacheExigeZone(row) : false }));
     } catch(e) { tableData[key] = []; }
   }
 
@@ -1176,7 +1198,7 @@
             <span>▾</span>
           </div>
         </div>
-        <div class="field" id="zone-field-${l.id}" style="display:${l.typeTache&&l.typeTache.value==='Pose'?'block':'none'}">
+        <div class="field" id="zone-field-${l.id}" style="display:${ligneExigeZone(l)?'block':'none'}">
           <label>Zone</label>
           <div style="background:#fffbe6;border:1px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:11px;color:#7a6a3a;margin-bottom:8px;line-height:1.7">
             Z1a → 0 à 5 km &nbsp;|&nbsp; Z1b → 5 à 10 km &nbsp;|&nbsp; Z2 → 10 à 20 km &nbsp;|&nbsp; Z3 → 20 à 30 km<br>
@@ -1241,7 +1263,8 @@
           chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
           excludeIds: (row['exclure chantier'] || []).map(c => c.id),
           typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id),
-          modeleStandard: !!row['Modèle standard']
+          modeleStandard: !!row['Modèle standard'],
+          zoneRequise: tacheExigeZone(row)
         })).filter(opt => !opt.excludeIds.includes(chantierId));
         const linked = allRows.filter(opt => opt.chantiersIds.includes(chantierId));
         // Si ce chantier n'a aucune tâche qui lui est spécifiquement rattachée, on ne retombe pas sur
@@ -1329,13 +1352,12 @@
     if (modalLigneId !== null) {
       const l = lignes.find(l=>l.id===modalLigneId);
       if (l) {
-        if (modalKey==='TypeTaches') {
-          l.typeTache = obj;
-          const zf = document.getElementById(`zone-field-${modalLigneId}`);
-          if (zf) zf.style.display = value==='Pose' ? 'block' : 'none';
-          if (value!=='Pose') { l.zone=null; const zv=document.getElementById(`val-Zones-${modalLigneId}`); if(zv){zv.textContent='Sélectionner…';zv.classList.add('empty');} }
-        } else if (modalKey==='SousTaches') l.sousTache = obj;
-        else if (modalKey==='Zones') l.zone = obj;
+        if (modalKey==='TypeTaches' || modalKey==='SousTaches') {
+          const opt = (tableData[modalKey] || []).find(o => String(o.id) === String(id));
+          obj.zoneRequise = opt ? !!opt.zoneRequise : value === 'Pose';
+          if (modalKey==='TypeTaches') l.typeTache = obj; else l.sousTache = obj;
+          majZoneLigne(l);
+        } else if (modalKey==='Zones') l.zone = obj;
         const el = document.getElementById(`val-${modalKey}-${modalLigneId}`);
         if (el) { el.textContent = value; el.classList.remove('empty'); }
       }
@@ -1363,7 +1385,7 @@
     for (const l of lignes) {
       if (!l.typeTache) { alert('⚠️ Veuillez sélectionner un type de tâche pour chaque ligne.'); return; }
       if (!l.sousTache) { alert('⚠️ Veuillez sélectionner une sous-tâche pour chaque ligne.'); return; }
-      if (l.typeTache?.value === 'Pose' && !l.zone) { alert('⚠️ Veuillez sélectionner une zone pour chaque ligne de type "Pose".'); return; }
+      if (ligneExigeZone(l) && !l.zone) { alert('⚠️ Veuillez sélectionner une zone pour « ' + l.typeTache.value + (l.sousTache ? ' / ' + l.sousTache.value : '') + ' ».'); return; }
       if (!l.heures || parseFloat(l.heures) <= 0) { alert('⚠️ Veuillez saisir les heures pour chaque tâche.'); return; }
     }
     const totalH = lignes.reduce((s,l) => s+(parseFloat(l.heures)||0), 0);
@@ -7904,7 +7926,8 @@
       chantiersIds: (row['lien vers chantier'] || []).map(c => c.id),
       excludeIds: (row['exclure chantier'] || []).map(c => c.id),
       typeTacheIds: (row['lien vers type de tache'] || []).map(c => c.id),
-      modeleStandard: !!row['Modèle standard']
+      modeleStandard: !!row['Modèle standard'],
+      zoneRequise: tacheExigeZone(row)
     })).filter(opt => !opt.excludeIds.includes(cid));
     const linked = all.filter(opt => opt.chantiersIds.includes(cid));
     const globales = all.filter(opt => opt.chantiersIds.length === 0 && opt.modeleStandard);
@@ -7916,7 +7939,7 @@
     const chantierId = document.getElementById('edit-saisie-chantier-id').value;
     const options = dedoublonnerParLibelle(filtrerPourChantierEdit(_editTachesBrut, 'TypeTaches', chantierId), null, valeurAConserver);
     sel.innerHTML = '<option value="">— Choisir —</option>' +
-      options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
+      options.map(o => `<option value="${o.id}" data-zone="${o.zoneRequise ? '1' : ''}">${o.value}</option>`).join('');
     // Si la tâche d'origine n'est plus autorisée pour ce chantier, elle n'est pas proposée → champ vide
     sel.value = options.some(o => String(o.id) === String(valeurAConserver)) ? valeurAConserver : '';
   }
@@ -7931,15 +7954,17 @@
     const liees = options.filter(o => o.typeTacheIds.includes(typeTacheId));
     if (liees.length > 0) options = liees;
     options = dedoublonnerParLibelle(options, typeTacheId, valeurAConserver);
-    sel.innerHTML += options.map(o => `<option value="${o.id}">${o.value}</option>`).join('');
+    sel.innerHTML += options.map(o => `<option value="${o.id}" data-zone="${o.zoneRequise ? '1' : ''}">${o.value}</option>`).join('');
     if (valeurAConserver && options.some(o => String(o.id) === String(valeurAConserver))) sel.value = valeurAConserver;
   }
 
-  // Affiche le champ Zone uniquement si le type de tâche sélectionné est "Pose" (même règle que la saisie)
+  // Affiche le champ Zone uniquement si la tâche sélectionnée exige une zone (même règle que la saisie)
   function tacheEditEstPose() {
-    const sel = document.getElementById('edit-saisie-tache');
-    const opt = sel.options[sel.selectedIndex];
-    return !!(opt && opt.value && opt.textContent.trim() === 'Pose');
+    return ['edit-saisie-tache', 'edit-saisie-sous-tache'].some(idSel => {
+      const sel = document.getElementById(idSel);
+      const opt = sel && sel.options[sel.selectedIndex];
+      return !!(opt && opt.value && opt.dataset.zone === '1');
+    });
   }
   function majZoneEdit() {
     document.getElementById('edit-saisie-zone-bloc').style.display = tacheEditEstPose() ? 'block' : 'none';
@@ -8006,7 +8031,7 @@
     if (!sousTacheId) { alert('⚠️ Veuillez sélectionner une sous-tâche.'); return; }
     const estPose = tacheEditEstPose();
     const zoneId = document.getElementById('edit-saisie-zone').value;
-    if (estPose && !zoneId) { alert('⚠️ Veuillez sélectionner une zone pour une tâche de type "Pose".'); return; }
+    if (estPose && !zoneId) { alert('⚠️ Veuillez sélectionner une zone pour cette tâche.'); return; }
     try {
       await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/${rowId}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS,
@@ -12125,6 +12150,8 @@
       renderTachesTableChantier(chId);
     };
     chip.appendChild(span);
+    // 📍 : bascule « Zone requise » (zone obligatoire à la saisie des heures pour cette tâche)
+    chip.appendChild(creerBoutonZone(tacheExigeZone(type), isSelected, () => basculerZoneRequise(type, chId, 'TypeTaches')));
     const btn = document.createElement('button');
     btn.textContent = '✕';
     btn.title = 'Retirer cette tâche du chantier';
@@ -12225,7 +12252,7 @@
             await retirerSousTacheDeTache(st.id, type.id);
             afficherToastTache('➖ « ' + label + ' » retirée de « ' + (type['Libellé'] || 'cette tâche') + ' »');
             renderTachesTableChantier(chId);
-          }));
+          }, null, creerBoutonZone(tacheExigeZone(st), false, () => basculerZoneRequise(st, chId, 'SousTaches'))));
         } else {
           const dejaSurCeChantier = (st['lien vers chantier'] || []).some(c => c.id === chId);
           const variant = dejaSurCeChantier ? 'partagee' : 'defaut';
@@ -12256,7 +12283,8 @@
       input.disabled = true; btnCreate.disabled = true;
       try {
         const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.SousTaches.id + '/?user_field_names=true',
-          { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [chId], 'lien vers type de tache': [type.id] }) });
+          { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [chId], 'lien vers type de tache': [type.id],
+            ...(champZoneRequiseExiste('SousTaches') && /^pose\b/i.test(nom) ? { [CHAMP_ZONE_REQUISE]: true } : {}) }) });
         if (!res.ok) throw new Error(await res.text());
         const saved = await res.json();
         _chantierTachesCache.allSousTaches.push(saved);
@@ -12294,7 +12322,7 @@
 
   // onDelete est optionnel : quand fourni (uniquement pour les sous-tâches non affectées), un 🗑
   // supplémentaire permet de la supprimer définitivement de la base plutôt que de simplement l'affecter.
-  function creerPuceSousTacheToggle(label, actif, variant, onToggle, onDelete) {
+  function creerPuceSousTacheToggle(label, actif, variant, onToggle, onDelete, boutonZone) {
     // Mêmes couleurs que les points de la légende, pour un mapping direct et sans ambiguïté
     const COULEURS_POINT = {
       affectee: '#c0392b',
@@ -12328,6 +12356,7 @@
       }
     };
     wrap.appendChild(chip);
+    if (boutonZone) wrap.appendChild(boutonZone);
 
     if (onDelete) {
       const btnDel = document.createElement('button');
@@ -12386,6 +12415,47 @@
     return row;
   }
 
+  function champZoneRequiseExiste(key) {
+    const rows = key === 'SousTaches' ? _chantierTachesCache.allSousTaches : _chantierTachesCache.allTypes;
+    return (rows || []).some(t => Object.prototype.hasOwnProperty.call(t, CHAMP_ZONE_REQUISE));
+  }
+
+  // Bascule « Zone requise » sur une tâche (TypeTaches) ou une sous-tâche (SousTaches)
+  async function basculerZoneRequise(row, chId, key = 'TypeTaches') {
+    if (!champZoneRequiseExiste(key)) {
+      alert('⚠️ Le champ « ' + CHAMP_ZONE_REQUISE + ' » (case à cocher) doit d\'abord être créé dans la table Baserow « ' + TABLES[key].label + ' ».');
+      return;
+    }
+    if (String(row['Libellé'] || '').trim() === 'Pose' && !row[CHAMP_ZONE_REQUISE]) {
+      alert('ℹ️ « Pose » exige toujours une zone.');
+      return;
+    }
+    const nouvelle = !row[CHAMP_ZONE_REQUISE];
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/' + row.id + '/?user_field_names=true',
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_ZONE_REQUISE]: nouvelle }) });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      const cache = key === 'SousTaches' ? _chantierTachesCache.allSousTaches : _chantierTachesCache.allTypes;
+      const idx = cache.findIndex(t => t.id === updated.id);
+      if (idx !== -1) cache[idx] = updated;
+      renderTachesTableChantier(chId);
+    } catch(e) { alert('Erreur lors de la mise à jour : ' + e.message); }
+  }
+
+  // Petit bouton 📍 réutilisé sur les puces de tâche et de sous-tâche
+  function creerBoutonZone(zoneOn, surFondVert, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = '📍';
+    b.title = zoneOn ? 'Zone obligatoire à la saisie — cliquer pour désactiver' : 'Zone non demandée — cliquer pour rendre la zone obligatoire à la saisie';
+    b.style.cssText = 'background:' + (zoneOn ? (surFondVert ? 'rgba(255,255,255,0.9)' : '#fff') : 'transparent') +
+      ';border:' + (zoneOn ? '1.5px solid #e67e22' : '1.5px dashed ' + (surFondVert ? 'rgba(255,255,255,0.5)' : '#bbb')) +
+      ';border-radius:10px;height:18px;line-height:14px;padding:0 4px;cursor:pointer;font-size:10px;flex-shrink:0;opacity:' + (zoneOn ? '1' : '0.55');
+    b.onclick = e => { e.stopPropagation(); onClick(); };
+    return b;
+  }
+
   async function ajouterTypeTacheChantier() {
     const rowId = document.getElementById('chantier-row-id').value;
     if (!rowId) return;
@@ -12395,7 +12465,8 @@
     input.disabled = true;
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLES.TypeTaches.id + '/?user_field_names=true',
-        { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [parseInt(rowId)] }) });
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ 'Libellé': nom, 'lien vers chantier': [parseInt(rowId)],
+          ...(champZoneRequiseExiste('TypeTaches') && /^pose\b/i.test(nom) ? { [CHAMP_ZONE_REQUISE]: true } : {}) }) });
       if (!res.ok) throw new Error(await res.text());
       const saved = await res.json();
       input.value = '';
@@ -12475,20 +12546,21 @@
 
   // Copie une tâche standard sur ce chantier, avec ses sous-tâches standard. Renvoie l'id de la copie.
   async function adopterTypeStandard(type, chId) {
-    const copie = await postLigneTache('TypeTaches', { 'Libellé': type['Libellé'] || '', 'lien vers chantier': [chId] });
+    const copie = await postLigneTache('TypeTaches', { 'Libellé': type['Libellé'] || '', 'lien vers chantier': [chId],
+      ...(type[CHAMP_ZONE_REQUISE] ? { [CHAMP_ZONE_REQUISE]: true } : {}) });
     _chantierTachesCache.allTypes.push(copie);
     const sousStd = _chantierTachesCache.allSousTaches.filter(st =>
       !(st['lien vers chantier'] || []).length && !!st['Modèle standard'] &&
       (st['lien vers type de tache'] || []).some(t => t.id === type.id));
     for (const st of sousStd) {
-      const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [copie.id] });
+      const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [copie.id], ...(st[CHAMP_ZONE_REQUISE] ? { [CHAMP_ZONE_REQUISE]: true } : {}) });
       _chantierTachesCache.allSousTaches.push(c);
     }
     return copie.id;
   }
 
   async function copierSousTacheStandard(st, chId, typeId) {
-    const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [parseInt(typeId)] });
+    const c = await postLigneTache('SousTaches', { 'Libellé': st['Libellé'] || '', 'lien vers chantier': [chId], 'lien vers type de tache': [parseInt(typeId)], ...(st[CHAMP_ZONE_REQUISE] ? { [CHAMP_ZONE_REQUISE]: true } : {}) });
     _chantierTachesCache.allSousTaches.push(c);
   }
 
@@ -12573,7 +12645,8 @@
       let n = 0;
       for (const p of planTypes) {
         for (const cid of p.copies) {
-          const c = await postLigneTache('TypeTaches', { 'Libellé': p.t['Libellé'] || '', 'lien vers chantier': [cid] });
+          const c = await postLigneTache('TypeTaches', { 'Libellé': p.t['Libellé'] || '', 'lien vers chantier': [cid],
+            ...(p.t[CHAMP_ZONE_REQUISE] ? { [CHAMP_ZONE_REQUISE]: true } : {}) });
           copieType.set(p.t.id + '|' + cid, c.id);
           snapshot.creesTypes.push(c.id); sauverSnapshotReparation(snapshot);
         }
@@ -12593,7 +12666,7 @@
       n = 0;
       for (const p of planSous) {
         for (const cid of p.copies) {
-          const c = await postLigneTache('SousTaches', { 'Libellé': p.st['Libellé'] || '', 'lien vers chantier': [cid], 'lien vers type de tache': typesPour(p.tys, cid) });
+          const c = await postLigneTache('SousTaches', { 'Libellé': p.st['Libellé'] || '', 'lien vers chantier': [cid], 'lien vers type de tache': typesPour(p.tys, cid), ...(p.st[CHAMP_ZONE_REQUISE] ? { [CHAMP_ZONE_REQUISE]: true } : {}) });
           snapshot.creesSous.push(c.id); sauverSnapshotReparation(snapshot);
         }
         await patch('SousTaches', p.st.id, { 'lien vers chantier': p.garde, 'lien vers type de tache': typesPour(p.tys, p.garde[0]) });
@@ -15789,7 +15862,7 @@
         <div style="font-size:10px;color:#aaa;margin-bottom:14px">Sélectionnez une tâche ci-dessous pour lui associer des sous-tâches. Tant qu'aucune tâche n'est affectée ici, le modèle standard s'applique. Dès qu'une tâche est affectée ou créée, seules les tâches de ce chantier sont proposées à la saisie. Reprendre une tâche du modèle standard en crée une copie propre à ce chantier.</div>
 
         <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:8px">⚙️ Tâches de ce chantier</div>
-        <div style="font-size:10px;color:#aaa;margin-bottom:8px">Cliquez sur une tâche du modèle standard pour la reprendre sur ce chantier (avec ses sous-tâches), ou créez-en une nouvelle.</div>
+        <div style="font-size:10px;color:#aaa;margin-bottom:8px">Cliquez sur une tâche du modèle standard pour la reprendre sur ce chantier (avec ses sous-tâches), ou créez-en une nouvelle. 📍 = zone obligatoire à la saisie des heures, sur une tâche ou une sous-tâche (cliquer pour activer/désactiver ; automatique pour un nom commençant par « Pose »).</div>
         <div id="chantier-types-taches-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
         <div style="display:flex;gap:8px;margin-bottom:24px">
           <input type="text" id="chantier-nouveau-type-tache" placeholder="Ou créer une nouvelle tâche…" style="flex:1;min-width:0;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;box-sizing:border-box" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterTypeTacheChantier();}">
@@ -15875,7 +15948,7 @@
     </div>
     <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Sous-tâche</label>
-      <select id="edit-saisie-sous-tache" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
+      <select id="edit-saisie-sous-tache" onchange="majZoneEdit()" style="width:100%;padding:9px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none">
         <option value="">— Choisir —</option>
       </select>
     </div>
