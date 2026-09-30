@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+
+
 <html lang="fr">
 <head>
 
@@ -653,7 +655,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4035,7 +4037,8 @@
       const [resPlan, resSaisies, chantiersAvecCommandes] = await Promise.all([
         fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
         fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
-        obtenirChantiersAvecCommandes()
+        obtenirChantiersAvecCommandes(),
+        chargerFichesVehicules()
       ]);
 
       const planRows = (await resPlan.json()).results || [];
@@ -4093,7 +4096,7 @@
           cellHTML = byDate[dateStr].map(r => {
             // Le véhicule ne s'affiche que s'il est associé à CE chantier précis, ce jour-là
             const vehs = (!isSaisie && r.chantierId) ? (byDateVehicules[dateStr + '|' + r.chantierId] || []) : [];
-            const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.join(' · ')}</div>` : '';
+            const vehHTML = vehs.length ? `<div style="font-size:9px;font-weight:700;color:var(--vert);margin-bottom:3px">🚐 ${vehs.map(htmlImmatAvecFiche).join(' · ')}</div>` : '';
             let indexFenetre = -1;
             if (!isSaisie) {
               indexFenetre = _planningAffectationsPourFenetre.length;
@@ -8117,6 +8120,7 @@
 
     congesCollectifData = congesResultats.filter(r => r['Statut']?.value !== 'Refusé');
     vehiculesCollectif = vehiculesRows.map(r => ({ id: r.id, immat: r['Immatriculation'] || '#' + r.id }));
+    indexerFichesVehicules(vehiculesRows);
     document.getElementById('planning-collectif-loading').style.display = 'none';
 
     collaborateursFiltre = COLLABORATEURS_ADMIN.filter(c => {
@@ -8346,7 +8350,7 @@
           } else if (vehActuels.length) {
             const vehBloc = document.createElement('div');
             vehBloc.style.cssText = 'margin-bottom:4px;padding:2px 5px;border-radius:4px;background:rgba(11,60,30,0.08);font-size:9px;color:var(--vert);font-weight:700';
-            vehBloc.textContent = '🚐 ' + vehActuels.map(v => v.value).join(' · ');
+            vehBloc.innerHTML = '🚐 ' + vehActuels.map(v => htmlImmatAvecFiche(v.value)).join(' · ');
             td.appendChild(vehBloc);
           }
           // Collaborateurs
@@ -9143,9 +9147,13 @@
       return { v, selectionne, pris };
     }).sort((a, b) => (a.pris === b.pris) ? 0 : (a.pris ? 1 : -1)).map(({ v, selectionne, pris }) => {
       const badgePris = pris ? `<div style="display:inline-block;margin-top:4px;padding:3px 9px;border-radius:10px;background:#fdecea;border:1px solid #f3c6c2;color:#c0392b;font-size:12px;font-weight:700;width:fit-content">🚧 Affecté à ${vehChantierAilleurs[v.id]}</div>` : '';
-      return '<div class="modal-option ' + (selectionne ? 'selected' : '') + '" '
+      const btnFiche = (fichesVehicules && fichesVehicules[v.immat])
+        ? '<button type="button" data-immat="' + attrFicheVeh(v.immat) + '" onclick="event.stopPropagation();ouvrirFicheVehicule(this.dataset.immat)" title="Ouvrir la fiche véhicule" style="pointer-events:auto;background:#f1f5f9;border:1px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:13px;font-weight:600;cursor:pointer;color:var(--gris);flex-shrink:0">📄 Fiche</button>'
+        : '';
+      return '<div data-veh-id="' + v.id + '" class="modal-option ' + (selectionne ? 'selected' : '') + '" '
         + (pris ? 'style="gap:10px;background:#fafafa;cursor:default;pointer-events:none"' : 'onclick="toggleVehCase(' + v.id + ',this)" style="gap:10px"') + '>'
         + '<span style="flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:0;' + (pris ? 'opacity:0.7' : '') + '"><span style="font-size:15px;font-weight:' + (selectionne ? '700' : '400') + '">🚐 ' + v.immat + '</span>' + badgePris + '</span>'
+        + btnFiche
         + (selectionne ? '<span class="check" style="font-size:22px">✓</span>' : '')
         + '</div>';
     }).join('');
@@ -9163,10 +9171,8 @@
 
   async function sauvegarderVehiculeCase() {
     document.getElementById('modal-veh-case').classList.remove('open');
-    const selIds = [...document.querySelectorAll('#liste-veh-case .modal-option.selected')].map(el => {
-      const immat = el.querySelector('span')?.textContent?.replace('🚐 ','').trim();
-      return vehiculesCollectif.find(v => v.immat === immat)?.id;
-    }).filter(Boolean);
+    const selIds = [...document.querySelectorAll('#liste-veh-case .modal-option.selected')]
+      .map(el => parseInt(el.dataset.vehId)).filter(Boolean);
     const { chantier, dateStr, ligneId } = currentVehCase;
     try {
       if (ligneId) {
@@ -9618,6 +9624,59 @@
   const TABLE_COLLABS_ADMIN = '1014431';
   const TABLE_VEHICULES_COLLECTIF = '1017158';
   let vehiculesCollectif = [];
+
+  // ── Fiches véhicules ──
+  // Champ « Fiche » (Fichier) de la table Véhicules : PDF copié automatiquement depuis
+  // Z:\ORGANISATION\VEHICULES par guerin_fiches_vehicules.py (1 feuille = 1 fiche).
+  // Repli possible sur un champ « Lien fiche » (URL) si renseigné à la main.
+  const CHAMP_FICHE_VEHICULE = 'Fiche';
+  const CHAMP_LIEN_FICHE_VEHICULE = 'Lien fiche';
+  // Champ « Immatriculation » : plaque, ou numéro de série pour les engins sans plaque
+  let fichesVehicules = null; // { immatriculation: lien }
+
+  function indexerFichesVehicules(rows) {
+    fichesVehicules = {};
+    (rows || []).forEach(r => {
+      const fichier = Array.isArray(r[CHAMP_FICHE_VEHICULE]) ? r[CHAMP_FICHE_VEHICULE][0] : null;
+      const lien = (fichier?.url || r[CHAMP_LIEN_FICHE_VEHICULE] || '').toString().trim();
+      if (!lien) return;
+      if (r['Immatriculation']) fichesVehicules[String(r['Immatriculation']).trim()] = lien;
+    });
+  }
+
+  async function chargerFichesVehicules() {
+    if (fichesVehicules) return fichesVehicules;
+    try {
+      indexerFichesVehicules(await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200'));
+    } catch (e) { console.warn('Fiches véhicules indisponibles', e); fichesVehicules = {}; }
+    return fichesVehicules;
+  }
+
+  function attrFicheVeh(t) { return String(t).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+  // Rendu d'une immatriculation : cliquable (📄) si une fiche est renseignée
+  function htmlImmatAvecFiche(immat) {
+    const txt = attrFicheVeh(immat);
+    if (!fichesVehicules || !fichesVehicules[immat]) return txt;
+    return `<span data-immat="${txt}" onclick="event.stopPropagation();ouvrirFicheVehicule(this.dataset.immat)" title="Ouvrir la fiche véhicule" style="cursor:pointer;text-decoration:underline">${txt} 📄</span>`;
+  }
+
+  async function ouvrirFicheVehicule(immat) {
+    const lien = fichesVehicules?.[immat];
+    if (!lien) { alert('Aucune fiche renseignée pour ' + immat + '.'); return; }
+    if (/^https?:\/\//i.test(lien)) { window.open(lien, '_blank', 'noopener'); return; }
+    // Chemin réseau (Z:\..., \\serveur\..., file://) : le navigateur interdit de l'ouvrir
+    // depuis une page https → on copie le chemin pour le coller dans l'Explorateur Windows.
+    let chemin = lien;
+    if (/^file:/i.test(chemin)) {
+      try { chemin = decodeURI(chemin); } catch (e) {}
+      chemin = chemin.replace(/^file:\/*/i, '');
+      if (!/^[a-z]:/i.test(chemin)) chemin = '//' + chemin; // file://serveur/partage → \\serveur\partage
+    }
+    chemin = chemin.replace(/\//g, '\\');
+    try { await navigator.clipboard.writeText(chemin); } catch (e) {}
+    alert('📋 Chemin de la fiche copié :\n' + chemin + '\n\nOuvrez l\'Explorateur Windows (Win+E) et collez-le dans la barre d\'adresse (Ctrl+V puis Entrée).\nAccessible uniquement depuis le réseau de l\'entreprise.');
+  }
 
   let COLLABORATEURS_ADMIN = [];
   let semaineAdmin = new Date();
