@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12826,6 +12826,15 @@
     }).join('');
   }
 
+  // Champ « Prix de vente HT » de la table Chantiers : affiché seulement s'il existe dans Baserow
+  let _champPrixVenteDisponible = false;
+  function majBlocPrixVenteChantier() {
+    if (!_champPrixVenteDisponible && chantiersGestionCache.length)
+      _champPrixVenteDisponible = Object.prototype.hasOwnProperty.call(chantiersGestionCache[0], CHAMP_PRIX_VENTE);
+    const bloc = document.getElementById('chantier-prix-vente-bloc');
+    if (bloc) bloc.style.display = _champPrixVenteDisponible ? '' : 'none';
+  }
+
   async function ouvrirFormChantier(rowId) {
     document.getElementById('chantier-row-id').value = rowId || '';
     document.getElementById('modal-chantier-titre').textContent = rowId ? 'Modifier chantier' : 'Nouveau chantier';
@@ -12833,6 +12842,8 @@
     document.getElementById('chantier-date-debut').value = '';
     document.getElementById('chantier-date-fin').value = '';
     document.getElementById('chantier-statue').value = 'En cours';
+    document.getElementById('chantier-prix-vente').value = '';
+    majBlocPrixVenteChantier();
     afficherLienDevisChantier(null);
     // Réinitialiser l'onglet Plan de charge
     document.getElementById('chantier-charge-row-id').value = '';
@@ -12856,6 +12867,10 @@
         document.getElementById('chantier-date-fin').value = c['Date fin'] ? c['Date fin'].split('T')[0] : '';
         document.getElementById('chantier-statue').value = c['Statue']?.value || c['Statue'] || 'En cours';
         _champCaDisponible = Object.prototype.hasOwnProperty.call(c, CHAMP_CHARGE_AFFAIRES);
+        _champPrixVenteDisponible = Object.prototype.hasOwnProperty.call(c, CHAMP_PRIX_VENTE);
+        const pv = c[CHAMP_PRIX_VENTE];
+        document.getElementById('chantier-prix-vente').value = (pv === null || pv === undefined) ? '' : pv;
+        majBlocPrixVenteChantier();
         remplirSelectCaChantier(caDuChantierRow(c));
         afficherLienDevisChantier(c['Fichiers'] || []);
         // Charger les fichiers
@@ -13965,13 +13980,26 @@
     ws.addImage(logoImageId, { tl: { col: 0, row: 0 }, ext: { width: 280, height: 60 } });
   }
 
-  function buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix) {
+  // ── Rentabilité chantier (export « Saisie des temps ») ──
+  // Coût de revient HT = (heures × taux horaire + commandes fournisseurs HT) × coefficient
+  // Rentabilité HT     = prix de vente HT du chantier − coût de revient HT
+  const CHAMP_PRIX_VENTE = 'Prix de vente HT'; // champ nombre de la table Chantiers (Baserow)
+  const TAUX_HORAIRE_VENTE_HT = 50;
+  const COEF_RENTABILITE = 1.2;
+  const CH_FMT_EUR = '#,##0.00 "€"';
+  const CH_COLOR_SAISIE = 'FFFFF2CC';
+  // Seuls les chantiers numérotés CHxxxx sont analysés en rentabilité. Les autres (ABSENCE, ATELIER,
+  // ADMINISTRATIFS, DEVIS, SAV, chantiers sans n° CH…) ne seront jamais facturés : « Hors analyse ».
+  function estChantierAnalyse(nom) { return /\bCH\s*0*\d+/i.test(String(nom || '')); }
+
+  function buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier) {
     const ws = wb.addWorksheet('RÉSUMÉ');
-    const nbCols = peutVoirPrix ? 5 : 4;
+    prixVenteParChantier = prixVenteParChantier || {};
+    const nbCols = peutVoirPrix ? 10 : 4;
     const lastCol = String.fromCharCode(64 + nbCols);
     ws.mergeCells(`A4:${lastCol}4`);
     const c = ws.getCell('A4');
-    c.value = 'ANALYSE DES TEMPS DE CHANTIER';
+    c.value = peutVoirPrix ? 'ANALYSE DES TEMPS ET RENTABILITÉ DE CHANTIER' : 'ANALYSE DES TEMPS DE CHANTIER';
     c.font = { name: 'Arial', bold: true, size: 14, color: { argb: CH_WHITE } };
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_HEADER } };
     c.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -13988,53 +14016,97 @@
       ws.getRow(5).height = 18;
     }
 
-    const headers = ['Chantier', 'Nb Saisies', 'Heures Totales'];
-    if (peutVoirPrix) headers.push('Commandes HT');
-    headers.push('Feuille');
+    const headers = peutVoirPrix
+      ? ['Chantier', 'Nb Saisies', 'Heures Totales', 'Commandes HT', 'Main d\'œuvre HT\n(h × taux)', 'Coût de revient HT\n((MO + cmd) × coef)', 'Prix de vente HT\n(EBP)', 'Rentabilité HT', 'Marge %', 'Feuille']
+      : ['Chantier', 'Nb Saisies', 'Heures Totales', 'Feuille'];
     const idxFeuille = headers.length - 1;
-    const idxMontant = peutVoirPrix ? headers.length - 2 : -1;
 
     const headerRow = ws.getRow(6);
     headers.forEach((h, i) => {
       const cell = headerRow.getCell(i + 1);
       cell.value = h;
       cell.font = { name: 'Arial', bold: true, color: { argb: CH_WHITE } };
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TACHE } };
-      cell.alignment = { horizontal: 'center' };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i === 6 && peutVoirPrix ? 'FFBF8F00' : CH_COLOR_TACHE } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
       cell.border = CH_BORDER_THIN;
     });
+    if (peutVoirPrix) headerRow.height = 32;
 
-    let rowIdx = 7;
-    chantiers.forEach(chantier => {
-      const sub = data.filter(r => r.chantier === chantier);
+    const premiereLigne = 7;
+    const derniereLigne = premiereLigne + chantiers.length - 1;
+    const ligneTotal = derniereLigne + 1;
+    const ligneTaux = ligneTotal + 2;      // paramètres modifiables sous le tableau
+    const ligneCoef = ligneTotal + 3;
+    const refTaux = `$B$${ligneTaux}`, refCoef = `$B$${ligneCoef}`;
+    const lignesResume = {};
+    const tot = { heures: 0, cmd: 0, mo: 0, cout: 0, prix: 0, renta: 0, nbPrix: 0 };
+
+    chantiers.forEach((chantier, k) => {
+      const r = premiereLigne + k;
+      lignesResume[chantier] = r;
+      const sub = data.filter(x => x.chantier === chantier);
       const sn = safeSheetNameCh(chantier);
-      const row = ws.getRow(rowIdx);
-      const totalHeures = round2Ch(sub.reduce((s, r) => s + r.heures, 0));
-      const vals = [chantier, sub.length, totalHeures];
-      if (peutVoirPrix) vals.push(round2Ch((commandesParChantier[chantier] || []).reduce((s, cmd) => s + cmd.montant, 0)));
-      vals.push(sn);
-      vals.forEach((val, i) => {
+      const row = ws.getRow(r);
+      const heures = round2Ch(sub.reduce((s, x) => s + x.heures, 0));
+      const cells = [chantier, sub.length, heures];
+      if (peutVoirPrix) {
+        const cmd = round2Ch((commandesParChantier[chantier] || []).reduce((s, x) => s + x.montant, 0));
+        const mo = round2Ch(heures * TAUX_HORAIRE_VENTE_HT);
+        const cout = round2Ch((mo + cmd) * COEF_RENTABILITE);
+        const horsAnalyse = !estChantierAnalyse(chantier);
+        const prix = prixVenteParChantier[chantier];
+        const aPrix = !horsAnalyse && typeof prix === 'number' && !isNaN(prix);
+        const renta = aPrix ? round2Ch(prix - cout) : '';
+        const marge = aPrix && prix ? renta / prix : '';
+        tot.heures += heures; tot.cmd += cmd; tot.mo += mo; tot.cout += cout;
+        if (aPrix) { tot.prix += prix; tot.renta += renta; tot.nbPrix++; }
+        cells.push(
+          cmd,
+          { formula: `C${r}*${refTaux}`, result: mo },
+          { formula: `(E${r}+D${r})*${refCoef}`, result: cout },
+          horsAnalyse ? 'Hors analyse' : (aPrix ? prix : null),
+          { formula: `IF(ISNUMBER(G${r}),G${r}-F${r},"")`, result: renta },
+          { formula: `IF(AND(ISNUMBER(G${r}),G${r}<>0),H${r}/G${r},"")`, result: marge }
+        );
+      } else {
+        tot.heures += heures;
+      }
+      cells.push(sn);
+      cells.forEach((val, i) => {
         const cell = row.getCell(i + 1);
         cell.value = val;
-        cell.font = { name: 'Arial', size: 10 };
+        cell.font = { name: 'Arial', size: 10, bold: peutVoirPrix && i === 7 };
         cell.alignment = { horizontal: i === 0 ? 'left' : 'center' };
         cell.border = CH_BORDER_THIN;
-        if (i === 2 || i === idxMontant) cell.numFmt = '0.00';
+        if (i === 2) cell.numFmt = '0.00';
+        if (peutVoirPrix && i >= 3 && i <= 7) cell.numFmt = CH_FMT_EUR;
+        if (peutVoirPrix && i === 8) cell.numFmt = '0.0%';
+        if (peutVoirPrix && i === 6) {
+          if (val === 'Hors analyse') cell.font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF999999' } };
+          else cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_SAISIE } };
+        }
         if (i === idxFeuille) {
           const snEsc = sn.replace(/'/g, "''"); // Excel exige le doublement des apostrophes dans une référence de feuille entre quotes
           cell.value = { text: sn, hyperlink: `#'${snEsc}'!A1`, tooltip: sn };
           cell.font = { name: 'Arial', size: 10, color: { argb: 'FF0563C1' }, underline: true };
         }
       });
-      rowIdx++;
     });
 
-    const totalGenHeures = round2Ch(data.reduce((s, r) => s + r.heures, 0));
-    const totalGenMontant = round2Ch(Object.values(commandesParChantier).flat().reduce((s, cmd) => s + cmd.montant, 0));
-    const totalVals = ['TOTAL GÉNÉRAL', data.length, totalGenHeures];
-    if (peutVoirPrix) totalVals.push(totalGenMontant);
+    const plage = col => `${col}${premiereLigne}:${col}${derniereLigne}`;
+    const totalVals = ['TOTAL GÉNÉRAL', data.length, { formula: `SUM(${plage('C')})`, result: round2Ch(tot.heures) }];
+    if (peutVoirPrix) {
+      totalVals.push(
+        { formula: `SUM(${plage('D')})`, result: round2Ch(tot.cmd) },
+        { formula: `SUM(${plage('E')})`, result: round2Ch(tot.mo) },
+        { formula: `SUM(${plage('F')})`, result: round2Ch(tot.cout) },
+        { formula: `SUM(${plage('G')})`, result: round2Ch(tot.prix) },
+        { formula: `IF(COUNT(${plage('G')})=0,"",SUM(${plage('H')}))`, result: tot.nbPrix ? round2Ch(tot.renta) : '' },
+        { formula: `IF(OR(COUNT(${plage('G')})=0,G${ligneTotal}=0),"",H${ligneTotal}/G${ligneTotal})`, result: tot.nbPrix && tot.prix ? tot.renta / tot.prix : '' }
+      );
+    }
     totalVals.push('');
-    const totalRow = ws.getRow(rowIdx);
+    const totalRow = ws.getRow(ligneTotal);
     totalVals.forEach((val, i) => {
       const cell = totalRow.getCell(i + 1);
       cell.value = val;
@@ -14042,18 +14114,54 @@
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_GRAND_TOTAL } };
       cell.alignment = { horizontal: 'center' };
       cell.border = CH_BORDER_THIN;
-      if (i === 2 || i === idxMontant) cell.numFmt = '0.00';
+      if (i === 2) cell.numFmt = '0.00';
+      if (peutVoirPrix && i >= 3 && i <= 7) cell.numFmt = CH_FMT_EUR;
+      if (peutVoirPrix && i === 8) cell.numFmt = '0.0%';
     });
 
-    const widths = [45, 12, 15];
-    if (peutVoirPrix) widths.push(16);
-    widths.push(35);
+    if (peutVoirPrix) {
+      // Rentabilité en vert si positive, en rouge si négative
+      ws.addConditionalFormatting({
+        ref: `H${premiereLigne}:I${derniereLigne}`,
+        rules: [
+          { type: 'expression', formulae: [`AND(ISNUMBER($H${premiereLigne}),$H${premiereLigne}<0)`], style: { font: { color: { argb: 'FFC00000' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFFADBD8' } } } },
+          { type: 'expression', formulae: [`AND(ISNUMBER($H${premiereLigne}),$H${premiereLigne}>=0)`], style: { font: { color: { argb: 'FF2E7D32' }, bold: true }, fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: 'FFE2EFDA' } } } },
+        ],
+      });
+
+      // Paramètres de calcul (modifiables : toutes les formules s'y réfèrent)
+      [[ligneTaux, 'Taux horaire de vente HT (€/h)', TAUX_HORAIRE_VENTE_HT, CH_FMT_EUR],
+       [ligneCoef, 'Coefficient (frais / marge)', COEF_RENTABILITE, '0.00']].forEach(([r, lib, val, fmt]) => {
+        const l = ws.getCell(r, 1);
+        l.value = lib;
+        l.font = { name: 'Arial', bold: true, size: 10 };
+        l.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TOTAL_ROW } };
+        l.border = CH_BORDER_THIN;
+        const v = ws.getCell(r, 2);
+        v.value = val;
+        v.numFmt = fmt;
+        v.font = { name: 'Arial', bold: true, size: 10 };
+        v.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_SAISIE } };
+        v.alignment = { horizontal: 'center' };
+        v.border = CH_BORDER_THIN;
+      });
+      ws.mergeCells(`C${ligneTaux}:${lastCol}${ligneCoef}`);
+      const note = ws.getCell(`C${ligneTaux}`);
+      note.value = 'Cellules jaunes modifiables. Coût de revient = (heures × taux + commandes HT) × coefficient. '
+        + 'Rentabilité = prix de vente HT − coût de revient. Prix de vente = montant HT du chantier dans EBP ; '
+        + 'à défaut, total HT des commandes clients EBP du chantier ; sinon à saisir ici.';
+      note.font = { name: 'Arial', italic: true, size: 9, color: { argb: 'FF595959' } };
+      note.alignment = { wrapText: true, vertical: 'middle' };
+    }
+
+    const widths = peutVoirPrix ? [45, 11, 13, 15, 16, 19, 16, 16, 10, 35] : [45, 12, 15, 35];
     widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
     ws.views = [{ state: 'frozen', ySplit: 6 }];
     addLogoToSheetCh(ws, wb);
+    return lignesResume;
   }
 
-  function buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix) {
+  function buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix, ligneResume, commandesClients) {
     const sub = data.filter(r => r.chantier === chantier);
     const sn = safeSheetNameCh(chantier);
     const ws = wb.addWorksheet(sn);
@@ -14227,6 +14335,100 @@
       cr += 2;
     }
 
+    // Commandes clients EBP = prix de vente HT du chantier
+    if (peutVoirPrix && commandesClients && commandesClients.length) {
+      ws.mergeCells(`A${cr}:E${cr}`);
+      const hC = ws.getCell(cr, 1);
+      hC.value = 'COMMANDES CLIENTS EBP (PRIX DE VENTE)';
+      hC.font = { name: 'Arial', bold: true, size: 11, color: { argb: CH_WHITE } };
+      hC.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_HEADER } };
+      hC.alignment = { horizontal: 'left', vertical: 'middle' };
+      hC.border = CH_BORDER_THIN;
+      ws.getRow(cr).height = 22;
+      cr++;
+      ['Date', 'Client', 'N° commande', 'Statut', 'Montant HT'].forEach((h, i) => {
+        const cell = ws.getCell(cr, i + 1);
+        cell.value = h;
+        cell.font = { name: 'Arial', bold: true, size: 9, color: { argb: CH_WHITE } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_COL_HEADER } };
+        cell.alignment = { horizontal: 'center' };
+        cell.border = CH_BORDER_THIN;
+      });
+      cr++;
+      commandesClients.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(cmd => {
+        [fmtDateFRCh(cmd.date), cmd.client, cmd.numero, cmd.statut, round2Ch(cmd.montant)].forEach((val, i) => {
+          const cell = ws.getCell(cr, i + 1);
+          cell.value = val;
+          cell.font = { name: 'Arial', size: 9 };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_DETAIL_ROW } };
+          cell.border = CH_BORDER_THIN;
+          cell.alignment = { horizontal: i === 1 ? 'left' : 'center' };
+          if (i === 4) cell.numFmt = CH_FMT_EUR;
+        });
+        cr++;
+      });
+      ws.mergeCells(`A${cr}:D${cr}`);
+      const tL = ws.getCell(cr, 1);
+      tL.value = 'TOTAL COMMANDES CLIENTS HT';
+      tL.font = { name: 'Arial', bold: true, size: 10 };
+      tL.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TOTAL_ROW } };
+      tL.alignment = { horizontal: 'right' };
+      tL.border = CH_BORDER_THIN;
+      const tV = ws.getCell(cr, 5);
+      tV.value = round2Ch(commandesClients.reduce((s, x) => s + x.montant, 0));
+      tV.font = { name: 'Arial', bold: true };
+      tV.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_TOTAL_ROW } };
+      tV.numFmt = CH_FMT_EUR; tV.alignment = { horizontal: 'center' }; tV.border = CH_BORDER_THIN;
+      cr += 2;
+    }
+
+    // Analyse de rentabilité : reprend les cellules de la feuille RÉSUMÉ (une seule saisie du prix de vente)
+    if (peutVoirPrix && ligneResume) {
+      ws.mergeCells(`A${cr}:F${cr}`);
+      const hR = ws.getCell(cr, 1);
+      hR.value = 'ANALYSE DE RENTABILITÉ';
+      hR.font = { name: 'Arial', bold: true, size: 11, color: { argb: CH_WHITE } };
+      hR.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CH_COLOR_HEADER } };
+      hR.alignment = { horizontal: 'left', vertical: 'middle' };
+      hR.border = CH_BORDER_THIN;
+      ws.getRow(cr).height = 22;
+      cr++;
+      const r = ligneResume;
+      [
+        ['Heures saisies', `'RÉSUMÉ'!C${r}`, '0.00'],
+        ['Main d\'œuvre HT (heures × taux horaire)', `'RÉSUMÉ'!E${r}`, CH_FMT_EUR],
+        ['Commandes fournisseurs HT', `'RÉSUMÉ'!D${r}`, CH_FMT_EUR],
+        ['Coût de revient HT ((MO + commandes) × coefficient)', `'RÉSUMÉ'!F${r}`, CH_FMT_EUR],
+        ['Prix de vente HT (EBP)', `IF('RÉSUMÉ'!G${r}="","",'RÉSUMÉ'!G${r})`, CH_FMT_EUR],
+        ['RENTABILITÉ HT (prix de vente − coût de revient)', `'RÉSUMÉ'!H${r}`, CH_FMT_EUR, true],
+        ['Marge %', `'RÉSUMÉ'!I${r}`, '0.0%', true],
+      ].forEach(([lib, formule, fmt, fort]) => {
+        ws.mergeCells(`A${cr}:E${cr}`);
+        const l = ws.getCell(cr, 1);
+        l.value = lib;
+        l.font = { name: 'Arial', bold: !!fort, size: 10 };
+        l.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fort ? CH_COLOR_TOTAL_ROW : CH_COLOR_DETAIL_ROW } };
+        l.alignment = { horizontal: 'right' };
+        l.border = CH_BORDER_THIN;
+        const v = ws.getCell(cr, 6);
+        v.value = { formula: formule };
+        v.numFmt = fmt;
+        v.font = { name: 'Arial', bold: !!fort, size: 10 };
+        v.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fort ? CH_COLOR_TOTAL_ROW : CH_COLOR_DETAIL_ROW } };
+        v.alignment = { horizontal: 'center' };
+        v.border = CH_BORDER_THIN;
+        cr++;
+      });
+      ws.addConditionalFormatting({
+        ref: `F${cr - 2}:F${cr - 1}`,
+        rules: [
+          { type: 'expression', formulae: [`AND(ISNUMBER($F$${cr - 2}),$F$${cr - 2}<0)`], style: { font: { color: { argb: 'FFC00000' }, bold: true } } },
+          { type: 'expression', formulae: [`AND(ISNUMBER($F$${cr - 2}),$F$${cr - 2}>=0)`], style: { font: { color: { argb: 'FF2E7D32' }, bold: true } } },
+        ],
+      });
+      cr++;
+    }
+
     const back = ws.getCell(cr, 6);
     back.value = { text: '⬅ Retour au résumé', hyperlink: "#'RÉSUMÉ'!A1", tooltip: 'Retour au résumé' };
     back.font = { name: 'Arial', bold: true, size: 9, color: { argb: CH_WHITE }, underline: true };
@@ -14239,11 +14441,12 @@
     addLogoToSheetCh(ws, wb);
   }
 
-  async function genererClasseurAnalyseChantier(data, commandesParChantier, peutVoirPrix) {
+  async function genererClasseurAnalyseChantier(data, commandesParChantier, peutVoirPrix, prixVenteParChantier, commandesClientsParChantier) {
     const wb = new ExcelJS.Workbook();
+    wb.calcProperties = { fullCalcOnLoad: true }; // formules de rentabilité recalculées à l'ouverture
     const chantiers = [...new Set(data.map(r => r.chantier))].filter(Boolean).sort();
-    buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix);
-    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix));
+    const lignesResume = buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier);
+    chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix, lignesResume[chantier], (commandesClientsParChantier || {})[chantier] || []));
     return wb;
   }
 
@@ -15108,7 +15311,65 @@
         });
       });
 
-      const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesParChantier, peutVoirPrixExport);
+      // Prix de vente HT par chantier = champ « Prix de vente HT » de la fiche chantier, alimenté
+      // depuis EBP par le Worker (/sync-chantiers). À défaut : total HT des commandes clients EBP
+      // rattachées au chantier (hors annulées) ; sinon la cellule reste à saisir dans Excel.
+      const prixVenteParChantier = {};
+      const commandesClientsParChantier = {};
+      const diagEbp = { total: 0, sansChantier: 0, erreur: '' };
+      const sommeCmdClients = {};
+      if (peutVoirPrixExport) {
+        try {
+          const cmdClients = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200');
+          diagEbp.total = cmdClients.length;
+          diagEbp.sansChantier = cmdClients.filter(r => !(r['Chantier'] || []).length).length;
+          cmdClients.forEach(r => {
+            const nom = (r['Chantier'] || [])[0]?.value;
+            if (!nom || !chantiersConcernes.has(nom)) return;
+            const statut = extraireValeurChamp(r['Statut'], '');
+            if (/annul/i.test(statut)) return;
+            const montant = Number(String(r['Montant HT'] ?? '').replace(',', '.')) || 0;
+            if (!commandesClientsParChantier[nom]) commandesClientsParChantier[nom] = [];
+            commandesClientsParChantier[nom].push({
+              date: (r['Date commande'] || '').split('T')[0],
+              client: r['Client'] || '',
+              numero: r['Numero commande'] || '',
+              statut,
+              montant
+            });
+            sommeCmdClients[nom] = round2Ch((sommeCmdClients[nom] || 0) + montant);
+          });
+        } catch (e) { diagEbp.erreur = e.message; /* repli sur la fiche chantier */ }
+        try {
+          const chantiersRows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+          chantiersRows.forEach(c => {
+            const nom = c['Nom du chantier'];
+            const brut = c[CHAMP_PRIX_VENTE];
+            if (!nom || !chantiersConcernes.has(nom) || brut === null || brut === undefined || brut === '') return;
+            const prix = Number(String(brut).replace(',', '.'));
+            if (!isNaN(prix)) prixVenteParChantier[nom] = prix;
+          });
+        } catch (e) { /* prix non disponibles : colonne à saisir dans Excel */ }
+        // Repli : chantier sans montant EBP → total des commandes clients EBP rattachées
+        Object.entries(sommeCmdClients).forEach(([nom, m]) => { if (!(nom in prixVenteParChantier)) prixVenteParChantier[nom] = m; });
+      }
+
+      const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesParChantier, peutVoirPrixExport, prixVenteParChantier, commandesClientsParChantier);
+
+      // Diagnostic : chantiers exportés sans prix de vente
+      let messageDiagPrix = '';
+      if (!peutVoirPrixExport) {
+        messageDiagPrix = 'ℹ️ Prix de vente et rentabilité non inclus : votre compte n\'a pas le droit « Voir prix commandes ».';
+      } else {
+        const sansPrix = [...chantiersConcernes].filter(n => estChantierAnalyse(n) && !(n in prixVenteParChantier)).sort();
+        if (sansPrix.length) {
+          messageDiagPrix = `⚠️ Prix de vente introuvable pour ${sansPrix.length} chantier(s) sur ${[...chantiersConcernes].filter(estChantierAnalyse).length} :\n`
+            + sansPrix.slice(0, 10).map(n => '  • ' + n).join('\n') + (sansPrix.length > 10 ? '\n  • …' : '')
+            + (diagEbp.erreur ? `\n\nLecture des commandes clients EBP impossible : ${diagEbp.erreur}`
+              : `\n\nCommandes clients EBP en base : ${diagEbp.total}, dont ${diagEbp.sansChantier} sans chantier rattaché (champ « Chantier » vide dans Baserow).`)
+            + '\nVérifiez que le chantier existe dans EBP avec un montant HT (synchro /sync-chantiers), ou saisissez le prix dans la cellule jaune du fichier.';
+        }
+      }
       const buffer = await wb.xlsx.writeBuffer();
       const blob = new Blob([buffer], { type: 'application/octet-stream' });
       const a = document.createElement('a');
@@ -15116,6 +15377,7 @@
       a.download = nomFichier + '.xlsx';
       a.click();
       URL.revokeObjectURL(a.href);
+      if (messageDiagPrix) setTimeout(() => alert(messageDiagPrix), 300);
     } catch(e) { alert('Erreur export : ' + e.message); }
     finally { btn.innerHTML = origText; btn.disabled = false; }
   }
@@ -15790,6 +16052,10 @@
           <option value="En pause">🟡 En pause</option>
           <option value="Terminé">⚫ Terminé</option>
         </select>
+      </div>
+      <div class="field" id="chantier-prix-vente-bloc" style="display:none">
+        <label>💶 Prix de vente HT (€) <span style="font-size:10px;font-weight:700;color:#fff;background:var(--vert);border-radius:6px;padding:1px 6px;margin-left:4px">EBP</span></label>
+        <input type="number" id="chantier-prix-vente" step="0.01" readonly style="background:#f0f0f0;color:#666" placeholder="Synchronisé depuis EBP" />
       </div>
       <div class="field" id="chantier-ca-bloc">
         <label>👤 Chargé d'affaires</label>
