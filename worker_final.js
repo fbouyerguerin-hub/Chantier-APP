@@ -5,6 +5,7 @@
  * Périmètre : commandes fournisseurs depuis le 01/09/2026
  * Sync toutes les 30 min (cron) + bouton manuel (/sync)
  * Répertoire : clients + fournisseurs EBP → Baserow (/sync-contacts, + cron)
+ * Chantiers : montant HT des chantiers EBP → Baserow « Prix de vente HT » (/sync-chantiers, + cron)
  */
 
 const EBP_AUTH_URL     = "https://api-login.ebp.com/connect/authorize";
@@ -56,7 +57,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
     try {
-      if (url.pathname === "/health") return json({ status: "ok", version: "v3" }, cors);
+      if (url.pathname === "/health") return json({ status: "ok", version: "v7-chantiers" }, cors);
       if (url.pathname === "/auth")   return handleAuth(url, env);
       if (url.pathname === "/auth/callback") return handleCallback(url, env);
       if (url.pathname === "/sync") {
@@ -70,6 +71,12 @@ export default {
         const typeOverride = url.searchParams.get("type") || null;
         const full = url.searchParams.get("full") === "1"; // resynchronise tout depuis DATE_DEBUT
         return json(await syncClients(env, updateDate, test, typeOverride, full), cors);
+      }
+      if (url.pathname === "/sync-chantiers") {
+        const full = url.searchParams.get("full") === "1"; // relit tous les chantiers EBP
+        const test = url.searchParams.get("test") === "1"; // aperçu des montants EBP, aucune écriture
+        const code = url.searchParams.get("code") || "";    // test : chantier à afficher (ex. CH1187)
+        return json(await syncMontantsChantiers(env, { full, test, code }), cors);
       }
       if (url.pathname === "/sync-contacts") {
         const full = url.searchParams.get("full") === "1"; // relit tous les tiers EBP
@@ -105,6 +112,7 @@ export default {
     ctx.waitUntil((async () => {
       try { await sync(env); } catch (e) { console.error("sync:", e.message); }
       try { await syncRepertoire(env); } catch (e) { console.error("syncRepertoire:", e.message); }
+      try { await syncMontantsChantiers(env); } catch (e) { console.error("syncMontantsChantiers:", e.message); }
     })());
   }
 };
@@ -887,4 +895,152 @@ function json(data, extraHeaders = {}, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status, headers: { "Content-Type": "application/json", ...extraHeaders },
   });
+}
+
+
+// ============================================================
+// SYNC MONTANTS CHANTIERS : montant HT du chantier EBP → Baserow Chantiers « Prix de vente HT »
+// ============================================================
+// Table EBP lue via GenericQuery, et champ Baserow alimenté.
+const EBP_TABLE_CHANTIER        = "ConstructionSite";
+const CHAMP_BASEROW_PRIX_VENTE  = "Prix de vente HT";   // champ Nombre (2 décimales) de la table Chantiers
+const LAST_SYNC_KEY_CHANTIERS   = "last_sync_date_chantiers";
+// Champ EBP du montant HT du chantier. Laisser vide = détection automatique parmi les candidats
+// ci-dessous (dans l'ordre). Une fois vérifié avec /sync-chantiers?test=1&code=CHxxxx, renseigner
+// le nom exact ici pour figer le choix.
+const CHAMP_EBP_MONTANT_CHANTIER = "PredictedSales"; // ventes prévues HT (validé sur CH0765)
+const CANDIDATS_MONTANT_CHANTIER = [
+  "PredictedSales",           // ventes prévues du chantier (montant du marché HT)
+  "AmountVatExcluded", "TotalAmountVatExcluded", "AmountVatExcludedWithDiscount",
+  "TotalAmountVatExcludedWithDiscount", "SaleAmountVatExcluded", "SalesAmountVatExcluded",
+  "ContractAmountVatExcluded", "BudgetAmountVatExcluded", "EstimatedAmountVatExcluded",
+];
+
+// « CHA01187 », « CH1187 », « CH01187 - Nom » → « CH1187 »
+function codeChantier(texte) {
+  const m = String(texte || "").match(/\bCHA?0*(\d+)/i);
+  return m ? "CH" + m[1] : null;
+}
+
+// Valeur numérique d'un champ EBP, y compris si EBP renvoie un objet (ex. { AmountVatExcluded: … })
+function nombreEbp(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "object") {
+    for (const k of ["AmountVatExcluded", "VatExcludedAmount", "AmountHT", "Amount", "Value", "value", "Total", "Sales"]) {
+      const n = nombreEbp(v[k]);
+      if (n !== null) return n;
+    }
+    return null;
+  }
+  const n = Number(String(v).replace(",", "."));
+  return isNaN(n) ? null : n;
+}
+
+function montantChantierEbp(rec) {
+  const noms = CHAMP_EBP_MONTANT_CHANTIER ? [CHAMP_EBP_MONTANT_CHANTIER] : CANDIDATS_MONTANT_CHANTIER;
+  const index = {};
+  for (const k of Object.keys(rec)) index[k.toLowerCase()] = rec[k];
+  for (const n of noms) {
+    const v = nombreEbp(index[n.toLowerCase()]);
+    if (v !== null) return { champ: n, montant: Math.round(v * 100) / 100 };
+  }
+  return { champ: null, montant: null };
+}
+
+async function syncMontantsChantiers(env, { full = false, test = false, code = "" } = {}) {
+  const token = await getToken(env);
+  const bw = { "Authorization": `Token ${env.BASEROW_TOKEN}`, "Content-Type": "application/json" };
+  const debut = new Date().toISOString();
+
+  // Mode test : montre les champs « montant » d'un chantier EBP, sans rien écrire
+  if (test) {
+    const tous = await lireTableEbp(env, token, EBP_TABLE_CHANTIER, null);
+    const cible = code ? codeChantier(code) : null;
+    const rec = (cible ? tous.find(r => codeChantier(champEbp(r, ["Id", "Code"])) === cible) : null) || tous[0] || null;
+    if (!rec) return { mode: "test", total_chantiers_ebp: tous.length, erreur: cible ? `Chantier ${cible} introuvable dans EBP` : "Aucun chantier EBP" };
+    // Tous les champs financiers, valeur brute (nombre, objet ou null) pour identifier le bon montant
+    const champsMontants = Object.fromEntries(Object.entries(rec).filter(([k]) =>
+      /sales|cost|margin|amount|montant|price|prix|total|budget|rate|treasury|dues|invoiced|committed|profit|vat/i.test(k)));
+    const choix = montantChantierEbp(rec);
+    return {
+      mode: "test",
+      total_chantiers_ebp: tous.length,
+      chantier: { id: champEbp(rec, ["Id", "Code"]), libelle: champEbp(rec, ["Caption", "Name", "Description"]), code_baserow: codeChantier(champEbp(rec, ["Id", "Code"])) },
+      champ_retenu: choix.champ,
+      montant_retenu: choix.montant,
+      champs_montants: champsMontants,
+      toutes_les_cles: Object.keys(rec),
+    };
+  }
+
+  // 1. Chantiers EBP (modifiés depuis la dernière synchro, ou tous en ?full=1)
+  const depuis = full ? null : await env.EBP_TOKENS.get(LAST_SYNC_KEY_CHANTIERS);
+  const chantiersEbp = await lireTableEbp(env, token, EBP_TABLE_CHANTIER, depuis);
+  const montantParCode = {};
+  let sansMontant = 0, champUtilise = null;
+  for (const rec of chantiersEbp) {
+    const c = codeChantier(champEbp(rec, ["Id", "Code"]));
+    if (!c) continue;
+    const { champ, montant } = montantChantierEbp(rec);
+    if (montant === null) { sansMontant++; continue; }
+    champUtilise = champUtilise || champ;
+    montantParCode[c] = montant;
+  }
+
+  // 2. Chantiers Baserow (lecture complète, pas de filtre URL)
+  const lignesBaserow = [];
+  let url = `https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/?user_field_names=true&size=200`;
+  while (url) {
+    const r = await fetch(url, { headers: bw });
+    if (!r.ok) throw new Error(`Baserow Chantiers ${r.status}: ${await r.text()}`);
+    const d = await r.json();
+    lignesBaserow.push(...(d.results || []));
+    url = d.next ? d.next.replace("http://", "https://") : null;
+  }
+  if (lignesBaserow.length && !Object.prototype.hasOwnProperty.call(lignesBaserow[0], CHAMP_BASEROW_PRIX_VENTE)) {
+    throw new Error(`Champ « ${CHAMP_BASEROW_PRIX_VENTE} » absent de la table Chantiers (à créer dans Baserow : type Nombre, 2 décimales)`);
+  }
+
+  // 3. Mises à jour (uniquement si le montant a changé)
+  const aMaj = [];
+  const nomParId = {};
+  const codesTrouves = new Set();
+  for (const ch of lignesBaserow) {
+    const c = codeChantier(ch["Nom du chantier"]);
+    if (!c || !(c in montantParCode)) continue;
+    codesTrouves.add(c);
+    nomParId[ch.id] = ch["Nom du chantier"];
+    const actuel = ch[CHAMP_BASEROW_PRIX_VENTE];
+    const nouveau = montantParCode[c];
+    if (actuel === null || actuel === undefined || actuel === "" || Math.abs(Number(actuel) - nouveau) > 0.005) {
+      aMaj.push({ id: ch.id, [CHAMP_BASEROW_PRIX_VENTE]: nouveau.toFixed(2) });
+    }
+  }
+  const erreurs = [];
+  let nbEcrits = 0;
+  for (let i = 0; i < aMaj.length; i += 200) {
+    const lot = aMaj.slice(i, i + 200);
+    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/batch/?user_field_names=true`,
+      { method: "PATCH", headers: bw, body: JSON.stringify({ items: lot }) });
+    if (r.ok) { nbEcrits += lot.length; continue; }
+    // Lot rejeté (Baserow refuse tout le lot pour une seule ligne invalide) : on réessaie ligne par ligne
+    for (const item of lot) {
+      const r1 = await fetch(`https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/${item.id}/?user_field_names=true`,
+        { method: "PATCH", headers: bw, body: JSON.stringify({ [CHAMP_BASEROW_PRIX_VENTE]: item[CHAMP_BASEROW_PRIX_VENTE] }) });
+      if (r1.ok) nbEcrits++;
+      else erreurs.push(`${nomParId[item.id] || item.id} (${item[CHAMP_BASEROW_PRIX_VENTE]} €) : ${(await r1.text()).slice(0, 200)}`);
+    }
+  }
+
+  if (!erreurs.length) await env.EBP_TOKENS.put(LAST_SYNC_KEY_CHANTIERS, debut);
+  return {
+    chantiers_ebp_lus: chantiersEbp.length,
+    champ_ebp_utilise: champUtilise,
+    chantiers_ebp_sans_montant: sansMontant,
+    chantiers_baserow_trouves: codesTrouves.size,
+    chantiers_ebp_sans_correspondance: Object.keys(montantParCode).filter(c => !codesTrouves.has(c)).length,
+    montants_mis_a_jour: nbEcrits,
+    montants_en_erreur: erreurs.length,
+    erreurs,
+  };
 }
