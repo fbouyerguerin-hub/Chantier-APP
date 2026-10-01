@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1029,13 +1029,78 @@
   // quand plusieurs pages partent en même temps). Une page qui échoue
   // définitivement lève une erreur au lieu d'être ignorée : mieux vaut un
   // message d'erreur qu'une liste tronquée (absences manquantes, etc.).
+  // ── CHANTIERS CLÔTURÉS : masqués partout dans l'appli ──
+  // Toute lecture de liste Baserow passe par fetchPageBaserow / fetchListeComplete, qui retirent :
+  //  • de la table Chantiers, les chantiers au statut « Clôturé » ;
+  //  • des autres tables (saisies, commandes, plan de charge, planning…), les lignes dont tous les
+  //    chantiers liés (champ « Chantier » ou « Chantiers ») sont clôturés.
+  // Seule la liste Admin → Chantiers les lit encore (marqueur _clotures=1 dans l'URL), pour pouvoir
+  // les rouvrir.
+  const STATUT_CLOTURE = 'Clôturé';
+  const MARQUEUR_CLOTURES = '_clotures=1';
+  function estStatutCloture(statut) { return /^\s*cl[oô]tur/i.test(String(statut?.value ?? statut ?? '')); }
+  let _cloturesIds = new Set(), _cloturesDate = 0, _cloturesPromesse = null;
+  function invaliderChantiersClotures() { _cloturesDate = 0; }
+  async function obtenirIdsChantiersClotures() {
+    if (_cloturesDate && Date.now() - _cloturesDate < 120000) return _cloturesIds;
+    if (_cloturesPromesse) return _cloturesPromesse;
+    _cloturesPromesse = (async () => {
+      const ids = new Set();
+      try {
+        // Lecture directe (sans filtrage) des seuls chantiers clôturés
+        let next = 'https://api.baserow.io/api/database/rows/table/' + TABLES.Chantiers.id
+          + '/?user_field_names=true&size=200&include=Statue&filter__Statue__contains=' + encodeURIComponent('tur');
+        while (next) {
+          const r = await fetch(next, { headers: HEADERS });
+          if (!r.ok) throw new Error('Baserow ' + r.status);
+          const d = await r.json();
+          (d.results || []).forEach(c => { if (estStatutCloture(c['Statue'])) ids.add(c.id); });
+          next = d.next ? d.next.replace('http://', 'https://') : null;
+        }
+        _cloturesIds = ids;
+        _cloturesDate = Date.now();
+      } catch (e) { /* lecture impossible : on garde la liste précédente */ }
+      return _cloturesIds;
+    })();
+    try { return await _cloturesPromesse; } finally { _cloturesPromesse = null; }
+  }
+  function liensChantierDeLigne(row) {
+    for (const k of ['Chantier', 'Chantiers']) if (Array.isArray(row[k]) && row[k].length) return row[k];
+    return null;
+  }
+  async function filtrerResultatsClotures(url, data) {
+    if (!data || !Array.isArray(data.results) || !data.results.length) return data;
+    if (String(url).includes(MARQUEUR_CLOTURES)) return data;
+    const tableChantiers = String(url).includes('/rows/table/' + TABLES.Chantiers.id + '/');
+    if (tableChantiers) {
+      if (!data.results.some(c => estStatutCloture(c['Statue']))) return data;
+      data._nbBrut = data.results.length;
+      data.results.forEach(c => { if (estStatutCloture(c['Statue'])) _cloturesIds.add(c.id); });
+      data.results = data.results.filter(c => !estStatutCloture(c['Statue']));
+      return data;
+    }
+    if (!data.results.some(r => liensChantierDeLigne(r))) return data;
+    const ids = await obtenirIdsChantiersClotures();
+    if (!ids.size) return data;
+    const avant = data.results.length;
+    const gardes = data.results.filter(r => { const l = liensChantierDeLigne(r); return !l || !l.every(c => ids.has(c.id)); });
+    if (gardes.length !== avant) { data._nbBrut = avant; data.results = gardes; }
+    return data;
+  }
+
   async function fetchPageBaserow(url, options) {
     let derniere;
+    const avecClotures = String(url).includes(MARQUEUR_CLOTURES);
+    const urlReelle = avecClotures ? String(url).replace(/[&?]_clotures=1/, m => m[0] === '?' ? '?' : '') : url;
     for (let essai = 0; essai < 3; essai++) {
       if (essai) await new Promise(r => setTimeout(r, 400 * essai));
       try {
-        const r = await fetch(url, options);
-        if (r.ok) return await r.json();
+        const r = await fetch(urlReelle, options);
+        if (r.ok) {
+          const data = await r.json();
+          if (avecClotures) { if (data && data.next) data.next += (data.next.includes('?') ? '&' : '?') + MARQUEUR_CLOTURES; return data; }
+          return await filtrerResultatsClotures(url, data);
+        }
         derniere = new Error('Baserow ' + r.status);
       } catch (e) { derniere = e; }
     }
@@ -1051,7 +1116,11 @@
     if (!res.ok) return res;
     let data;
     try { data = await res.clone().json(); } catch (e) { return res; }
-    if (!data || !data.next || !Array.isArray(data.results)) return res;
+    if (!data || !Array.isArray(data.results)) return res;
+    data = await filtrerResultatsClotures(url, data);
+    if (!data.next) {
+      return new Response(JSON.stringify({ ...data, _nbBrut: undefined }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
     let resultats = data.results;
     let next = data.next.replace('http://', 'https://');
     while (next) {
@@ -1068,7 +1137,7 @@
     const data = await fetchPageBaserow(url, { headers: HEADERS });
     const premiere = data.results || [];
     if (!data.next) return premiere;
-    const taillePage = premiere.length;
+    const taillePage = data._nbBrut || premiere.length; // taille de page réelle (avant masquage des clôturés)
     const total = parseInt(data.count);
     if (!taillePage || !total) {
       // Repli : lecture page par page
@@ -10250,7 +10319,7 @@
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
-      chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+      chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES);
       memoriserCaChantiers(chantiersGestionCache);
       remplirFiltreCaChantiers();
       filtrerChantiersGestion();
@@ -10262,7 +10331,12 @@
     if (q === undefined) q = document.getElementById('search-chantiers-gestion')?.value || '';
     const ql = normaliserTexteCa(q);
     const filtreCa = document.getElementById('filtre-ca-chantiers')?.value || '';
+    const voirClotures = !!document.getElementById('voir-clotures-chantiers')?.checked;
+    const nbClotures = chantiersGestionCache.filter(c => estStatutCloture(c['Statue'])).length;
+    const lblClot = document.getElementById('nb-clotures-chantiers');
+    if (lblClot) lblClot.textContent = nbClotures;
     const filtered = chantiersGestionCache.filter(c => {
+      if (estStatutCloture(c['Statue']) !== voirClotures) return false; // clôturés : visibles uniquement via la case
       const ca = caDuChantierRow(c);
       if (filtreCa === '__aucun' && ca) return false;
       if (filtreCa && filtreCa !== '__aucun' && String(ca?.id) !== filtreCa) return false;
@@ -10296,7 +10370,7 @@
     container.innerHTML = '';
     chantiers.forEach(c => {
       const statue = c['Statue']?.value || c['Statue'] || '—';
-      const color = statue === 'En cours' ? 'var(--vert)' : statue === 'Terminé' ? '#aaa' : 'var(--beige)';
+      const color = statue === 'En cours' ? 'var(--vert)' : statue === 'Terminé' ? '#aaa' : estStatutCloture(statue) ? '#555' : 'var(--beige)';
       // Chercher les dates avec différents noms possibles
       const dateDebut = c['Date début'] || '';
       const dateFin = c['Date fin'] || '';
@@ -10313,6 +10387,7 @@
         '<option value="En cours"' + (statue === 'En cours' ? ' selected' : '') + '>🟢 En cours</option>' +
         '<option value="En pause"' + (statue === 'En pause' ? ' selected' : '') + '>🟡 En pause</option>' +
         '<option value="Terminé"' + (statue === 'Terminé' ? ' selected' : '') + '>⚫ Terminé</option>' +
+        '<option value="' + STATUT_CLOTURE + '"' + (estStatutCloture(statue) ? ' selected' : '') + '>🔒 Clôturé</option>' +
         '</select>';
       div.appendChild(header);
 
@@ -12986,6 +13061,7 @@
       const saved = await res.json();
       const chantierId = rowId || saved.id;
       _idsChantiersTerminesCache = null; // chantier créé/modifié : le Plan de charge relira la liste des chantiers
+      invaliderChantiersClotures(); _rentaDonnees = null;
       await sauvegarderPlanChargeChantier(chantierId);
       if (!rowId) {
         // Nouveau chantier créé - proposer d'ajouter des fichiers
@@ -13022,6 +13098,9 @@
   }
 
   async function modifierStatueChantier(rowId, statue) {
+    if (estStatutCloture(statue) && !confirm('Clôturer ce chantier ?\n\nIl ne sera plus visible nulle part dans l\'application (saisies, planning, plan de charge, commandes, rentabilité, exports). Il restera consultable ici via « Voir les chantiers clôturés ».')) {
+      filtrerChantiersGestion(); return;
+    }
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + rowId + '/?user_field_names=true',
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statue': statue }) });
@@ -13030,8 +13109,13 @@
       const c = chantiersGestionCache.find(c => c.id === rowId);
       if (c) c['Statue'] = { value: statue };
       _idsChantiersTerminesCache = null; // le statut a changé : on force le rechargement de la liste des chantiers terminés au prochain accès au Plan de charge
-      renderChantiersGestion(chantiersGestionCache);
-    } catch(e) { alert('Erreur : ' + e.message); }
+      invaliderChantiersClotures();
+      _rentaDonnees = null;
+      filtrerChantiersGestion();
+    } catch(e) {
+      alert('Erreur : ' + e.message + (estStatutCloture(statue) ? '\n\nVérifiez que l\'option « ' + STATUT_CLOTURE + ' » existe dans le champ « Statue » de la table Chantiers (Baserow).' : ''));
+      filtrerChantiersGestion();
+    }
   }
 
   // ── GESTION ADMIN ──
@@ -13984,16 +14068,18 @@
   // Coût de revient HT = (heures × taux horaire + commandes fournisseurs HT) × coefficient
   // Rentabilité HT     = prix de vente HT du chantier − coût de revient HT
   const CHAMP_PRIX_VENTE = 'Prix de vente HT'; // champ nombre de la table Chantiers (Baserow)
-  const TAUX_HORAIRE_VENTE_HT = 50;
-  const COEF_RENTABILITE = 1.2;
+  const TAUX_HORAIRE_VENTE_HT_DEFAUT = 50;
+  const COEF_RENTABILITE_DEFAUT = 1.2;
   const CH_FMT_EUR = '#,##0.00 "€"';
   const CH_COLOR_SAISIE = 'FFFFF2CC';
   // Seuls les chantiers numérotés CHxxxx sont analysés en rentabilité. Les autres (ABSENCE, ATELIER,
   // ADMINISTRATIFS, DEVIS, SAV, chantiers sans n° CH…) ne seront jamais facturés : « Hors analyse ».
   function estChantierAnalyse(nom) { return /\bCH\s*0*\d+/i.test(String(nom || '')); }
 
-  function buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier) {
+  function buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier, opts) {
     const ws = wb.addWorksheet('RÉSUMÉ');
+    const TAUX_HORAIRE_VENTE_HT = opts?.taux ?? TAUX_HORAIRE_VENTE_HT_DEFAUT;
+    const COEF_RENTABILITE = opts?.coef ?? COEF_RENTABILITE_DEFAUT;
     prixVenteParChantier = prixVenteParChantier || {};
     const nbCols = peutVoirPrix ? 10 : 4;
     const lastCol = String.fromCharCode(64 + nbCols);
@@ -14441,11 +14527,13 @@
     addLogoToSheetCh(ws, wb);
   }
 
-  async function genererClasseurAnalyseChantier(data, commandesParChantier, peutVoirPrix, prixVenteParChantier, commandesClientsParChantier) {
+  async function genererClasseurAnalyseChantier(data, commandesParChantier, peutVoirPrix, prixVenteParChantier, commandesClientsParChantier, opts) {
     const wb = new ExcelJS.Workbook();
     wb.calcProperties = { fullCalcOnLoad: true }; // formules de rentabilité recalculées à l'ouverture
-    const chantiers = [...new Set(data.map(r => r.chantier))].filter(Boolean).sort();
-    const lignesResume = buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier);
+    const presents = new Set(data.map(r => r.chantier).filter(Boolean));
+    // Ordre imposé (vue Rentabilité : même tri qu'à l'écran), sinon alphabétique
+    const chantiers = opts?.ordre ? opts.ordre.filter(n => presents.has(n)) : [...presents].sort();
+    const lignesResume = buildSummarySheetCh(wb, data, chantiers, commandesParChantier, peutVoirPrix, prixVenteParChantier, opts);
     chantiers.forEach(chantier => buildChantierSheetCh(wb, data, chantier, commandesParChantier, peutVoirPrix, lignesResume[chantier], (commandesClientsParChantier || {})[chantier] || []));
     return wb;
   }
@@ -15557,6 +15645,58 @@
     });
   }
 
+  // Filtre + tri de la vue (réutilisé par l'export Excel pour exporter exactement ce qui est affiché)
+  function rentaLignesFiltrees(d, taux, coef, q, avecHors, tri) {
+    let lignes = calculerRentaChantiers(d, taux, coef);
+    const analyses = lignes.filter(c => !c.horsAnalyse);
+    if (!avecHors) lignes = analyses.slice();
+    if (q) lignes = lignes.filter(c => c.nom.toLowerCase().includes(q));
+    const val = (x, def) => (x === null ? def : x);
+    const tris = {
+      'renta-asc': (a, b) => val(a.renta, Infinity) - val(b.renta, Infinity),
+      'renta-desc': (a, b) => val(b.renta, -Infinity) - val(a.renta, -Infinity),
+      'marge-asc': (a, b) => val(a.marge, Infinity) - val(b.marge, Infinity),
+      'heures-desc': (a, b) => b.heures - a.heures,
+      'nom': (a, b) => a.nom.localeCompare(b.nom),
+    };
+    lignes.sort(tris[tri] || tris['renta-asc']);
+    return { lignes, analyses };
+  }
+
+  // Export Excel de la vue Rentabilité : uniquement les chantiers filtrés, dans l'ordre affiché,
+  // avec le taux et le coefficient saisis à l'écran
+  async function exportRentaFiltre(btn) {
+    const d = _rentaDonnees;
+    if (!d || d.vide) { alert('Aucune donnée à exporter.'); return; }
+    const taux = parseFloat(document.getElementById('renta-taux').value) || 0;
+    const coef = parseFloat(document.getElementById('renta-coef').value) || 0;
+    const q = (document.getElementById('renta-recherche').value || '').trim().toLowerCase();
+    const avecHors = document.getElementById('renta-hors').checked;
+    const tri = document.getElementById('renta-tri').value;
+    const { lignes } = rentaLignesFiltrees(d, taux, coef, q, avecHors, tri);
+    if (!lignes.length) { alert('Aucun chantier dans le filtre.'); return; }
+    const noms = lignes.map(c => c.nom);
+    const garder = new Set(noms);
+    const pick = obj => Object.fromEntries(Object.entries(obj || {}).filter(([k]) => garder.has(k)));
+    const orig = btn ? btn.innerHTML : '';
+    if (btn) { btn.innerHTML = '⏳'; btn.disabled = true; }
+    try {
+      const wb = await genererClasseurAnalyseChantier(
+        d.dataAnalyse.filter(r => garder.has(r.chantier)),
+        pick(d.commandesParChantier), d.peutVoirPrixExport,
+        pick(d.prixVenteParChantier), pick(d.commandesClientsParChantier),
+        { taux, coef, ordre: noms });
+      const buffer = await wb.xlsx.writeBuffer();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([buffer], { type: 'application/octet-stream' }));
+      const libPeriode = { tout: 'complet', annee: 'annee', mois: 'mois', semaine: 'semaine' }[_rentaPeriode] || _rentaPeriode;
+      a.download = 'rentabilite_chantiers_' + libPeriode + (q ? '_' + q.replace(/[^a-z0-9]+/gi, '-').slice(0, 30) : '') + '_' + dateYMD(new Date()) + '.xlsx';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) { alert('Erreur export : ' + e.message); }
+    finally { if (btn) { btn.innerHTML = orig; btn.disabled = false; } }
+  }
+
   function couleurRenta(renta) {
     if (renta === null) return '#999';
     return renta < 0 ? '#c0392b' : '#2e7d32';
@@ -15578,19 +15718,7 @@
     const avecHors = document.getElementById('renta-hors').checked;
     const tri = document.getElementById('renta-tri').value;
 
-    let lignes = calculerRentaChantiers(d, taux, coef);
-    const analyses = lignes.filter(c => !c.horsAnalyse);
-    if (!avecHors) lignes = analyses.slice();
-    if (q) lignes = lignes.filter(c => c.nom.toLowerCase().includes(q));
-    const val = (x, def) => (x === null ? def : x);
-    const tris = {
-      'renta-asc': (a, b) => val(a.renta, Infinity) - val(b.renta, Infinity),
-      'renta-desc': (a, b) => val(b.renta, -Infinity) - val(a.renta, -Infinity),
-      'marge-asc': (a, b) => val(a.marge, Infinity) - val(b.marge, Infinity),
-      'heures-desc': (a, b) => b.heures - a.heures,
-      'nom': (a, b) => a.nom.localeCompare(b.nom),
-    };
-    lignes.sort(tris[tri] || tris['renta-asc']);
+    const { lignes, analyses } = rentaLignesFiltrees(d, taux, coef, q, avecHors, tri);
 
     // Indicateurs : chantiers analysés ayant un prix de vente
     const avecPrix = analyses.filter(c => c.prix !== null);
@@ -15871,6 +15999,7 @@
     <div style="margin:0 16px 10px">
       <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier ou un chargé d'affaires…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box" />
       <select id="filtre-ca-chantiers" onchange="filtrerChantiersGestion()" style="display:none;width:100%;margin-top:8px;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box"></select>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--gris-moyen)"><input type="checkbox" id="voir-clotures-chantiers" onchange="filtrerChantiersGestion()"> 🔒 Voir uniquement les chantiers clôturés (<span id="nb-clotures-chantiers">0</span>)</label>
     </div>
     <div id="liste-chantiers-gestion"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
@@ -15902,7 +16031,7 @@
   <div id="gestion-rentabilite" style="display:none">
     <div style="margin:0 16px 10px;display:flex;align-items:center;gap:8px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">💶 Rentabilité chantiers</div>
-      <button onclick="exportFeuilleHeures(_rentaPeriode)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
+      <button onclick="exportRentaFiltre(this)" title="Exporte les chantiers affichés (filtre, tri, taux et coefficient)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
     </div>
     <div id="renta-periodes" style="margin:0 16px 10px;display:flex;gap:6px;flex-wrap:wrap"></div>
     <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--gris)">
@@ -16261,6 +16390,7 @@
           <option value="En cours">🟢 En cours</option>
           <option value="En pause">🟡 En pause</option>
           <option value="Terminé">⚫ Terminé</option>
+          <option value="Clôturé">🔒 Clôturé (masqué partout)</option>
         </select>
       </div>
       <div class="field" id="chantier-prix-vente-bloc" style="display:none">
