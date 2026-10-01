@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -13038,7 +13038,7 @@
   const TABLE_CONGES_ADMIN = '1022869';
 
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','planning-admin','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -15222,6 +15222,110 @@
     finally { btn.innerHTML = origText; btn.disabled = false; }
   } // Vue filtrée saisies des temps
 
+  // Chargement commun export Excel / vue Rentabilité : saisies + commandes fournisseurs + prix de vente EBP
+  async function chargerDonneesAnalyseChantier(dateDebut, dateFin) {
+    let allRows = [];
+    let page = 1;
+    let hasMore = true;
+    while (hasMore) {
+      let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
+        '/?user_field_names=true&size=200&page=' + page +
+        '&view_id=' + VUE_FEUILLE_HEURES;
+      if (dateDebut) url += '&filter__Date__date_after_or_equal=' + dateDebut;
+      if (dateFin) url += '&filter__Date__date_before_or_equal=' + dateFin;
+      const data = await fetchPageBaserow(url, { headers: HEADERS });
+      allRows = allRows.concat(data.results || []);
+      hasMore = !!data.next;
+      page++;
+    }
+
+    if (!allRows.length) return null;
+
+    // Construire les données pour le classeur Excel (équivalent direct de guerin_analyse_chantier.py)
+    const dataAnalyse = allRows.map(r => {
+      const date = (r['Date'] || '').split('T')[0];
+      const chantier = (r['Chantiers'] || [])[0]?.value || '(Non défini)';
+      const collab = (r['Collaborateur'] || [])[0]?.value || '(Non défini)';
+      const tache = (r['Type de taches'] || [])[0]?.value || '(Non défini)';
+      const sousTache = (r['Sous Taches'] || [])[0]?.value || '(Non défini)';
+      const heures = parseFloat(r['Heures Normales']) || 0;
+      const notes = (r['Notes'] || '').split('\n').join(' ');
+      const collabInfo = COLLABORATEURS_ADMIN.find(c => c.nom === collab);
+      const poste = collabInfo ? collabInfo.poste || '' : '';
+      return { date, chantier, collaborateur: collab, poste, tache, sousTache, heures, notes };
+    });
+
+    // Commandes fournisseurs passées pour les chantiers concernés, pour
+    // permettre une analyse globale temps passé / commandes fournisseurs.
+    // Sur les exports datés (semaine/mois/année), on ne garde que les
+    // commandes passées sur la même période ; sur "tout", on garde tout
+    // l'historique des commandes de ces chantiers.
+    const peutVoirPrixExport = await peutVoirPrixCommandes();
+    const chantiersConcernes = new Set(dataAnalyse.map(r => r.chantier));
+    const toutesCommandesExport = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200');
+    const commandesParChantier = {};
+    toutesCommandesExport.forEach(r => {
+      const chantierNom = (r['Chantier'] || [])[0]?.value;
+      if (!chantierNom || !chantiersConcernes.has(chantierNom)) return;
+      const dateCmd = (r['Date commande'] || '').split('T')[0];
+      if (dateDebut && dateCmd && dateCmd < dateDebut) return;
+      if (dateFin && dateCmd && dateCmd > dateFin) return;
+      if (!commandesParChantier[chantierNom]) commandesParChantier[chantierNom] = [];
+      commandesParChantier[chantierNom].push({
+        date: dateCmd,
+        fournisseur: r['Fournisseur'] || '',
+        numero: r['Numero commande'] || '',
+        statut: extraireValeurChamp(r['Statut'], 'En attente AR'),
+        montant: Number(r['Montant total HT']) || 0
+      });
+    });
+
+    // Prix de vente HT par chantier = champ « Prix de vente HT » de la fiche chantier, alimenté
+    // depuis EBP par le Worker (/sync-chantiers). À défaut : total HT des commandes clients EBP
+    // rattachées au chantier (hors annulées) ; sinon la cellule reste à saisir dans Excel.
+    const prixVenteParChantier = {};
+    const commandesClientsParChantier = {};
+    const diagEbp = { total: 0, sansChantier: 0, erreur: '' };
+    const sommeCmdClients = {};
+    if (peutVoirPrixExport) {
+      try {
+        const cmdClients = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200');
+        diagEbp.total = cmdClients.length;
+        diagEbp.sansChantier = cmdClients.filter(r => !(r['Chantier'] || []).length).length;
+        cmdClients.forEach(r => {
+          const nom = (r['Chantier'] || [])[0]?.value;
+          if (!nom || !chantiersConcernes.has(nom)) return;
+          const statut = extraireValeurChamp(r['Statut'], '');
+          if (/annul/i.test(statut)) return;
+          const montant = Number(String(r['Montant HT'] ?? '').replace(',', '.')) || 0;
+          if (!commandesClientsParChantier[nom]) commandesClientsParChantier[nom] = [];
+          commandesClientsParChantier[nom].push({
+            date: (r['Date commande'] || '').split('T')[0],
+            client: r['Client'] || '',
+            numero: r['Numero commande'] || '',
+            statut,
+            montant
+          });
+          sommeCmdClients[nom] = round2Ch((sommeCmdClients[nom] || 0) + montant);
+        });
+      } catch (e) { diagEbp.erreur = e.message; /* repli sur la fiche chantier */ }
+      try {
+        const chantiersRows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+        chantiersRows.forEach(c => {
+          const nom = c['Nom du chantier'];
+          const brut = c[CHAMP_PRIX_VENTE];
+          if (!nom || !chantiersConcernes.has(nom) || brut === null || brut === undefined || brut === '') return;
+          const prix = Number(String(brut).replace(',', '.'));
+          if (!isNaN(prix)) prixVenteParChantier[nom] = prix;
+        });
+      } catch (e) { /* prix non disponibles : colonne à saisir dans Excel */ }
+      // Repli : chantier sans montant EBP → total des commandes clients EBP rattachées
+      Object.entries(sommeCmdClients).forEach(([nom, m]) => { if (!(nom in prixVenteParChantier)) prixVenteParChantier[nom] = m; });
+    }
+
+    return { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp };
+  }
+
   async function exportFeuilleHeures(periode) {
     const btn = event.target.closest('button');
     const origText = btn.innerHTML;
@@ -15255,104 +15359,9 @@
         nomFichier = 'analyse_chantiers_complet_' + dateYMD(now);
       }
 
-      let allRows = [];
-      let page = 1;
-      let hasMore = true;
-      while (hasMore) {
-        let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
-          '/?user_field_names=true&size=200&page=' + page +
-          '&view_id=' + VUE_FEUILLE_HEURES;
-        if (dateDebut) url += '&filter__Date__date_after_or_equal=' + dateDebut;
-        if (dateFin) url += '&filter__Date__date_before_or_equal=' + dateFin;
-        const data = await fetchPageBaserow(url, { headers: HEADERS });
-        allRows = allRows.concat(data.results || []);
-        hasMore = !!data.next;
-        page++;
-      }
-
-      if (!allRows.length) { alert('Aucune saisie pour cette période.'); return; }
-
-      // Construire les données pour le classeur Excel (équivalent direct de guerin_analyse_chantier.py)
-      const dataAnalyse = allRows.map(r => {
-        const date = (r['Date'] || '').split('T')[0];
-        const chantier = (r['Chantiers'] || [])[0]?.value || '(Non défini)';
-        const collab = (r['Collaborateur'] || [])[0]?.value || '(Non défini)';
-        const tache = (r['Type de taches'] || [])[0]?.value || '(Non défini)';
-        const sousTache = (r['Sous Taches'] || [])[0]?.value || '(Non défini)';
-        const heures = parseFloat(r['Heures Normales']) || 0;
-        const notes = (r['Notes'] || '').split('\n').join(' ');
-        const collabInfo = COLLABORATEURS_ADMIN.find(c => c.nom === collab);
-        const poste = collabInfo ? collabInfo.poste || '' : '';
-        return { date, chantier, collaborateur: collab, poste, tache, sousTache, heures, notes };
-      });
-
-      // Commandes fournisseurs passées pour les chantiers concernés, pour
-      // permettre une analyse globale temps passé / commandes fournisseurs.
-      // Sur les exports datés (semaine/mois/année), on ne garde que les
-      // commandes passées sur la même période ; sur "tout", on garde tout
-      // l'historique des commandes de ces chantiers.
-      const peutVoirPrixExport = await peutVoirPrixCommandes();
-      const chantiersConcernes = new Set(dataAnalyse.map(r => r.chantier));
-      const toutesCommandesExport = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200');
-      const commandesParChantier = {};
-      toutesCommandesExport.forEach(r => {
-        const chantierNom = (r['Chantier'] || [])[0]?.value;
-        if (!chantierNom || !chantiersConcernes.has(chantierNom)) return;
-        const dateCmd = (r['Date commande'] || '').split('T')[0];
-        if (dateDebut && dateCmd && dateCmd < dateDebut) return;
-        if (dateFin && dateCmd && dateCmd > dateFin) return;
-        if (!commandesParChantier[chantierNom]) commandesParChantier[chantierNom] = [];
-        commandesParChantier[chantierNom].push({
-          date: dateCmd,
-          fournisseur: r['Fournisseur'] || '',
-          numero: r['Numero commande'] || '',
-          statut: extraireValeurChamp(r['Statut'], 'En attente AR'),
-          montant: Number(r['Montant total HT']) || 0
-        });
-      });
-
-      // Prix de vente HT par chantier = champ « Prix de vente HT » de la fiche chantier, alimenté
-      // depuis EBP par le Worker (/sync-chantiers). À défaut : total HT des commandes clients EBP
-      // rattachées au chantier (hors annulées) ; sinon la cellule reste à saisir dans Excel.
-      const prixVenteParChantier = {};
-      const commandesClientsParChantier = {};
-      const diagEbp = { total: 0, sansChantier: 0, erreur: '' };
-      const sommeCmdClients = {};
-      if (peutVoirPrixExport) {
-        try {
-          const cmdClients = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200');
-          diagEbp.total = cmdClients.length;
-          diagEbp.sansChantier = cmdClients.filter(r => !(r['Chantier'] || []).length).length;
-          cmdClients.forEach(r => {
-            const nom = (r['Chantier'] || [])[0]?.value;
-            if (!nom || !chantiersConcernes.has(nom)) return;
-            const statut = extraireValeurChamp(r['Statut'], '');
-            if (/annul/i.test(statut)) return;
-            const montant = Number(String(r['Montant HT'] ?? '').replace(',', '.')) || 0;
-            if (!commandesClientsParChantier[nom]) commandesClientsParChantier[nom] = [];
-            commandesClientsParChantier[nom].push({
-              date: (r['Date commande'] || '').split('T')[0],
-              client: r['Client'] || '',
-              numero: r['Numero commande'] || '',
-              statut,
-              montant
-            });
-            sommeCmdClients[nom] = round2Ch((sommeCmdClients[nom] || 0) + montant);
-          });
-        } catch (e) { diagEbp.erreur = e.message; /* repli sur la fiche chantier */ }
-        try {
-          const chantiersRows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
-          chantiersRows.forEach(c => {
-            const nom = c['Nom du chantier'];
-            const brut = c[CHAMP_PRIX_VENTE];
-            if (!nom || !chantiersConcernes.has(nom) || brut === null || brut === undefined || brut === '') return;
-            const prix = Number(String(brut).replace(',', '.'));
-            if (!isNaN(prix)) prixVenteParChantier[nom] = prix;
-          });
-        } catch (e) { /* prix non disponibles : colonne à saisir dans Excel */ }
-        // Repli : chantier sans montant EBP → total des commandes clients EBP rattachées
-        Object.entries(sommeCmdClients).forEach(([nom, m]) => { if (!(nom in prixVenteParChantier)) prixVenteParChantier[nom] = m; });
-      }
+      const donnees = await chargerDonneesAnalyseChantier(dateDebut, dateFin);
+      if (!donnees) { alert('Aucune saisie pour cette période.'); return; }
+      const { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp } = donnees;
 
       const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesParChantier, peutVoirPrixExport, prixVenteParChantier, commandesClientsParChantier);
 
@@ -15477,10 +15486,183 @@
     finally { btn.textContent = '📥 ' + nom; btn.disabled = false; }
   }
 
+
+  // ── VUE RENTABILITÉ CHANTIERS (même calcul que l'export Excel) ──
+  let _rentaPeriode = 'tout';
+  let _rentaDonnees = null;
+  const _rentaOuverts = new Set();
+  const RENTA_PERIODES = [['tout', 'Tout'], ['annee', 'Année'], ['mois', 'Mois'], ['semaine', 'Semaine']];
+
+  function bornesPeriodeRenta(periode) {
+    const now = new Date();
+    if (periode === 'semaine') {
+      const lundi = new Date(now); const d = lundi.getDay();
+      lundi.setDate(now.getDate() - (d === 0 ? 6 : d - 1));
+      const ven = new Date(lundi); ven.setDate(lundi.getDate() + 4);
+      return [dateYMD(lundi), dateYMD(ven)];
+    }
+    if (periode === 'mois') return [dateYMD(new Date(now.getFullYear(), now.getMonth(), 1)), dateYMD(new Date(now.getFullYear(), now.getMonth() + 1, 0))];
+    if (periode === 'annee') return [now.getFullYear() + '-01-01', now.getFullYear() + '-12-31'];
+    return [null, null];
+  }
+
+  function escRenta(t) { return String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function eurRenta(n) { return (n === null || n === undefined || n === '') ? '—' : Number(n).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €'; }
+  function hRenta(n) { return (Math.round((n || 0) * 10) / 10).toLocaleString('fr-FR') + ' h'; }
+
+  async function chargerRentabilite(periode) {
+    _rentaPeriode = periode || 'tout';
+    _rentaOuverts.clear();
+    renderPeriodesRenta();
+    const liste = document.getElementById('renta-liste');
+    document.getElementById('renta-kpis').innerHTML = '';
+    liste.innerHTML = '<div class="feuille-empty">⏳ Chargement des saisies, commandes et prix de vente…</div>';
+    try {
+      const [deb, fin] = bornesPeriodeRenta(_rentaPeriode);
+      _rentaDonnees = await chargerDonneesAnalyseChantier(deb, fin) || { vide: true };
+      renderRentabilite();
+    } catch (e) {
+      _rentaDonnees = null;
+      liste.innerHTML = '<div class="feuille-empty" style="color:#c0392b">Erreur de chargement : ' + escRenta(e.message) + '</div>';
+    }
+  }
+
+  function renderPeriodesRenta() {
+    const el = document.getElementById('renta-periodes');
+    if (!el) return;
+    el.innerHTML = RENTA_PERIODES.map(([k, lib]) => `<button onclick="chargerRentabilite('${k}')" style="padding:6px 12px;border-radius:16px;border:1.5px solid ${k === _rentaPeriode ? 'var(--vert)' : '#ddd5c5'};background:${k === _rentaPeriode ? 'var(--vert)' : '#fff'};color:${k === _rentaPeriode ? '#fff' : 'var(--gris)'};font-size:12px;font-weight:600;cursor:pointer">${lib}</button>`).join('')
+      + `<button onclick="chargerRentabilite(_rentaPeriode)" title="Recharger" style="padding:6px 10px;border-radius:16px;border:1.5px solid #ddd5c5;background:#fff;font-size:12px;cursor:pointer">🔄</button>`;
+  }
+
+  function calculerRentaChantiers(d, taux, coef) {
+    const parChantier = {};
+    d.dataAnalyse.forEach(r => {
+      if (!parChantier[r.chantier]) parChantier[r.chantier] = { nom: r.chantier, heures: 0, nbSaisies: 0, taches: {}, collabs: new Set() };
+      const c = parChantier[r.chantier];
+      c.heures += r.heures; c.nbSaisies++;
+      c.taches[r.tache] = (c.taches[r.tache] || 0) + r.heures;
+      if (r.collaborateur) c.collabs.add(r.collaborateur);
+    });
+    return Object.values(parChantier).map(c => {
+      const horsAnalyse = !estChantierAnalyse(c.nom);
+      const cmds = d.commandesParChantier[c.nom] || [];
+      const commandes = cmds.reduce((s, x) => s + x.montant, 0);
+      const mo = c.heures * taux;
+      const cout = (mo + commandes) * coef;
+      const pv = d.prixVenteParChantier[c.nom];
+      const prix = (!horsAnalyse && typeof pv === 'number' && !isNaN(pv)) ? pv : null;
+      const renta = prix !== null ? prix - cout : null;
+      const marge = prix ? renta / prix : null;
+      return { ...c, horsAnalyse, cmds, commandes, mo, cout, prix, renta, marge, cmdClients: d.commandesClientsParChantier[c.nom] || [] };
+    });
+  }
+
+  function couleurRenta(renta) {
+    if (renta === null) return '#999';
+    return renta < 0 ? '#c0392b' : '#2e7d32';
+  }
+
+  function renderRentabilite() {
+    renderPeriodesRenta();
+    const d = _rentaDonnees;
+    const liste = document.getElementById('renta-liste');
+    const kpis = document.getElementById('renta-kpis');
+    const avert = document.getElementById('renta-avert');
+    if (!d || !liste) return;
+    if (d.vide) { kpis.innerHTML = ''; avert.style.display = 'none'; liste.innerHTML = '<div class="feuille-empty">Aucune saisie sur cette période.</div>'; return; }
+    if (!d.peutVoirPrixExport) { kpis.innerHTML = ''; liste.innerHTML = '<div class="feuille-empty">Votre compte n\'a pas le droit « Voir prix commandes ».</div>'; return; }
+
+    const taux = parseFloat(document.getElementById('renta-taux').value) || 0;
+    const coef = parseFloat(document.getElementById('renta-coef').value) || 0;
+    const q = (document.getElementById('renta-recherche').value || '').trim().toLowerCase();
+    const avecHors = document.getElementById('renta-hors').checked;
+    const tri = document.getElementById('renta-tri').value;
+
+    let lignes = calculerRentaChantiers(d, taux, coef);
+    const analyses = lignes.filter(c => !c.horsAnalyse);
+    if (!avecHors) lignes = analyses.slice();
+    if (q) lignes = lignes.filter(c => c.nom.toLowerCase().includes(q));
+    const val = (x, def) => (x === null ? def : x);
+    const tris = {
+      'renta-asc': (a, b) => val(a.renta, Infinity) - val(b.renta, Infinity),
+      'renta-desc': (a, b) => val(b.renta, -Infinity) - val(a.renta, -Infinity),
+      'marge-asc': (a, b) => val(a.marge, Infinity) - val(b.marge, Infinity),
+      'heures-desc': (a, b) => b.heures - a.heures,
+      'nom': (a, b) => a.nom.localeCompare(b.nom),
+    };
+    lignes.sort(tris[tri] || tris['renta-asc']);
+
+    // Indicateurs : chantiers analysés ayant un prix de vente
+    const avecPrix = analyses.filter(c => c.prix !== null);
+    const totPrix = avecPrix.reduce((s, c) => s + c.prix, 0);
+    const totCout = avecPrix.reduce((s, c) => s + c.cout, 0);
+    const totRenta = totPrix - totCout;
+    const nbDeficit = avecPrix.filter(c => c.renta < 0).length;
+    const sansPrix = analyses.length - avecPrix.length;
+    const tuile = (lib, v, coul) => `<div style="flex:1;min-width:120px;background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;padding:10px 12px"><div style="font-size:10px;color:var(--gris-moyen);text-transform:uppercase;letter-spacing:.4px;font-weight:700">${lib}</div><div style="font-size:17px;font-weight:800;color:${coul || 'var(--gris)'};margin-top:2px">${v}</div></div>`;
+    kpis.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${tuile('Prix de vente', eurRenta(totPrix))}
+      ${tuile('Coût de revient', eurRenta(totCout))}
+      ${tuile('Rentabilité', eurRenta(totRenta), couleurRenta(totRenta))}
+      ${tuile('Marge', totPrix ? (totRenta / totPrix * 100).toFixed(1) + ' %' : '—', couleurRenta(totRenta))}
+    </div>
+    <div style="font-size:11px;color:var(--gris-moyen);margin-top:6px">${avecPrix.length} chantier(s) analysé(s)${nbDeficit ? ` · <b style="color:#c0392b">${nbDeficit} déficitaire(s)</b>` : ''}${sansPrix ? ` · ${sansPrix} sans prix de vente` : ''} · coût = (heures × ${taux} € + commandes) × ${coef}</div>`;
+
+    if (_rentaPeriode !== 'tout') {
+      avert.style.display = 'block';
+      avert.textContent = '⚠️ Sur une période, heures et commandes sont partielles alors que le prix de vente est celui du chantier complet : la rentabilité n\'est fiable que sur « Tout ».';
+    } else avert.style.display = 'none';
+
+    if (!lignes.length) { liste.innerHTML = '<div class="feuille-empty">Aucun chantier.</div>'; return; }
+    liste.innerHTML = lignes.map(c => {
+      const id = encodeURIComponent(c.nom);
+      const ouvert = _rentaOuverts.has(c.nom);
+      const coul = couleurRenta(c.renta);
+      const conso = c.prix ? Math.min(c.cout / c.prix, 1.5) : null;
+      const badge = c.horsAnalyse ? '<span style="font-size:10px;color:#999;font-style:italic">Hors analyse</span>'
+        : c.prix === null ? '<span style="font-size:10px;font-weight:700;color:#856404;background:#fef3cd;border-radius:8px;padding:2px 7px">Sans prix</span>'
+        : `<span style="font-size:12px;font-weight:800;color:#fff;background:${coul};border-radius:8px;padding:2px 8px">${(c.marge * 100).toFixed(1)} %</span>`;
+      const chiffre = (lib, v, coulV) => `<div style="min-width:0"><div style="font-size:9px;color:var(--gris-moyen);text-transform:uppercase;font-weight:700">${lib}</div><div style="font-size:12px;font-weight:700;color:${coulV || 'var(--gris)'};white-space:nowrap">${v}</div></div>`;
+      const detail = ouvert ? `
+        <div style="margin-top:10px;border-top:1px dashed #e5ded0;padding-top:8px;font-size:11px;color:var(--gris)">
+          <div style="font-weight:700;margin-bottom:4px">⏱️ Heures par tâche</div>
+          ${Object.entries(c.taches).sort((a, b) => b[1] - a[1]).map(([t, h]) => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px dotted #eee"><span>${escRenta(t)}</span><span>${hRenta(h)} · ${eurRenta(h * taux)}</span></div>`).join('')}
+          <div style="color:var(--gris-moyen);margin-top:4px">👷 ${escRenta([...c.collabs].sort().join(', '))}</div>
+          ${c.cmds.length ? `<div style="font-weight:700;margin:8px 0 4px">📦 Commandes fournisseurs (${c.cmds.length})</div>
+            ${c.cmds.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.fournisseur)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
+          ${c.cmdClients.length ? `<div style="font-weight:700;margin:8px 0 4px">🧾 Commandes clients EBP (${c.cmdClients.length})</div>
+            ${c.cmdClients.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.client)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
+        </div>` : '';
+      return `<div onclick="toggleRentaChantier('${id}')" style="cursor:pointer;background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;border-left:4px solid ${c.horsAnalyse ? '#ccc' : coul};padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:13px;font-weight:700;color:var(--gris);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ouvert ? '▾' : '▸'} ${escRenta(c.nom)}</div>
+          ${badge}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:6px;margin-top:8px">
+          ${chiffre('Heures', hRenta(c.heures))}
+          ${chiffre('Main d\'œuvre', eurRenta(c.mo))}
+          ${chiffre('Commandes', eurRenta(c.commandes))}
+          ${chiffre('Coût revient', eurRenta(c.cout))}
+          ${chiffre('Prix vente', c.horsAnalyse ? '—' : eurRenta(c.prix))}
+          ${chiffre('Rentabilité', c.renta === null ? '—' : eurRenta(c.renta), coul)}
+        </div>
+        ${conso !== null ? `<div style="margin-top:8px;height:6px;background:#eee;border-radius:3px;overflow:hidden" title="Coût de revient / prix de vente"><div style="height:100%;width:${Math.min(conso, 1) * 100}%;background:${conso > 1 ? '#c0392b' : conso > 0.85 ? '#e67e22' : '#4a7c3f'}"></div></div>
+        <div style="font-size:10px;color:var(--gris-moyen);margin-top:2px">${Math.round(c.cout / c.prix * 100)} % du prix de vente consommé</div>` : ''}
+        ${detail}
+      </div>`;
+    }).join('');
+  }
+
+  function toggleRentaChantier(idEnc) {
+    const nom = decodeURIComponent(idEnc);
+    if (_rentaOuverts.has(nom)) _rentaOuverts.delete(nom); else _rentaOuverts.add(nom);
+    renderRentabilite();
+  }
+
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','planning-admin','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -15489,6 +15671,7 @@
     if (tab === 'utilisateurs') loadUtilisateurs();
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
+    if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
     if (tab === 'export') {
       chargerSelectCollaborateursExport();
       initExportCongesSelects();
@@ -15658,6 +15841,7 @@
     <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
     <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
+    <button class="tab-btn" id="tab-g-rentabilite" onclick="switchGestionTab('rentabilite')" style="font-size:11px">💶 Renta</button>
     <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
   </div>
 
@@ -15715,6 +15899,32 @@
   </div>
 
   <!-- EXPORT -->
+  <div id="gestion-rentabilite" style="display:none">
+    <div style="margin:0 16px 10px;display:flex;align-items:center;gap:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--gris)">💶 Rentabilité chantiers</div>
+      <button onclick="exportFeuilleHeures(_rentaPeriode)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
+    </div>
+    <div id="renta-periodes" style="margin:0 16px 10px;display:flex;gap:6px;flex-wrap:wrap"></div>
+    <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--gris)">
+      <label style="display:flex;align-items:center;gap:4px">Taux <input id="renta-taux" type="number" step="1" min="0" value="50" oninput="renderRentabilite()" style="width:60px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"> €/h</label>
+      <label style="display:flex;align-items:center;gap:4px">Coef <input id="renta-coef" type="number" step="0.05" min="0" value="1.2" oninput="renderRentabilite()" style="width:56px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"></label>
+    </div>
+    <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="renta-recherche" type="search" placeholder="🔍 Rechercher un chantier…" oninput="renderRentabilite()" style="flex:1;min-width:150px;padding:8px 10px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px;background:var(--beige-clair);outline:none">
+      <select id="renta-tri" onchange="renderRentabilite()" style="padding:8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:var(--beige-clair);color:var(--gris)">
+        <option value="renta-asc">Rentabilité ↑ (pires d'abord)</option>
+        <option value="renta-desc">Rentabilité ↓</option>
+        <option value="marge-asc">Marge % ↑</option>
+        <option value="heures-desc">Heures ↓</option>
+        <option value="nom">Nom</option>
+      </select>
+      <label style="font-size:11px;color:var(--gris-moyen);display:flex;align-items:center;gap:4px"><input type="checkbox" id="renta-hors" onchange="renderRentabilite()"> Hors analyse</label>
+    </div>
+    <div id="renta-avert" style="display:none;margin:0 16px 10px;font-size:11px;color:#856404;background:#fef3cd;border-radius:8px;padding:6px 10px"></div>
+    <div id="renta-kpis" style="margin:0 16px 12px"></div>
+    <div id="renta-liste" style="margin:0 16px 20px"></div>
+  </div>
+
   <div id="gestion-export" style="display:none">
     <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Exports</div>
     <div style="margin:0 16px;display:flex;flex-direction:column;gap:14px">
