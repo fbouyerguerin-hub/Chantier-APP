@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1251,7 +1251,7 @@
     document.getElementById('modal-veh-onglets').style.display = key === 'Vehicules' ? 'flex' : 'none';
     if (key === 'Vehicules') {
       const cur = getCurrentValue();
-      ongletVehSaisie = (cur && cur.value && !estImmatricule(cur.value)) ? 'autre' : 'immat';
+      ongletVehSaisie = (cur && cur.value && !estDansOngletImmatSaisie(cur.value)) ? 'autre' : 'immat';
     }
     const chantierSelectionne = globalSelected['Chantiers'];
     if ((key === 'TypeTaches' || key === 'SousTaches') && chantierSelectionne) {
@@ -9717,13 +9717,18 @@
     renderModalOptions();
   }
 
+  // Saisie des temps : « Aucun » est affiché en tête du 1er onglet (Immatriculés) pour aller plus vite
+  function estVehAucun(label) { return /^\s*aucun/i.test(String(label || '')); }
+  function estDansOngletImmatSaisie(label) { return estImmatricule(label) || estVehAucun(label); }
+
   function filtrerOngletVehSaisie(options) {
     const tous = tableData['Vehicules'] || [];
     const bar = document.getElementById('modal-veh-onglets');
     if (bar) bar.innerHTML = htmlOngletsVeh(ongletVehSaisie,
-      tous.filter(o => estImmatricule(o.value)).length, tous.filter(o => !estImmatricule(o.value)).length,
+      tous.filter(o => estDansOngletImmatSaisie(o.value)).length, tous.filter(o => !estDansOngletImmatSaisie(o.value)).length,
       'changerOngletVehSaisie');
-    return options.filter(o => (ongletVehSaisie === 'immat') === estImmatricule(o.value));
+    const res = options.filter(o => (ongletVehSaisie === 'immat') === estDansOngletImmatSaisie(o.value));
+    return res.filter(o => estVehAucun(o.value)).concat(res.filter(o => !estVehAucun(o.value)));
   }
 
   // Modale véhicule(s) du planning collectif (multi-sélection : on masque, on ne reconstruit pas)
