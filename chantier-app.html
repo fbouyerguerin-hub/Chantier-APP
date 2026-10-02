@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4295,6 +4295,22 @@
     });
   }
 
+  async function chargerBonCommandeAffaire(chantierId) {
+    const zone = () => document.getElementById('modal-affectation-detail-bdc');
+    try {
+      const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantierId + '/?user_field_names=true', { headers: HEADERS });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const fichiers = (await res.json())['Fichiers'] || [];
+      const z = zone(); if (!z) return;
+      z.innerHTML = fichiers.length
+        ? fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:flex;align-items:center;gap:8px;background:#fff3cd;border:1.5px solid #c8a96e;border-radius:8px;padding:9px 12px;font-size:14px;font-weight:700;color:#7a5c1e;text-decoration:none;margin-bottom:6px;word-break:break-word">📄 ${echapperHTMLAff(f.visible_name || f.name || 'Document')}</a>`).join('')
+        : 'Aucun bon de commande joint à ce chantier';
+    } catch (e) {
+      console.error('Erreur chargement bon de commande affaire', e);
+      const z = zone(); if (z) z.textContent = 'Erreur de chargement';
+    }
+  }
+
   // Affiche le détail de l'affectation (commentaire, fichiers, commandes) dans une modale à l'intérieur
   // de l'appli, sur le même modèle que la modale "Commandes" (plutôt qu'une fenêtre séparée).
   async function ouvrirAffectationFenetre(index) {
@@ -4312,6 +4328,7 @@
     const content = document.getElementById('modal-affectation-detail-content');
     content.innerHTML = `
       <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes ? linkifierTexteNote(r.notes) : '—'}</div></div>
+      <div class="bloc-detail-aff"><div class="label-detail-aff">📄 Bon de commande de l'affaire</div><div id="modal-affectation-detail-bdc" style="font-size:13px;color:#aaa">${r.chantierId ? 'Chargement…' : '—'}</div></div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📦 Commandes</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
     `;
@@ -4322,6 +4339,10 @@
       document.head.appendChild(style);
     }
     document.getElementById('modal-affectation-detail').style.display = 'flex';
+
+    // Bon de commande de l'affaire Guérin = pièces jointes de la fiche chantier
+    // (champ "Fichiers" de TABLE_CHANTIERS_ADMIN), accessibles à tous les rôles.
+    if (r.chantierId) chargerBonCommandeAffaire(r.chantierId);
 
     if (r.chantierId) {
       try {
