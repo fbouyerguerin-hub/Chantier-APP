@@ -5,7 +5,8 @@
  * Périmètre : commandes fournisseurs depuis le 01/09/2026
  * Sync toutes les 30 min (cron) + bouton manuel (/sync)
  * Répertoire : clients + fournisseurs EBP → Baserow (/sync-contacts, + cron)
- * Chantiers : montant HT des chantiers EBP → Baserow « Prix de vente HT » (/sync-chantiers, + cron)
+ * Articles   : catalogue EBP (table Item) → KV du Worker (/sync-articles, + cron)
+ *              recherche /articles/search?q=… et /articles/get?codes=… (clé APP_KEY)
  */
 
 const EBP_AUTH_URL     = "https://api-login.ebp.com/connect/authorize";
@@ -52,14 +53,19 @@ export default {
     const cors = {
       "Access-Control-Allow-Origin":  "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-App-Key",
     };
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
     try {
-      if (url.pathname === "/health") return json({ status: "ok", version: "v7-chantiers" }, cors);
+      if (url.pathname === "/health") return json({ status: "ok", version: "v7.3" }, cors);
       if (url.pathname === "/auth")   return handleAuth(url, env);
       if (url.pathname === "/auth/callback") return handleCallback(url, env);
+      // Toutes les autres routes (synchros, catalogue, diagnostic) exigent la clé
+      // APP_KEY : en-tête X-App-Key (appli) ou ?key=… (test depuis un navigateur).
+      // /health, /auth et /auth/callback restent ouvertes (connexion OAuth EBP).
+      if (!env.APP_KEY) return json({ error: "APP_KEY non configurée sur le Worker" }, cors, 503);
+      if (!cleAppValide(request, url, env)) return json({ error: "Accès refusé (clé APP_KEY manquante ou invalide)" }, cors, 401);
       if (url.pathname === "/sync") {
         const updateDate = url.searchParams.get("updateDate") !== "0";
         const test = url.searchParams.get("test") === "1";
@@ -72,16 +78,26 @@ export default {
         const full = url.searchParams.get("full") === "1"; // resynchronise tout depuis DATE_DEBUT
         return json(await syncClients(env, updateDate, test, typeOverride, full), cors);
       }
-      if (url.pathname === "/sync-chantiers") {
-        const full = url.searchParams.get("full") === "1"; // relit tous les chantiers EBP
-        const test = url.searchParams.get("test") === "1"; // aperçu des montants EBP, aucune écriture
-        const code = url.searchParams.get("code") || "";    // test : chantier à afficher (ex. CH1187)
-        return json(await syncMontantsChantiers(env, { full, test, code }), cors);
-      }
       if (url.pathname === "/sync-contacts") {
         const full = url.searchParams.get("full") === "1"; // relit tous les tiers EBP
         const test = url.searchParams.get("test") === "1"; // aperçu des champs EBP, aucune écriture
         return json(await syncRepertoire(env, { full, test }), cors);
+      }
+      if (url.pathname === "/articles/search" || url.pathname === "/articles/get") {
+        const cat = await lireCatalogue(env);
+        if (url.pathname === "/articles/search") {
+          const limite = Math.min(100, parseInt(url.searchParams.get("limit")) || 30);
+          return json({ maj: cat.maj, total: cat.items.length, results: rechercherCatalogue(cat, url.searchParams.get("q") || "", limite) }, cors);
+        }
+        const codes = new Set((url.searchParams.get("codes") || "").split(",").map(c => c.trim()).filter(Boolean));
+        return json({ results: cat.items.filter(x => codes.has(x.c)).map(cataloguePublic) }, cors);
+      }
+      if (url.pathname === "/sync-articles") {
+        const full = url.searchParams.get("full") === "1"; // relit toute la table Item
+        const test = url.searchParams.get("test") === "1"; // aperçu des champs EBP, aucune écriture
+        const restart = url.searchParams.get("restart") === "1"; // abandonne un import complet en cours et repart de zéro
+        const pages = Math.max(1, Math.min(20, parseInt(url.searchParams.get("pages")) || ART_PAGES_PAR_APPEL));
+        return json(await syncArticles(env, { full, test, restart, pages }), cors);
       }
       // ⚠️ TEMPORAIRE (découverte du champ statut chantier dans EBP) — à supprimer ensuite.
       // Ex : /ebp-test?path=ConstructionSites  → 2 premiers enregistrements, toutes clés visibles.
@@ -112,7 +128,7 @@ export default {
     ctx.waitUntil((async () => {
       try { await sync(env); } catch (e) { console.error("sync:", e.message); }
       try { await syncRepertoire(env); } catch (e) { console.error("syncRepertoire:", e.message); }
-      try { await syncMontantsChantiers(env); } catch (e) { console.error("syncMontantsChantiers:", e.message); }
+      try { await syncArticles(env, { pages: 2 }); } catch (e) { console.error("syncArticles:", e.message); }
     })());
   }
 };
@@ -891,156 +907,303 @@ async function syncRepertoire(env, { full = false, test = false } = {}) {
   return { mode: full || !depuis ? 'complet' : 'incrémental', tiers_lus: lus, contacts_crees: aCreer.length, contacts_maj: aMaj.length, inchanges, erreurs };
 }
 
+// ============================================================
+// CATALOGUE ARTICLES : table EBP « Item » → stockage KV du Worker
+//   (recherche par /articles/search, /articles/get) + mise à jour des
+//   articles en stock dans Baserow « Articles ».
+//   ⚠️ Routes protégées par le secret APP_KEY (Cloudflare › Worker ›
+//   Settings › Variables › Secret), même valeur que WORKER_APP_KEY dans l'appli.
+// ------------------------------------------------------------
+// • EBP = catalogue (désignation, code, famille, unité, fournisseur, PA).
+//   L'appli gère le stock et les emplacements : Zone, Rayon, Plan_X, Plan_Y,
+//   Stock mini ne sont JAMAIS écrits ici.
+// • Clé = « Code EBP » (= Item.Id = ItemId des lignes de commande, déjà
+//   stocké dans « Reference fournisseur » de la table 1179061).
+// • Un article créé par l'appli à la réception (Origine = « Commande ») avec
+//   le même code est simplement mis à jour → il passe en Origine « EBP » en
+//   gardant stock et emplacement (compté dans « rattaches »).
+// • Incrémental (KV last_sync_date_articles) ; ?full=1 relit tout ;
+//   ?test=1 = aperçu des champs EBP + répartition par type, sans écriture.
+// ============================================================
+const BASEROW_TABLE_ART = "1237462"; // ⚠️ ID de la table Baserow « Articles »
+const LAST_SYNC_KEY_ARTICLES = "last_sync_date_articles";
+const LAST_FULL_KEY_ARTICLES = "last_full_sync_articles";
+// Relecture complète automatique tous les N jours : rattache les articles
+// créés par l'appli à la réception dont la fiche EBP n'a pas bougé depuis
+// (une synchro incrémentale ne les verrait jamais).
+const ART_FULL_TOUS_LES_JOURS = 7;
+// Types d'articles EBP à ignorer (valeurs de ItemType vues avec ?test=1).
+// ✅ Test du 03/10/2026 : 0 = bien, 1 = prestation → les prestations sont exclues.
+const ART_TYPES_EXCLUS = ["1"];
+// Import complet découpé en tranches : chaque appel lit N pages de 100 articles
+// (la table Item contient des images et textes RTF, trop lourds en un seul appel).
+const ART_PAGES_PAR_APPEL = 4;
+const KV_CATALOGUE_TMP = "catalogue_articles_en_cours";
+const KV_ART_FULL_ETAT = "sync_articles_full_etat";
+const KV_ART_LIBELLES = "articles_index_libelles";
+const CHAMPS_CATALOGUE_ART = ["Designation", "Fournisseur", "Reference fournisseur", "Famille", "Unite", "Prix achat HT", "Actif", "Origine"];
+
+async function lirePageEbp(env, token, table, offset, depuis = null, limit = 100) {
+  const params = new URLSearchParams({ TableName: table, OrderByValue: "Id", Offset: String(offset), Limit: String(limit) });
+  if (depuis) params.set("FromModifiedDate", depuis);
+  const r = await fetch(`${EBP_API_BASE}/Folders/${env.EBP_FOLDER_ID}/GenericQuery?${params}`, {
+    headers: { "Authorization": `Bearer ${token}`, "ebp-subscription-key": env.EBP_SUBSCRIPTION_KEY },
+  });
+  if (!r.ok) throw new Error(`EBP ${table} ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  const d = await r.json();
+  const lot = d.results || [];
+  return { lot, total: d.paging?.total ?? null };
+}
+
+async function lireIndexLibelles(env, token, table) {
+  // Id → libellé (familles, fournisseurs), lu page par page sans garder les fiches
+  // complètes en mémoire. Silencieux si la table n'est pas autorisée.
+  const idx = {};
+  try {
+    let offset = 0;
+    while (true) {
+      const { lot, total } = await lirePageEbp(env, token, table, offset);
+      for (const r of lot) {
+        const id = champEbp(r, ["Id"]);
+        if (id) idx[id] = champEbp(r, ["Caption", "Name"]) || id;
+      }
+      offset += lot.length;
+      if (!lot.length || offset >= (total ?? offset)) break;
+    }
+  } catch (e) { /* table non autorisée : libellés = codes */ }
+  return idx;
+}
+
+async function indexLibellesArticles(env, token, rafraichir = false) {
+  if (!rafraichir) {
+    const raw = await env.EBP_TOKENS.get(KV_ART_LIBELLES);
+    if (raw) return JSON.parse(raw);
+  }
+  const idx = { familles: await lireIndexLibelles(env, token, "ItemFamily"), fournisseurs: await lireIndexLibelles(env, token, "Supplier") };
+  await env.EBP_TOKENS.put(KV_ART_LIBELLES, JSON.stringify(idx));
+  return idx;
+}
+
+// Fiche EBP brute → entrée compacte du catalogue (null si exclue)
+function recVersCatalogue(rec, libelles, res) {
+  const type = champEbp(rec, ["ItemType", "Type"]);
+  if (ART_TYPES_EXCLUS.includes(String(type))) { res.ignores++; return null; }
+  const a = itemVersArticle(rec, libelles.familles || {}, libelles.fournisseurs || {});
+  return a["Code EBP"] ? versCatalogue(a) : null;
+}
+
+function itemVersArticle(rec, familles, fournisseurs) {
+  const code = champEbp(rec, ["Id"]);
+  const famId = champEbp(rec, ["FamilyId", "ItemFamilyId"]);
+  const fouId = champEbp(rec, ["SupplierId", "MainSupplierId"]);
+  const prix = parseFloat(champEbp(rec, ["PurchasePrice", "CostPrice", "PurchasePriceVatExcluded"]).replace(",", "."));
+  const actif = champEbp(rec, ["ActiveState"]);
+  return {
+    "Code EBP": code,
+    "Designation": (champEbp(rec, ["Caption", "DescriptionClear", "Description"]) || code).slice(0, 250),
+    "Reference fournisseur": champEbp(rec, ["SupplierItemReference", "MainSupplierItemReference", "SupplierReference"]),
+    "Fournisseur": fouId ? (fournisseurs[fouId] || fouId) : "",
+    "Famille": famId ? (familles[famId] || famId) : champEbp(rec, ["FamilyCaption"]),
+    "Unite": champEbp(rec, ["UnitId", "Unit"]),
+    "Prix achat HT": isNaN(prix) ? null : prix,
+    "Actif": actif === "" || Number(actif) === 0, // ✅ même convention que les tiers : 0 = actif
+    "Origine": "EBP",
+  };
+}
+
+// ── Catalogue complet stocké dans KV (pas dans Baserow) ──────────────────
+// Format compact : { maj, items: [{ c: code, d: désignation, r: réf. fourn.,
+// f: fournisseur, fa: famille, u: unité, p: prix achat, a: 1 actif / 0 }] }.
+// Baserow « Articles » ne contient que les articles réellement en stock
+// (créés par l'appli) : le Worker y met à jour leurs champs catalogue.
+const KV_CATALOGUE = "catalogue_articles";
+let _catalogueMemo = null, _catalogueMemoT = 0;
+
+function versCatalogue(a) {
+  return { c: a["Code EBP"], d: a["Designation"], r: a["Reference fournisseur"], f: a["Fournisseur"],
+           fa: a["Famille"], u: a["Unite"], p: a["Prix achat HT"], a: a["Actif"] ? 1 : 0 };
+}
+function catalogueVersBaserow(x) {
+  return { "Code EBP": x.c, "Designation": x.d, "Reference fournisseur": x.r || "", "Fournisseur": x.f || "",
+           "Famille": x.fa || "", "Unite": x.u || "", "Prix achat HT": x.p ?? null, "Actif": x.a === 1, "Origine": "EBP" };
+}
+// Ce que l'appli reçoit : jamais le prix d'achat.
+function cataloguePublic(x) {
+  return { code: x.c, designation: x.d, ref: x.r || "", fournisseur: x.f || "", famille: x.fa || "", unite: x.u || "" };
+}
+function normCat(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+}
+async function lireCatalogue(env, forcer = false) {
+  if (!forcer && _catalogueMemo && Date.now() - _catalogueMemoT < 5 * 60000) return _catalogueMemo;
+  const raw = await env.EBP_TOKENS.get(KV_CATALOGUE);
+  _catalogueMemo = raw ? JSON.parse(raw) : { maj: null, items: [] };
+  _catalogueMemoT = Date.now();
+  return _catalogueMemo;
+}
+function rechercherCatalogue(cat, q, limite = 30) {
+  const mots = normCat(q).split(" ").filter(Boolean);
+  if (!mots.length) return [];
+  const qn = normCat(q).replace(/\s/g, "");
+  const res = [];
+  for (const x of cat.items) {
+    if (x.a !== 1) continue;
+    const t = normCat(`${x.c} ${x.d} ${x.r} ${x.f} ${x.fa}`);
+    if (mots.every(m => t.includes(m))) res.push(x);
+  }
+  // Code exact d'abord, puis désignation qui commence par la recherche
+  res.sort((a, b) => (normCat(b.c) === qn) - (normCat(a.c) === qn)
+    || normCat(b.d).startsWith(mots[0]) - normCat(a.d).startsWith(mots[0])
+    || String(a.d).localeCompare(String(b.d), "fr"));
+  return res.slice(0, limite).map(cataloguePublic);
+}
+// Tolère les espaces, retours à la ligne et guillemets collés par erreur
+// autour de la valeur du secret (copier-coller dans Cloudflare).
+function nettoyerCle(v) {
+  return String(v || "").trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+}
+function cleAppValide(request, url, env) {
+  const attendue = nettoyerCle(env.APP_KEY);
+  const recue = nettoyerCle(request.headers.get("X-App-Key") || url.searchParams.get("key"));
+  return !!attendue && recue === attendue;
+}
+
+async function syncArticles(env, { full = false, test = false, restart = false, pages = ART_PAGES_PAR_APPEL } = {}) {
+  const token = await getToken(env);
+  const debut = new Date().toISOString();
+
+  if (test) {
+    const { lot: recs, total } = await lirePageEbp(env, token, "Item", 0);
+    const types = {};
+    for (const rec of recs) { const t = champEbp(rec, ["ItemType", "Type"]) || "(vide)"; types[t] = (types[t] || 0) + 1; }
+    return {
+      status: "test", total_ebp: total, cles: recs[0] ? Object.keys(recs[0]) : [],
+      types_sur_100_premiers: types, types_exclus: ART_TYPES_EXCLUS,
+      mappe: recs.slice(0, 5).map(x => itemVersArticle(x, {}, {})),
+    };
+  }
+
+  // ── Import complet en tranches (reprend là où l'appel précédent s'est arrêté) ──
+  let etat = restart ? null : JSON.parse((await env.EBP_TOKENS.get(KV_ART_FULL_ETAT)) || "null");
+  if (!etat && !full) {
+    const dernierFull = await env.EBP_TOKENS.get(LAST_FULL_KEY_ARTICLES);
+    if (!dernierFull || Date.now() - new Date(dernierFull).getTime() > ART_FULL_TOUS_LES_JOURS * 86400000) full = true;
+  }
+  if (etat || full) return await importCompletArticles(env, token, etat, pages, debut);
+
+  // ── Incrémental : seules les fiches modifiées depuis la dernière synchro ──
+  const depuis = await env.EBP_TOKENS.get(LAST_SYNC_KEY_ARTICLES);
+  const res = { status: "ok", mode: "incrémental", lus_ebp: 0, catalogue: 0, maj: 0, rattaches: 0, inchanges: 0, ignores: 0, erreurs: [] };
+  const libelles = await indexLibellesArticles(env, token);
+  const cat = await lireCatalogue(env, true);
+  const parCode = new Map(cat.items.map(x => [x.c, x]));
+  const modifies = new Map();
+  let offset = 0;
+  while (true) {
+    const { lot, total } = await lirePageEbp(env, token, "Item", offset, depuis);
+    // Trop de fiches modifiées pour un seul appel (ex. mise à jour de tarifs en masse) :
+    // on bascule sur l'import complet en tranches, qui reprend au cron suivant.
+    if (offset === 0 && total !== null && total > pages * 100) return await importCompletArticles(env, token, null, pages, debut);
+    res.lus_ebp += lot.length;
+    for (const rec of lot) {
+      const x = recVersCatalogue(rec, libelles, res);
+      if (x) { parCode.set(x.c, x); modifies.set(x.c, x); }
+    }
+    offset += lot.length;
+    if (!lot.length || offset >= (total ?? offset)) break;
+  }
+  if (modifies.size) await enregistrerCatalogue(env, { maj: debut, items: [...parCode.values()] });
+  res.catalogue = parCode.size;
+  await majBaserowArticles(env, modifies, res);
+  if (!res.erreurs.length) await env.EBP_TOKENS.put(LAST_SYNC_KEY_ARTICLES, debut); else res.status = "partiel";
+  return res;
+}
+
+async function importCompletArticles(env, token, etat, pages, debut) {
+  // 1er appel : index des familles / fournisseurs, puis catalogue vide
+  if (!etat) {
+    await indexLibellesArticles(env, token, true);
+    etat = { debut, offset: 0, total: null, ignores: 0 };
+    await env.EBP_TOKENS.put(KV_CATALOGUE_TMP, "[]");
+    await env.EBP_TOKENS.put(KV_ART_FULL_ETAT, JSON.stringify(etat));
+    return { status: "en_cours", etape: "index familles / fournisseurs prêt", message: "Rechargez la page pour importer les articles." };
+  }
+
+  const libelles = await indexLibellesArticles(env, token);
+  const items = JSON.parse((await env.EBP_TOKENS.get(KV_CATALOGUE_TMP)) || "[]");
+  const res = { ignores: 0 };
+  for (let i = 0; i < pages; i++) {
+    const { lot, total } = await lirePageEbp(env, token, "Item", etat.offset);
+    if (total !== null) etat.total = total;
+    for (const rec of lot) { const x = recVersCatalogue(rec, libelles, res); if (x) items.push(x); }
+    etat.offset += lot.length;
+    if (!lot.length || etat.offset >= (etat.total ?? etat.offset)) { etat.fini = true; break; }
+  }
+  etat.ignores += res.ignores;
+
+  if (!etat.fini) {
+    await env.EBP_TOKENS.put(KV_CATALOGUE_TMP, JSON.stringify(items));
+    await env.EBP_TOKENS.put(KV_ART_FULL_ETAT, JSON.stringify(etat));
+    return { status: "en_cours", lus: etat.offset, total: etat.total, retenus: items.length, message: "Rechargez la page pour continuer." };
+  }
+
+  // Dernière tranche : le nouveau catalogue remplace l'ancien
+  await enregistrerCatalogue(env, { maj: etat.debut, items });
+  await env.EBP_TOKENS.delete(KV_CATALOGUE_TMP);
+  await env.EBP_TOKENS.delete(KV_ART_FULL_ETAT);
+  const fin = { status: "ok", mode: "complet", lus_ebp: etat.offset, catalogue: items.length, ignores: etat.ignores, maj: 0, rattaches: 0, inchanges: 0, erreurs: [] };
+  await majBaserowArticles(env, new Map(items.map(x => [x.c, x])), fin);
+  if (!fin.erreurs.length) {
+    await env.EBP_TOKENS.put(LAST_SYNC_KEY_ARTICLES, etat.debut);
+    await env.EBP_TOKENS.put(LAST_FULL_KEY_ARTICLES, etat.debut);
+  } else fin.status = "partiel";
+  return fin;
+}
+
+async function enregistrerCatalogue(env, catalogue) {
+  const texte = JSON.stringify(catalogue);
+  if (texte.length > 24 * 1024 * 1024) throw new Error("Catalogue trop volumineux pour KV (" + Math.round(texte.length / 1048576) + " Mo)");
+  await env.EBP_TOKENS.put(KV_CATALOGUE, texte);
+  _catalogueMemo = catalogue; _catalogueMemoT = Date.now();
+}
+
+// Met à jour, dans Baserow « Articles », les seuls articles déjà en stock
+async function majBaserowArticles(env, modifies, res) {
+  if (!modifies.size || !/^\d+$/.test(BASEROW_TABLE_ART)) return;
+  const bw = { "Authorization": `Token ${env.BASEROW_TOKEN}`, "Content-Type": "application/json" };
+  const aMaj = [];
+  let url = `https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_ART}/?user_field_names=true&size=200`;
+  while (url) {
+    const r = await fetch(url, { headers: bw });
+    if (!r.ok) throw new Error(`Baserow Articles ${r.status}: ${await r.text()}`);
+    const d = await r.json();
+    for (const ex of d.results || []) {
+      const x = modifies.get(String(ex["Code EBP"] || "").trim());
+      if (!x) continue;
+      const a = catalogueVersBaserow(x);
+      const diff = CHAMPS_CATALOGUE_ART.some(k => {
+        if (k === "Prix achat HT") return Math.abs((Number(ex[k]) || 0) - (Number(a[k]) || 0)) > 0.001;
+        if (k === "Actif") return !!ex[k] !== !!a[k];
+        return String(ex[k] ?? "") !== String(a[k] ?? "");
+      });
+      if (!diff) { res.inchanges++; continue; }
+      if ((ex["Origine"] || "") !== "EBP") res.rattaches++;
+      aMaj.push({ id: ex.id, ...a });
+    }
+    url = d.next ? d.next.replace("http://", "https://") : null;
+  }
+  let ok = 0;
+  for (let i = 0; i < aMaj.length; i += 200) {
+    const lot = aMaj.slice(i, i + 200);
+    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_ART}/batch/?user_field_names=true`,
+      { method: "PATCH", headers: bw, body: JSON.stringify({ items: lot }) });
+    if (r.ok) ok += lot.length; else res.erreurs.push(`Mise à jour ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  }
+  res.maj = ok - res.rattaches;
+}
+
 function json(data, extraHeaders = {}, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status, headers: { "Content-Type": "application/json", ...extraHeaders },
   });
-}
-
-
-// ============================================================
-// SYNC MONTANTS CHANTIERS : montant HT du chantier EBP → Baserow Chantiers « Prix de vente HT »
-// ============================================================
-// Table EBP lue via GenericQuery, et champ Baserow alimenté.
-const EBP_TABLE_CHANTIER        = "ConstructionSite";
-const CHAMP_BASEROW_PRIX_VENTE  = "Prix de vente HT";   // champ Nombre (2 décimales) de la table Chantiers
-const LAST_SYNC_KEY_CHANTIERS   = "last_sync_date_chantiers";
-// Champ EBP du montant HT du chantier. Laisser vide = détection automatique parmi les candidats
-// ci-dessous (dans l'ordre). Une fois vérifié avec /sync-chantiers?test=1&code=CHxxxx, renseigner
-// le nom exact ici pour figer le choix.
-const CHAMP_EBP_MONTANT_CHANTIER = "PredictedSales"; // ventes prévues HT (validé sur CH0765)
-const CANDIDATS_MONTANT_CHANTIER = [
-  "PredictedSales",           // ventes prévues du chantier (montant du marché HT)
-  "AmountVatExcluded", "TotalAmountVatExcluded", "AmountVatExcludedWithDiscount",
-  "TotalAmountVatExcludedWithDiscount", "SaleAmountVatExcluded", "SalesAmountVatExcluded",
-  "ContractAmountVatExcluded", "BudgetAmountVatExcluded", "EstimatedAmountVatExcluded",
-];
-
-// « CHA01187 », « CH1187 », « CH01187 - Nom » → « CH1187 »
-function codeChantier(texte) {
-  const m = String(texte || "").match(/\bCHA?0*(\d+)/i);
-  return m ? "CH" + m[1] : null;
-}
-
-// Valeur numérique d'un champ EBP, y compris si EBP renvoie un objet (ex. { AmountVatExcluded: … })
-function nombreEbp(v) {
-  if (v === null || v === undefined || v === "") return null;
-  if (typeof v === "object") {
-    for (const k of ["AmountVatExcluded", "VatExcludedAmount", "AmountHT", "Amount", "Value", "value", "Total", "Sales"]) {
-      const n = nombreEbp(v[k]);
-      if (n !== null) return n;
-    }
-    return null;
-  }
-  const n = Number(String(v).replace(",", "."));
-  return isNaN(n) ? null : n;
-}
-
-function montantChantierEbp(rec) {
-  const noms = CHAMP_EBP_MONTANT_CHANTIER ? [CHAMP_EBP_MONTANT_CHANTIER] : CANDIDATS_MONTANT_CHANTIER;
-  const index = {};
-  for (const k of Object.keys(rec)) index[k.toLowerCase()] = rec[k];
-  for (const n of noms) {
-    const v = nombreEbp(index[n.toLowerCase()]);
-    if (v !== null) return { champ: n, montant: Math.round(v * 100) / 100 };
-  }
-  return { champ: null, montant: null };
-}
-
-async function syncMontantsChantiers(env, { full = false, test = false, code = "" } = {}) {
-  const token = await getToken(env);
-  const bw = { "Authorization": `Token ${env.BASEROW_TOKEN}`, "Content-Type": "application/json" };
-  const debut = new Date().toISOString();
-
-  // Mode test : montre les champs « montant » d'un chantier EBP, sans rien écrire
-  if (test) {
-    const tous = await lireTableEbp(env, token, EBP_TABLE_CHANTIER, null);
-    const cible = code ? codeChantier(code) : null;
-    const rec = (cible ? tous.find(r => codeChantier(champEbp(r, ["Id", "Code"])) === cible) : null) || tous[0] || null;
-    if (!rec) return { mode: "test", total_chantiers_ebp: tous.length, erreur: cible ? `Chantier ${cible} introuvable dans EBP` : "Aucun chantier EBP" };
-    // Tous les champs financiers, valeur brute (nombre, objet ou null) pour identifier le bon montant
-    const champsMontants = Object.fromEntries(Object.entries(rec).filter(([k]) =>
-      /sales|cost|margin|amount|montant|price|prix|total|budget|rate|treasury|dues|invoiced|committed|profit|vat/i.test(k)));
-    const choix = montantChantierEbp(rec);
-    return {
-      mode: "test",
-      total_chantiers_ebp: tous.length,
-      chantier: { id: champEbp(rec, ["Id", "Code"]), libelle: champEbp(rec, ["Caption", "Name", "Description"]), code_baserow: codeChantier(champEbp(rec, ["Id", "Code"])) },
-      champ_retenu: choix.champ,
-      montant_retenu: choix.montant,
-      champs_montants: champsMontants,
-      toutes_les_cles: Object.keys(rec),
-    };
-  }
-
-  // 1. Chantiers EBP (modifiés depuis la dernière synchro, ou tous en ?full=1)
-  const depuis = full ? null : await env.EBP_TOKENS.get(LAST_SYNC_KEY_CHANTIERS);
-  const chantiersEbp = await lireTableEbp(env, token, EBP_TABLE_CHANTIER, depuis);
-  const montantParCode = {};
-  let sansMontant = 0, champUtilise = null;
-  for (const rec of chantiersEbp) {
-    const c = codeChantier(champEbp(rec, ["Id", "Code"]));
-    if (!c) continue;
-    const { champ, montant } = montantChantierEbp(rec);
-    if (montant === null) { sansMontant++; continue; }
-    champUtilise = champUtilise || champ;
-    montantParCode[c] = montant;
-  }
-
-  // 2. Chantiers Baserow (lecture complète, pas de filtre URL)
-  const lignesBaserow = [];
-  let url = `https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/?user_field_names=true&size=200`;
-  while (url) {
-    const r = await fetch(url, { headers: bw });
-    if (!r.ok) throw new Error(`Baserow Chantiers ${r.status}: ${await r.text()}`);
-    const d = await r.json();
-    lignesBaserow.push(...(d.results || []));
-    url = d.next ? d.next.replace("http://", "https://") : null;
-  }
-  if (lignesBaserow.length && !Object.prototype.hasOwnProperty.call(lignesBaserow[0], CHAMP_BASEROW_PRIX_VENTE)) {
-    throw new Error(`Champ « ${CHAMP_BASEROW_PRIX_VENTE} » absent de la table Chantiers (à créer dans Baserow : type Nombre, 2 décimales)`);
-  }
-
-  // 3. Mises à jour (uniquement si le montant a changé)
-  const aMaj = [];
-  const nomParId = {};
-  const codesTrouves = new Set();
-  for (const ch of lignesBaserow) {
-    const c = codeChantier(ch["Nom du chantier"]);
-    if (!c || !(c in montantParCode)) continue;
-    codesTrouves.add(c);
-    nomParId[ch.id] = ch["Nom du chantier"];
-    const actuel = ch[CHAMP_BASEROW_PRIX_VENTE];
-    const nouveau = montantParCode[c];
-    if (actuel === null || actuel === undefined || actuel === "" || Math.abs(Number(actuel) - nouveau) > 0.005) {
-      aMaj.push({ id: ch.id, [CHAMP_BASEROW_PRIX_VENTE]: nouveau.toFixed(2) });
-    }
-  }
-  const erreurs = [];
-  let nbEcrits = 0;
-  for (let i = 0; i < aMaj.length; i += 200) {
-    const lot = aMaj.slice(i, i + 200);
-    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/batch/?user_field_names=true`,
-      { method: "PATCH", headers: bw, body: JSON.stringify({ items: lot }) });
-    if (r.ok) { nbEcrits += lot.length; continue; }
-    // Lot rejeté (Baserow refuse tout le lot pour une seule ligne invalide) : on réessaie ligne par ligne
-    for (const item of lot) {
-      const r1 = await fetch(`https://api.baserow.io/api/database/rows/table/${BASEROW_TABLE_CH}/${item.id}/?user_field_names=true`,
-        { method: "PATCH", headers: bw, body: JSON.stringify({ [CHAMP_BASEROW_PRIX_VENTE]: item[CHAMP_BASEROW_PRIX_VENTE] }) });
-      if (r1.ok) nbEcrits++;
-      else erreurs.push(`${nomParId[item.id] || item.id} (${item[CHAMP_BASEROW_PRIX_VENTE]} €) : ${(await r1.text()).slice(0, 200)}`);
-    }
-  }
-
-  if (!erreurs.length) await env.EBP_TOKENS.put(LAST_SYNC_KEY_CHANTIERS, debut);
-  return {
-    chantiers_ebp_lus: chantiersEbp.length,
-    champ_ebp_utilise: champUtilise,
-    chantiers_ebp_sans_montant: sansMontant,
-    chantiers_baserow_trouves: codesTrouves.size,
-    chantiers_ebp_sans_correspondance: Object.keys(montantParCode).filter(c => !codesTrouves.has(c)).length,
-    montants_mis_a_jour: nbEcrits,
-    montants_en_erreur: erreurs.length,
-    erreurs,
-  };
 }
