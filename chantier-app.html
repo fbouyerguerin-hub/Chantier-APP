@@ -7310,7 +7310,7 @@
       const totalCommandesChantier = commandesTotalParChantier[chantierId] || 0;
       const aDesCommandesSuivi = chantierIdsAvecCommandes.has(chantierId);
       suivi += `<td style="padding:8px;text-align:center;border-left:3px solid #bbb;background:#fdf6ea;font-weight:700;color:#a5761f">
-        ${totalCommandesChantier > 0 ? totalCommandesChantier.toFixed(2) + ' €' : '—'}
+        ${!estProfilPrix() ? '' : totalCommandesChantier > 0 ? totalCommandesChantier.toFixed(2) + ' €' : '—'}
         ${aDesCommandesSuivi ? `<span onclick="ouvrirCommandesChantier(${chantierId}, '${nom.replace(/'/g, "\\'")}')" style="cursor:pointer;margin-left:4px" title="Voir les commandes de ce chantier">📦</span>` : ''}
       </td>`;
       suivi += '</tr>';
@@ -10545,10 +10545,13 @@
   // Droit de voir les prix des commandes fournisseurs : toujours vrai pour
   // Gestionnaire/Administrateur, ou accordé individuellement à certains
   // Utilisateurs via la case à cocher "Voir prix commandes".
+  // Prix (commandes, stock, rentabilité) : réservés aux profils Administrateur
+  // et Gestionnaire. La case « Voir prix commandes » n'ouvre plus aucun droit.
+  function estProfilPrix() {
+    return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+  }
   async function peutVoirPrixCommandes() {
-    if (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') return true;
-    const row = await obtenirCollaborateurConnecte();
-    return row['Voir prix commandes'] === true;
+    return estProfilPrix();
   }
 
   // IDs des chantiers affectés au collaborateur connecté (via TABLE_PLANNING).
@@ -10814,11 +10817,12 @@
       const dateLabel = c['Date commande'] ? new Date(c['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
       const chantierNom = (c['Chantier'] || [])[0]?.value || '—';
       const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? l['Quantite'] : '';
-      const prixUnitaire = (l['Deboursé HT'] !== undefined && l['Deboursé HT'] !== null && l['Deboursé HT'] !== '')
+      const prixUnitaire = (estProfilPrix() && l['Deboursé HT'] !== undefined && l['Deboursé HT'] !== null && l['Deboursé HT'] !== '')
         ? Number(l['Deboursé HT']).toFixed(2) + ' € / ' + (l['Unite'] || 'unité') : '';
-      const montant = (l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
+      const montant = (estProfilPrix() && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '')
         ? Number(l['Montant HT']).toFixed(2) + ' €' : '';
-      const fichierAR = (c['Accusé de réception'] || [])[0];
+      // L'AR fournisseur contient les prix : réservé aux mêmes profils
+      const fichierAR = estProfilPrix() ? (c['Accusé de réception'] || [])[0] : null;
       const statutArticle = extraireValeurChamp(c['Statut'], 'En attente AR');
       const couleurStatutArticle = couleurStatutCommande(statutArticle);
       return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
@@ -14380,7 +14384,7 @@
     if (!_champPrixVenteDisponible && chantiersGestionCache.length)
       _champPrixVenteDisponible = Object.prototype.hasOwnProperty.call(chantiersGestionCache[0], CHAMP_PRIX_VENTE);
     const bloc = document.getElementById('chantier-prix-vente-bloc');
-    if (bloc) bloc.style.display = _champPrixVenteDisponible ? '' : 'none';
+    if (bloc) bloc.style.display = (_champPrixVenteDisponible && estProfilPrix()) ? '' : 'none';
   }
 
   async function ouvrirFormChantier(rowId) {
