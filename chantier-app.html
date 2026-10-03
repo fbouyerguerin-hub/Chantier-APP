@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V12';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -688,6 +688,20 @@
   //   - Montant HT      : nombre décimal
   // Remplacer l'ID ci-dessous une fois la table créée.
   const TABLE_COMMANDES_CLIENTS_LIGNES = '1210908';
+  // ── STOCK ATELIER ── ⚠️ Tables Baserow à CRÉER puis renseigner les IDs ci-dessous.
+  // TABLE_ARTICLES (bibliothèque, alimentée par EBP via /sync-articles — renseigner aussi BASEROW_TABLE_ART dans le Worker) :
+  //   Designation (texte, champ principal) · Code EBP (texte) · Reference fournisseur (texte)
+  //   Fournisseur (texte) · Famille (texte) · Unite (texte) · Prix achat HT (décimal 2)
+  //   Origine (texte : "EBP" ou "Commande") · Actif (booléen)
+  //   Zone (texte) · Rayon (texte) · Plan_X (décimal 4) · Plan_Y (décimal 4) · Stock mini (décimal 3)
+  //   → Zone, Rayon, Plan_X, Plan_Y, Stock mini appartiennent à l'appli : jamais écrasés par EBP.
+  // TABLE_MOUVEMENTS_STOCK (journal ; stock = somme signée des quantités) :
+  //   Libelle (texte, champ principal) · Article (lien → Articles, une seule ligne)
+  //   Type (texte : Entrée / Sortie / Retour / Inventaire) · Quantite (décimal 3, négatif autorisé)
+  //   Date (date) · Chantier (texte) · Commande (texte) · Ligne commande (nombre)
+  //   Par (texte) · Note (texte long)
+  const TABLE_ARTICLES = '1237462';
+  const TABLE_MOUVEMENTS_STOCK = '1237464';
   // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
   // dans une section repliée pour ne pas polluer la vue principale, aussi
   // bien dans l'onglet Commandes que dans la fenêtre "Commandes" de Mon planning.
@@ -833,6 +847,14 @@
       errEl.style.display = 'none';
       connectedUserRowId = user.id;
       seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '', user['Accès Plan de charge'] === true);
+      // Appli ouverte depuis un QR flashé avec l'appareil photo du téléphone
+      // (lien …?scan=CODE) : afficher la fiche dès la connexion.
+      if (_scanEnAttente) {
+        const code = _scanEnAttente;
+        _scanEnAttente = null;
+        try { history.replaceState(null, '', location.pathname); } catch (e) {}
+        setTimeout(() => { ouvrirScanInfo(code).catch(e => console.error('Scan au démarrage', e)); }, 400);
+      }
 
     } catch(e) {
       errEl.textContent = '❌ Erreur de connexion. Réessayez.';
@@ -848,6 +870,9 @@
       login();
     }
   });
+
+  // Code transmis par un QR flashé hors de l'appli (…?scan=CMD-123)
+  let _scanEnAttente = (() => { try { return new URLSearchParams(location.search).get('scan'); } catch (e) { return null; } })();
 
   // Collaborateur connecté
   let connectedCollab = null;
@@ -1946,7 +1971,7 @@
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 180000);
-      const resp = await fetch(`${EBP_WORKER}/sync-contacts`, { cache: 'no-store', signal: controller.signal });
+      const resp = await fetch(`${EBP_WORKER}/sync-contacts`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
       clearTimeout(timeoutId);
       const data = await resp.json();
       if (!resp.ok || data.error) throw new Error(data.error || ('HTTP ' + resp.status));
@@ -3999,6 +4024,7 @@
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
+      rafraichirFicheScan();
     } catch (e) {
       console.error('Erreur signalement départ chantier', e);
       alert('Erreur lors de la mise à jour : ' + e.message);
@@ -10636,6 +10662,9 @@
     document.getElementById('commandes-vue-chantier').style.display = vue === 'chantier' ? 'block' : 'none';
     document.getElementById('commandes-vue-articles').style.display = vue === 'articles' ? 'block' : 'none';
     document.getElementById('commandes-vue-retour').style.display = vue === 'retour' ? 'block' : 'none';
+    document.getElementById('commandes-vue-stock').style.display = vue === 'stock' ? 'block' : 'none';
+    document.getElementById('tab-commandes-stock').style.background = vue === 'stock' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-stock').style.color = vue === 'stock' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-liste').style.background = vue === 'liste' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-liste').style.color = vue === 'liste' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-ar').style.background = vue === 'ar' ? 'var(--vert)' : 'none';
@@ -10655,6 +10684,7 @@
     if (vue === 'receptionnees') renderCommandesReceptionnees();
     if (vue === 'articles') renderCommandesArticles();
     if (vue === 'retour') renderCommandesRetour();
+    if (vue === 'stock') ouvrirVueStock();
   }
 
   // ── IMPRESSION DES COMMANDES ──
@@ -11264,9 +11294,1235 @@
   }
 
   // ============================================================
+  // STOCK ATELIER — Bibliothèque d'articles, emplacements, mouvements
+  // ------------------------------------------------------------
+  // • Bibliothèque  : TABLE_ARTICLES, alimentée par EBP (route Worker
+  //   /sync-articles) + création automatique à la 1re entrée en stock d'un
+  //   article inconnu (Origine = "Commande").
+  // • Stock         : TABLE_MOUVEMENTS_STOCK. L'appli fait foi : stock d'un
+  //   article = somme signée des mouvements (Entrée +, Sortie −, Retour +,
+  //   Inventaire = écart). EBP n'est qu'un catalogue.
+  // • Entrées       : automatiques à la réception des commandes dont le
+  //   chantier est "STOCK ATELIER" (delta reçu à chaque arrivage, réceptions
+  //   partielles comprises).
+  // • Emplacement   : Zone + Rayon (+ point facultatif sur le plan atelier),
+  //   champs propres à l'appli, jamais écrasés par la synchro EBP.
+  // ============================================================
+  let _articlesCache = [];
+  let _mouvementsCache = [];
+  let _stockParArticle = {};
+  let _stockCharge = false;
+  let _stockFiltre = 'tous';
+  let _stockDetailOuvert = new Set();
+  let _stockListeAffichee = [];
+
+  function stockTablesConfigurees() {
+    return /^\d+$/.test(TABLE_ARTICLES) && /^\d+$/.test(TABLE_MOUVEMENTS_STOCK);
+  }
+  function peutGererStock() {
+    return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+  }
+  function normRef(s) {
+    return (s || '').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s.\-_/]/g, '');
+  }
+  function normTexte(s) {
+    return (s || '').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  }
+  function fmtQte(n) {
+    const v = Math.round((Number(n) || 0) * 1000) / 1000;
+    return String(v).replace('.', ',');
+  }
+  function estCommandeStockAtelier(r) {
+    const nom = (r?.['Chantier'] || [])[0]?.value || '';
+    return normTexte(nom).includes('stock atelier');
+  }
+
+  // Code article EBP d'une ligne de commande fournisseur : le Worker /sync
+  // écrit l'ItemId EBP dans le champ "Reference fournisseur" des lignes.
+  function codeArticleLigne(l) {
+    return (l['Code article'] || l['Reference fournisseur'] || '').toString().trim();
+  }
+  // Rapprochement ligne de commande → article de la bibliothèque :
+  // 1) code article EBP (ItemId), 2) réf. fournisseur de la fiche article, 3) désignation exacte.
+  function trouverArticlePourLigne(l) {
+    const code = normRef(codeArticleLigne(l));
+    const desc = normTexte(l['Description'] || '');
+    if (code) {
+      const a = _articlesCache.find(a => normRef(a['Code EBP']) === code)
+             || _articlesCache.find(a => normRef(a['Reference fournisseur']) === code);
+      if (a) return a;
+    }
+    if (desc) { const a = _articlesCache.find(a => normTexte(a['Designation']) === desc); if (a) return a; }
+    return null;
+  }
+
+  function recalculerStock() {
+    _stockParArticle = {};
+    _mouvementsCache.forEach(m => {
+      const aid = (m['Article'] || [])[0]?.id;
+      if (!aid) return;
+      _stockParArticle[aid] = (_stockParArticle[aid] || 0) + (Number(m['Quantite']) || 0);
+    });
+  }
+
+  async function chargerStock(force = false) {
+    if (!stockTablesConfigurees()) return;
+    if (_stockCharge && !force) return;
+    const [articles, mouvements] = await Promise.all([
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true&size=200`),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/?user_field_names=true&size=200`)
+    ]);
+    _articlesCache = articles;
+    _mouvementsCache = mouvements;
+    recalculerStock();
+    _stockCharge = true;
+  }
+
+  async function ouvrirVueStock() {
+    const listeEl = document.getElementById('stock-liste');
+    const outils = document.getElementById('stock-outils-gestion');
+    if (outils) outils.style.display = peutGererStock() ? 'flex' : 'none';
+    if (!stockTablesConfigurees()) {
+      listeEl.innerHTML = `<div class="feuille-empty" style="text-align:left;font-size:12px;line-height:1.5">⚙️ Module stock non configuré : créez les tables Baserow <b>Articles</b> et <b>Mouvements stock</b>, puis renseignez TABLE_ARTICLES et TABLE_MOUVEMENTS_STOCK dans l'appli.</div>`;
+      return;
+    }
+    if (_stockCharge) { try { renderStock(); } catch (e) {} }
+    else listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement du stock…</div>';
+    try {
+      await chargerStock(true);
+      renderStock();
+    } catch (e) {
+      console.error('Erreur chargement stock', e);
+      listeEl.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement du stock.</div>';
+    }
+  }
+
+  function setFiltreStock(f) {
+    _stockFiltre = f;
+    document.querySelectorAll('.stock-filtre-btn').forEach(b => {
+      const actif = b.dataset.filtre === f;
+      b.style.background = actif ? 'var(--vert)' : '#fff';
+      b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    renderStock();
+  }
+
+  function libelleEmplacement(a) {
+    return [a['Zone'], a['Rayon']].map(s => (s || '').trim()).filter(Boolean).join(' · ');
+  }
+
+  function renderStock() {
+    const listeEl = document.getElementById('stock-liste');
+    if (!listeEl) return;
+    const recherche = normTexte(document.getElementById('stock-recherche')?.value || '');
+    const mots = recherche.split(' ').filter(Boolean);
+    let articles = _articlesCache.filter(a => a['Actif'] !== false);
+
+    if (mots.length) {
+      articles = articles.filter(a => {
+        const t = normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur'], a['Fournisseur'], a['Famille'], a['Zone'], a['Rayon']].join(' '));
+        return mots.every(m => t.includes(m));
+      });
+    }
+    if (_stockFiltre === 'stock') articles = articles.filter(a => (_stockParArticle[a.id] || 0) > 0);
+    if (_stockFiltre === 'mini') articles = articles.filter(a => a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined && (_stockParArticle[a.id] || 0) <= Number(a['Stock mini']));
+    if (_stockFiltre === 'sansemp') articles = articles.filter(a => !libelleEmplacement(a) && (_stockParArticle[a.id] || 0) > 0);
+
+    // Sans recherche ni filtre : n'afficher que ce qui est en stock (la
+    // bibliothèque EBP complète serait trop longue à parcourir).
+    if (!mots.length && _stockFiltre === 'tous') articles = articles.filter(a => (_stockParArticle[a.id] || 0) !== 0);
+
+    articles.sort((a, b) => (a['Designation'] || '').localeCompare(b['Designation'] || '', 'fr'));
+    _stockListeAffichee = articles;
+    const total = articles.length;
+    const affiches = articles.slice(0, 150);
+
+    const resume = document.getElementById('stock-resume');
+    if (resume) {
+      const nbEnStock = Object.values(_stockParArticle).filter(q => q > 0).length;
+      const nbMini = _articlesCache.filter(a => a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined && (_stockParArticle[a.id] || 0) <= Number(a['Stock mini'])).length;
+      resume.innerHTML = `📚 ${_articlesCache.length} article(s) suivi(s) · 📦 ${nbEnStock} en stock${nbMini ? ` · <span style="color:#c0392b;font-weight:700">⚠️ ${nbMini} sous le mini</span>` : ''}`;
+    }
+
+    // Résultats du catalogue EBP complet (Worker) absents de la table Articles
+    const qActuelle = (document.getElementById('stock-recherche')?.value || '').trim();
+    let htmlCatalogue = '';
+    if (mots.length && _stockFiltre === 'tous' && qActuelle.length >= 2) {
+      if (_catalogueResultats.q === qActuelle) {
+        const connus = new Set(_articlesCache.map(a => normRef(a['Code EBP'])).filter(Boolean));
+        const autres = _catalogueResultats.items.filter(x => !connus.has(normRef(x.code)));
+        if (autres.length) htmlCatalogue = `<div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;margin:12px 0 6px">Catalogue EBP (${autres.length}${autres.length >= 30 ? '+' : ''})</div>` + autres.map(renderCarteCatalogue).join('');
+        else if (_catalogueResultats.erreur) htmlCatalogue = '<div style="color:#c0392b;font-size:11px;text-align:center;padding:8px">Catalogue EBP indisponible pour le moment.</div>';
+      } else htmlCatalogue = '<div style="color:#aaa;font-size:11px;text-align:center;padding:8px">⏳ Recherche dans le catalogue EBP…</div>';
+    }
+    if (!affiches.length) {
+      listeEl.innerHTML = (htmlCatalogue ? '' : `<div style="color:#aaa;font-size:12px;text-align:center;padding:14px">${mots.length || _stockFiltre !== 'tous' ? 'Aucun article en stock trouvé.' : 'Aucun article en stock. Tapez un mot pour chercher dans tout le catalogue EBP.'}</div>`) + htmlCatalogue;
+      return;
+    }
+    listeEl.innerHTML = affiches.map(renderCarteArticle).join('') +
+      (total > affiches.length ? `<div style="color:#aaa;font-size:11px;text-align:center;padding:8px">${total - affiches.length} autre(s) article(s) — affinez la recherche.</div>` : '') + htmlCatalogue;
+  }
+
+  function renderCarteArticle(a) {
+    const qte = _stockParArticle[a.id] || 0;
+    const mini = (a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined) ? Number(a['Stock mini']) : null;
+    const sousMini = mini !== null && qte <= mini;
+    const couleurQte = qte <= 0 ? '#999' : (sousMini ? '#c0392b' : 'var(--vert)');
+    const emp = libelleEmplacement(a);
+    const px = parseFloat(a['Plan_X']), py = parseFloat(a['Plan_Y']);
+    const aPoint = !isNaN(px) && !isNaN(py);
+    const sousTitre = [a['Code EBP'] ? 'EBP ' + a['Code EBP'] : '', a['Reference fournisseur'] ? 'Réf. ' + a['Reference fournisseur'] : '', a['Fournisseur'] || '', a['Famille'] || ''].filter(Boolean).map(echapperHtmlNote).join(' · ');
+    const badgeOrigine = ((a['Origine'] || '') === 'Commande' && !a['Code EBP']) ? `<span title="Créé automatiquement à la réception, absent du catalogue EBP" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fdf3e0;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px">hors EBP</span>` : '';
+    const ouvert = _stockDetailOuvert.has(a.id);
+    const gestion = peutGererStock();
+    const btn = (label, action, couleur = 'var(--gris)', fond = 'var(--beige-clair)') =>
+      `<button onclick="${action}" style="flex:1;min-width:0;background:${fond};color:${couleur};border:none;border-radius:8px;padding:7px 4px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">${label}</button>`;
+    return `<div style="background:#fff;border:1px solid ${sousMini ? '#f5c6c0' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--gris)">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
+          ${sousTitre ? `<div style="font-size:10px;color:#999;margin-top:2px">${sousTitre}</div>` : ''}
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:18px;font-weight:800;color:${couleurQte};line-height:1">${fmtQte(qte)}</div>
+          <div style="font-size:10px;color:#999">${echapperHtmlNote(a['Unite'] || 'u')}${mini !== null ? ' · mini ' + fmtQte(mini) : ''}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        ${emp ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${echapperHtmlNote(emp)}</span>`
+              : `<span style="font-size:11px;color:#bbb">📍 Emplacement non défini</span>`}
+        ${aPoint ? `<button onclick="voirArticleSurPlan(${a.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        ${btn('➖ Sortie', `ouvrirMouvementStock(${a.id},'Sortie')`)}
+        ${btn('↩️ Retour', `ouvrirMouvementStock(${a.id},'Retour')`)}
+        ${gestion ? btn('📋 Inventaire', `ouvrirMouvementStock(${a.id},'Inventaire')`) : ''}
+        ${gestion ? btn('✏️', `ouvrirEditionArticle(${a.id})`, 'var(--vert)', '#e8f0e7') : ''}
+        ${btn(ouvert ? '▲' : '🕘', `toggleDetailArticle(${a.id})`, 'var(--gris-moyen)', '#f1f5f9')}
+      </div>
+      ${ouvert ? renderDetailArticle(a) : ''}
+    </div>`;
+  }
+
+  function toggleDetailArticle(id) {
+    if (_stockDetailOuvert.has(id)) _stockDetailOuvert.delete(id); else _stockDetailOuvert.add(id);
+    renderStock();
+  }
+
+  function renderDetailArticle(a) {
+    const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id)
+      .sort((x, y) => (y['Date'] || '').localeCompare(x['Date'] || '') || (y.id - x.id)).slice(0, 15);
+    const couleurs = { 'Entrée': '#2f7d3c', 'Retour': '#2f7d3c', 'Sortie': '#c0392b', 'Inventaire': '#7c5200' };
+    const lignesMvt = mvts.map(m => {
+      const q = Number(m['Quantite']) || 0;
+      const type = extraireValeurChamp(m['Type'], '');
+      const d = m['Date'] ? new Date(m['Date'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+      const detail = [m['Chantier'], m['Commande'], m['Par'], m['Note']].filter(Boolean).map(echapperHtmlNote).join(' · ');
+      return `<tr>
+        <td style="padding:3px 4px;font-size:10px;color:#999;white-space:nowrap;border-bottom:1px dotted #eee">${d}</td>
+        <td style="padding:3px 4px;font-size:11px;font-weight:700;color:${couleurs[type] || '#555'};border-bottom:1px dotted #eee">${type}</td>
+        <td style="padding:3px 4px;font-size:11px;text-align:right;white-space:nowrap;border-bottom:1px dotted #eee">${q > 0 ? '+' : ''}${fmtQte(q)}</td>
+        <td style="padding:3px 4px;font-size:10px;color:#777;border-bottom:1px dotted #eee">${detail}</td>
+      </tr>`;
+    }).join('');
+
+    // Commandes fournisseurs où l'article apparaît (tous chantiers)
+    const commandesParId = {};
+    (_commandesCache || []).forEach(r => { commandesParId[r.id] = r; });
+    const apparitions = [];
+    Object.entries(_commandesLignesCache || {}).forEach(([cid, lignes]) => {
+      lignes.forEach(l => { if (trouverArticlePourLigne(l)?.id === a.id && commandesParId[cid]) apparitions.push({ c: commandesParId[cid], l }); });
+    });
+    apparitions.sort((x, y) => (y.c['Date commande'] || '').localeCompare(x.c['Date commande'] || ''));
+    const lignesCmd = apparitions.slice(0, 8).map(({ c, l }) => {
+      const d = c['Date commande'] ? new Date(c['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+      const ch = (c['Chantier'] || [])[0]?.value || '';
+      return `<div style="font-size:10px;color:#777;padding:2px 0">${d} · ${echapperHtmlNote(c['Numero commande'] || '')} · ${echapperHtmlNote(c['Fournisseur'] || '')} · 🏗 ${echapperHtmlNote(ch)} · ${fmtQte(l['Quantite'])} ${echapperHtmlNote(l['Unite'] || '')}</div>`;
+    }).join('');
+
+    return `<div style="margin-top:10px;border-top:1px solid #f0f0f0;padding-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:10px;color:#999">Code étiquette : <b style="font-family:monospace;color:var(--gris)">${echapperHtmlNote(codeBarreArticle(a))}</b></span>
+        ${peutGererStock() ? `<button onclick="imprimerEtiquettesArticles([${a.id}])" style="background:var(--beige-clair);border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Imprimer l'étiquette</button>` : ''}
+      </div>
+      <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;margin-bottom:4px">Mouvements</div>
+      ${lignesMvt ? `<table style="width:100%;border-collapse:collapse">${lignesMvt}</table>` : '<div style="font-size:11px;color:#bbb">Aucun mouvement.</div>'}
+      <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;margin:10px 0 4px">Commandes fournisseurs</div>
+      ${lignesCmd || '<div style="font-size:11px;color:#bbb">Aucune commande chargée pour cet article.</div>'}
+    </div>`;
+  }
+
+  function voirArticleSurPlan(id) {
+    const a = _articlesCache.find(x => x.id === id);
+    if (!a) return;
+    voirPointSurPlan(parseFloat(a['Plan_X']), parseFloat(a['Plan_Y']), {
+      lieu: libelleEmplacement(a) || 'Emplacement', chantier: a['Designation'] || '', fourn: a['Fournisseur'] || '', num: a['Code EBP'] || '', statut: ''
+    });
+  }
+
+  // ============================================================
+  // CODES-BARRES — étiquettes QR + sortie rapide par scan (tablette / douchette)
+  // ------------------------------------------------------------
+  // • Contenu du code : le Code EBP de l'article (lisible aussi par une
+  //   douchette 2D) ; à défaut "ART-<id Baserow>" pour un article hors EBP.
+  // • Scan caméra : bibliothèque html5-qrcode (chargée à la demande), QR +
+  //   Code 128/EAN — on peut donc aussi scanner les codes-barres fournisseurs
+  //   si le Code EBP correspond.
+  // • Douchette USB/Bluetooth : elle "tape" le code + Entrée dans le champ
+  //   de saisie de la fenêtre de scan → même traitement.
+  // • Panier : chantier choisi une fois, on scanne à la chaîne, on ajuste
+  //   les quantités, une seule validation = N mouvements "Sortie".
+  // ============================================================
+  const LIBS_SCAN = {
+    scanner: ['https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
+              'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'],
+    qrcode:  ['https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
+              'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js']
+  };
+  const _libsChargees = {};
+  function chargerLibScan(nom) {
+    if (_libsChargees[nom]) return _libsChargees[nom];
+    _libsChargees[nom] = (async () => {
+      for (const src of LIBS_SCAN[nom]) {
+        const ok = await new Promise(res => {
+          const s = document.createElement('script');
+          s.src = src; s.async = true;
+          s.onload = () => res(true); s.onerror = () => { s.remove(); res(false); };
+          document.head.appendChild(s);
+        });
+        if (ok) return true;
+      }
+      _libsChargees[nom] = null;
+      throw new Error('Impossible de charger le module ' + nom + ' (connexion ?)');
+    })();
+    return _libsChargees[nom];
+  }
+
+  function codeBarreArticle(a) {
+    return (a['Code EBP'] || '').toString().trim() || ('ART-' + a.id);
+  }
+  function trouverArticleParCode(brut) {
+    const code = (brut || '').toString().trim();
+    if (!code) return null;
+    const m = code.match(/^ART-(\d+)$/i);
+    if (m) return _articlesCache.find(a => a.id === Number(m[1])) || null;
+    const n = normRef(code);
+    return _articlesCache.find(a => normRef(a['Code EBP']) === n)
+        || _articlesCache.find(a => normRef(a['Reference fournisseur']) === n)
+        || null;
+  }
+
+  // ── Feedback (bip + vibration) ──
+  let _ctxAudio = null;
+  function bipScan(ok = true) {
+    try {
+      _ctxAudio = _ctxAudio || new (window.AudioContext || window.webkitAudioContext)();
+      const o = _ctxAudio.createOscillator(), g = _ctxAudio.createGain();
+      o.frequency.value = ok ? 1400 : 300; o.connect(g); g.connect(_ctxAudio.destination);
+      g.gain.value = 0.15; o.start(); o.stop(_ctxAudio.currentTime + (ok ? 0.08 : 0.3));
+    } catch (e) {}
+    try { navigator.vibrate && navigator.vibrate(ok ? 60 : [80, 60, 80]); } catch (e) {}
+  }
+
+  // ── Fenêtre de scan / panier de sortie ──
+  let _scanner = null, _panierSortie = [], _dernierScan = { code: '', t: 0 };
+  async function ouvrirScanSortie() {
+    if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
+    _scanMode = 'sortie'; _scanFiche = null;
+    appliquerModeScan();
+    document.getElementById('modal-scan-stock').style.display = 'flex';
+    _panierSortie = [];
+    renderPanierSortie();
+    const ch = document.getElementById('scan-chantier');
+    ch.value = localStorage.getItem('gb_scan_chantier') || '';
+    // Chantiers pour l'autocomplétion (même source que la sortie unitaire)
+    const noms = new Set();
+    (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé' && c['Nom du chantier']) noms.add(c['Nom du chantier']); });
+    (_commandesCache || []).forEach(r => { const n = (r['Chantier'] || [])[0]?.value; if (n) noms.add(n); });
+    document.getElementById('scan-chantiers-list').innerHTML = [...noms].sort().map(n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}"></option>`).join('');
+    setMessageScan('⏳ Préparation…', '#999');
+    try {
+      await chargerStock();
+      await demarrerCameraSiActive();
+    } catch (e) {
+      console.error('Scan', e);
+      setMessageScan('📷 Caméra indisponible (' + (e.message || e) + '). Utilisez la saisie manuelle ou une douchette.', '#c0392b');
+    }
+    setTimeout(() => document.getElementById('scan-saisie').focus(), 300);
+  }
+
+  async function demarrerCamera() {
+    await chargerLibScan('scanner');
+    if (!window.Html5Qrcode) throw new Error('module scanner absent');
+    if (_scanner) { try { await _scanner.stop(); } catch (e) {} }
+    const F = window.Html5QrcodeSupportedFormats || {};
+    const formats = [F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.DATA_MATRIX].filter(v => v !== undefined);
+    _scanner = new Html5Qrcode('scan-camera', { formatsToSupport: formats, verbose: false });
+    await _scanner.start(
+      { facingMode: 'environment' },
+      { fps: 12, qrbox: (w, h) => { const c = Math.floor(Math.min(w, h) * 0.7); return { width: c, height: c }; } },
+      (texte) => traiterCodeScanne(texte),
+      () => {}
+    );
+    setMessageScan('📷 Visez une étiquette', 'var(--gris-moyen)');
+  }
+
+  async function fermerScanSortie() {
+    if (_scanMode === 'sortie' && _panierSortie.length && !confirm('Le panier contient des articles non validés. Fermer quand même ?')) return;
+    await arreterCamera();
+    document.getElementById('modal-scan-stock').style.display = 'none';
+    _panierSortie = [];
+  }
+
+  function setMessageScan(txt, couleur) {
+    const el = document.getElementById('scan-message');
+    if (el) { el.textContent = txt; el.style.color = couleur || 'var(--gris-moyen)'; }
+  }
+
+  function traiterCodeScanne(brut) {
+    const code = resoudreCodeScanne(brut);
+    if (!code) return;
+    // Anti-rebond : la caméra relit le même code plusieurs fois par seconde
+    const now = Date.now();
+    if (code === _dernierScan.code && now - _dernierScan.t < 1500) return;
+    _dernierScan = { code, t: now };
+    // Étiquette de commande
+    if (/^CMD-\d+$/i.test(code) || (_scanMode === 'info' && trouverCommandeParCode(code))) {
+      const r = trouverCommandeParCode(code);
+      if (!r) { bipScan(false); setMessageScan(`❌ Commande introuvable ou non accessible : ${code}`, '#c0392b'); return; }
+      if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Étiquette de commande : utilisez 📷 sur la page Commandes', '#a5761f'); return; }
+      bipScan(true);
+      setMessageScan(`✅ ${r['Numero commande'] || ''} · ${r['Fournisseur'] || ''}`, 'var(--vert)');
+      afficherFicheScan({ type: 'commande', id: r.id });
+      return;
+    }
+    const a = trouverArticleParCode(code);
+    if (!a) { bipScan(false); setMessageScan(`❌ Code inconnu : ${code}`, '#c0392b'); return; }
+    if (_scanMode === 'info') {
+      bipScan(true);
+      setMessageScan(`✅ ${a['Designation'] || code}`, 'var(--vert)');
+      afficherFicheScan({ type: 'article', id: a.id });
+      return;
+    }
+    const ligne = _panierSortie.find(p => p.articleId === a.id);
+    if (ligne) ligne.quantite = Math.round((ligne.quantite + 1) * 1000) / 1000;
+    else _panierSortie.unshift({ articleId: a.id, quantite: 1 });
+    bipScan(true);
+    setMessageScan(`✅ ${a['Designation'] || code}`, 'var(--vert)');
+    renderPanierSortie();
+  }
+
+  function saisieManuelleScan(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const el = e.target;
+    const v = extraireCodeScan(el.value);
+    el.value = '';
+    if (!v) return;
+    _dernierScan = { code: '', t: 0 }; // une saisie volontaire n'est jamais filtrée
+    if (trouverArticleParCode(v) || trouverCommandeParCode(v)) { traiterCodeScanne(v); return; }
+    // Pas un code : recherche texte, ajout si un seul résultat
+    const mots = normTexte(v).split(' ').filter(Boolean);
+    const res = _articlesCache.filter(a => a['Actif'] !== false && mots.every(m => normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur']].join(' ')).includes(m)));
+    if (res.length === 1) traiterCodeScanne(codeBarreArticle(res[0]));
+    else { bipScan(false); setMessageScan(res.length ? `🔎 ${res.length} articles correspondent — précisez` : `❌ Aucun article pour « ${v} »`, '#c0392b'); }
+  }
+
+  function renderPanierSortie() {
+    const el = document.getElementById('scan-panier');
+    const btn = document.getElementById('scan-valider');
+    if (!el) return;
+    btn.textContent = _panierSortie.length ? `✅ Valider la sortie (${_panierSortie.length} article${_panierSortie.length > 1 ? 's' : ''})` : '✅ Valider la sortie';
+    btn.disabled = !_panierSortie.length; btn.style.opacity = _panierSortie.length ? '1' : '0.4';
+    if (!_panierSortie.length) { el.innerHTML = '<div style="color:#bbb;font-size:12px;text-align:center;padding:14px">Scannez des articles : ils s\'ajoutent ici.</div>'; return; }
+    el.innerHTML = _panierSortie.map((p, i) => {
+      const a = _articlesCache.find(x => x.id === p.articleId) || {};
+      const dispo = _stockParArticle[p.articleId] || 0;
+      const manque = p.quantite > dispo;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:700;color:var(--gris);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${echapperHtmlNote(a['Designation'] || '')}</div>
+          <div style="font-size:10px;color:${manque ? '#c0392b' : '#999'}">${manque ? '⚠️ ' : ''}stock ${fmtQte(dispo)} ${echapperHtmlNote(a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</div>
+        </div>
+        <button onclick="modifierQtePanier(${i},-1)" style="width:34px;height:34px;border:none;border-radius:8px;background:#f1f5f9;font-size:18px;cursor:pointer">−</button>
+        <input type="text" inputmode="decimal" value="${fmtQte(p.quantite)}" onchange="saisirQtePanier(${i},this.value)" style="width:52px;text-align:center;padding:7px 4px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700" />
+        <button onclick="modifierQtePanier(${i},1)" style="width:34px;height:34px;border:none;border-radius:8px;background:#f1f5f9;font-size:18px;cursor:pointer">+</button>
+      </div>`;
+    }).join('');
+  }
+  function modifierQtePanier(i, delta) {
+    const p = _panierSortie[i]; if (!p) return;
+    p.quantite = Math.round((p.quantite + delta) * 1000) / 1000;
+    if (p.quantite <= 0) _panierSortie.splice(i, 1);
+    renderPanierSortie();
+  }
+  function saisirQtePanier(i, v) {
+    const p = _panierSortie[i]; if (!p) return;
+    const q = parseFloat((v || '').replace(',', '.'));
+    if (isNaN(q) || q <= 0) _panierSortie.splice(i, 1); else p.quantite = q;
+    renderPanierSortie();
+  }
+
+  async function validerPanierSortie() {
+    if (!_panierSortie.length) return;
+    const chantier = document.getElementById('scan-chantier').value.trim();
+    if (!chantier) { alert('Choisissez le chantier de destination.'); document.getElementById('scan-chantier').focus(); return; }
+    const manques = _panierSortie.filter(p => p.quantite > (_stockParArticle[p.articleId] || 0));
+    if (manques.length && !confirm(`${manques.length} article(s) dépassent le stock disponible. Valider quand même (stock négatif) ?`)) return;
+    const btn = document.getElementById('scan-valider');
+    btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
+    try {
+      await creerMouvementsStock(_panierSortie.map(p => {
+        const a = _articlesCache.find(x => x.id === p.articleId) || {};
+        return { articleId: p.articleId, type: 'Sortie', quantite: -p.quantite, chantier, note: 'Sortie par scan',
+                 libelle: `Sortie — ${a['Designation'] || ''}`.slice(0, 250) };
+      }));
+      localStorage.setItem('gb_scan_chantier', chantier);
+      const n = _panierSortie.length;
+      _panierSortie = [];
+      renderPanierSortie();
+      bipScan(true);
+      setMessageScan(`✅ ${n} sortie(s) enregistrée(s) pour ${chantier}`, 'var(--vert)');
+      if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+    } catch (e) {
+      console.error('Sortie panier', e);
+      alert('Erreur : ' + e.message);
+      renderPanierSortie();
+    }
+  }
+
+  // ── Impression des étiquettes (planche A4 21 étiquettes 63,5 × 38,1 mm) ──
+  async function imprimerEtiquettesArticles(ids) {
+    const articles = ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean);
+    if (!articles.length) { alert('Aucun article à imprimer : filtrez ou recherchez d\'abord la liste voulue.'); return; }
+    if (articles.length > 21 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 21)} planche(s) A4). Continuer ?`)) return;
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Génération des étiquettes…</p>');
+    try {
+      await chargerLibScan('qrcode');
+      const tmp = document.createElement('div');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(tmp);
+      const imgs = articles.map(a => {
+        tmp.innerHTML = '';
+        new QRCode(tmp, { text: urlScan(codeBarreArticle(a)), width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+        const c = tmp.querySelector('canvas');
+        return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      });
+      tmp.remove();
+      const esc = s => echapperHtmlNote(s || '');
+      const cases = articles.map((a, i) => `<div class="et">
+        <img src="${imgs[i]}" />
+        <div class="tx">
+          <div class="de">${esc(a['Designation'])}</div>
+          <div class="co">${esc(codeBarreArticle(a))}</div>
+          ${libelleEmplacement(a) ? `<div class="em">📍 ${esc(libelleEmplacement(a))}</div>` : ''}
+          <div class="lo">GUÉRIN BÂTIMENTS · stock atelier</div>
+        </div></div>`).join('');
+      fen.document.open();
+      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquettes stock</title><style>
+        @page { size: A4; margin: 15.1mm 7.2mm; }
+        body { margin: 0; font-family: Arial, sans-serif; }
+        .pl { display: grid; grid-template-columns: repeat(3, 63.5mm); grid-auto-rows: 38.1mm; column-gap: 2.5mm; }
+        .et { box-sizing: border-box; padding: 2.5mm; display: flex; gap: 2mm; align-items: center; overflow: hidden; break-inside: avoid; }
+        .et img { width: 31mm; height: 31mm; flex-shrink: 0; image-rendering: pixelated; }
+        .tx { min-width: 0; display: flex; flex-direction: column; gap: 1mm; }
+        .de { font-size: 8.5pt; font-weight: 700; line-height: 1.15; max-height: 3.5em; overflow: hidden; }
+        .co { font-size: 9pt; font-family: monospace; font-weight: 700; }
+        .em { font-size: 8pt; font-weight: 700; color: #a5761f; }
+        .lo { font-size: 5.5pt; color: #888; }
+        @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
+      </style></head><body><div class="pl">${cases}</div>
+      <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) {
+      fen.close();
+      alert('Erreur : ' + e.message);
+    }
+  }
+  function imprimerEtiquettesListe() {
+    imprimerEtiquettesArticles((_stockListeAffichee || []).map(a => a.id));
+  }
+
+  // ============================================================
+  // ÉTIQUETTES DE COMMANDE — QR "CMD-<id>" collé sur la marchandise reçue.
+  // Le scan (📷 Scanner, page Commandes) affiche directement la fiche de la
+  // commande : chantier, emplacement, plan, articles, actions (départ…).
+  // Planche A4 de 8 étiquettes 99,1 × 67,7 mm ; position de départ réglable
+  // pour réutiliser une planche entamée.
+  // ============================================================
+  let _etiqCmdId = null;
+  function codeBarreCommande(r) { return 'CMD-' + r.id; }
+  function trouverCommandeParCode(brut) {
+    const code = (brut || '').toString().trim();
+    const m = code.match(/^CMD-(\d+)$/i);
+    const pool = [...(_commandesCache || []), ...(_modalCommandesCache || [])];
+    if (m) return pool.find(c => c.id === Number(m[1])) || null;
+    const n = normRef(code);
+    return n ? (pool.find(c => normRef(c['Numero commande']) === n) || null) : null;
+  }
+
+  function ouvrirEtiquetteCommande(id, contexte = '') {
+    const r = trouverCommandeParCode('CMD-' + id);
+    if (!r) { alert('Commande introuvable.'); return; }
+    _etiqCmdId = id;
+    const chantier = (r['Chantier'] || [])[0]?.value || '';
+    document.getElementById('etiq-cmd-titre').textContent = contexte === 'ar' ? '✅ AR validé — étiquette de réception' : '🏷️ Étiquette de commande';
+    document.getElementById('etiq-cmd-aide').style.display = contexte === 'ar' ? 'block' : 'none';
+    document.getElementById('etiq-cmd-info').innerHTML = `<b>${echapperHtmlNote(r['Numero commande'] || '')}</b> · ${echapperHtmlNote(r['Fournisseur'] || '')}<br>🏗 ${echapperHtmlNote(chantier)}${r['Lieu de réception'] ? `<br>📍 ${echapperHtmlNote(r['Lieu de réception'])}` : ''}`;
+    document.getElementById('etiq-cmd-nb').value = localStorage.getItem('gb_etiq_cmd_nb_' + id) || '1';
+    document.getElementById('etiq-cmd-pos').value = localStorage.getItem('gb_etiq_cmd_pos') || '1';
+    document.getElementById('modal-etiquette-commande').style.display = 'flex';
+  }
+  function fermerEtiquetteCommande() {
+    document.getElementById('modal-etiquette-commande').style.display = 'none';
+    _etiqCmdId = null;
+  }
+
+  async function imprimerEtiquetteCommande() {
+    const r = trouverCommandeParCode('CMD-' + _etiqCmdId);
+    if (!r) return;
+    const nb = Math.max(1, Math.min(40, parseInt(document.getElementById('etiq-cmd-nb').value) || 1));
+    const pos = Math.max(1, Math.min(8, parseInt(document.getElementById('etiq-cmd-pos').value) || 1));
+    localStorage.setItem('gb_etiq_cmd_nb_' + r.id, String(nb));
+    // Position suivante sur la planche (pour la prochaine impression)
+    localStorage.setItem('gb_etiq_cmd_pos', String(((pos - 1 + nb) % 8) + 1));
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Génération de l\'étiquette…</p>');
+    try {
+      await chargerLibScan('qrcode');
+      const tmp = document.createElement('div');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(tmp);
+      new QRCode(tmp, { text: urlScan(codeBarreCommande(r)), width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
+      const c = tmp.querySelector('canvas');
+      const qr = c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      tmp.remove();
+      const esc = s => echapperHtmlNote(s || '');
+      const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], '');
+      const chantier = (r['Chantier'] || [])[0]?.value || '';
+      const dRec = r['Date reception'] ? new Date(r['Date reception'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+      const recPar = extraireValeurChamp(r['Receptionne par'], '');
+      const dPrev = r['Date reception prevue'] ? new Date(r['Date reception prevue'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+      const nbArt = (_commandesLignesCache[r.id] || []).length;
+      const nbManq = (_commandesLignesCache[r.id] || []).filter(l => l['Non réceptionné']).length;
+      const vides = Array.from({ length: pos - 1 }, () => '<div class="et vide"></div>').join('');
+      const etiquettes = Array.from({ length: nb }, (_, i) => `<div class="et">
+        <div class="g"><img src="${qr}" /><div class="cq">${esc(codeBarreCommande(r))}</div></div>
+        <div class="d">
+          <div class="ch">${esc(chantier)}</div>
+          ${r['Lieu de réception'] ? `<div class="em">📍 ${esc(r['Lieu de réception'])}</div>` : '<div class="sc">📷 À scanner à l\'arrivée pour saisir l\'emplacement</div>'}
+          <div class="nu">${esc(r['Numero commande'])}</div>
+          <div class="fo">${esc(r['Fournisseur'])}</div>
+          ${r['Reference complete'] ? `<div class="pt">${esc(r['Reference complete'])}</div>` : ''}
+          <div class="pt">${nbArt ? nbArt + ' article(s)' : ''}${nbManq ? ` · <b>⚠️ ${nbManq} manquant(s)</b>` : ''}</div>
+          ${dRec ? `<div class="pt">📥 ${dRec}${recPar ? ' · ' + esc(recPar) : ''}</div>` : (dPrev ? `<div class="pt">📅 Réception prévue le ${dPrev}</div>` : '')}
+          ${statut === 'Réception partielle' ? '<div class="pa">RÉCEPTION PARTIELLE</div>' : ''}
+        </div></div>`).join('');
+      fen.document.open();
+      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquette ${esc(r['Numero commande'])}</title><style>
+        @page { size: A4; margin: 13mm 4.6mm; }
+        body { margin: 0; font-family: Arial, sans-serif; }
+        .pl { display: grid; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 67.7mm; column-gap: 2.5mm; }
+        .et { box-sizing: border-box; padding: 3mm; display: flex; gap: 3mm; overflow: hidden; break-inside: avoid; }
+        .g { flex-shrink: 0; width: 40mm; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .g img { width: 40mm; height: 40mm; image-rendering: pixelated; }
+        .cq { font-family: monospace; font-size: 8pt; margin-top: 1mm; }
+        .d { min-width: 0; display: flex; flex-direction: column; gap: 1.2mm; justify-content: center; }
+        .ch { font-size: 13pt; font-weight: 800; line-height: 1.1; max-height: 2.3em; overflow: hidden; }
+        .em { font-size: 11pt; font-weight: 800; color: #000; border: 0.4mm solid #000; border-radius: 1.5mm; padding: 0.8mm 2mm; align-self: flex-start; }
+        .nu { font-size: 10pt; font-weight: 700; font-family: monospace; }
+        .fo { font-size: 9pt; }
+        .pt { font-size: 7.5pt; color: #444; }
+        .pa { font-size: 8pt; font-weight: 800; background: #000; color: #fff; padding: 0.6mm 2mm; align-self: flex-start; }
+        .sc { font-size: 8pt; font-weight: 700; border: 0.3mm dashed #000; border-radius: 1.5mm; padding: 0.8mm 2mm; align-self: flex-start; }
+        @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
+      </style></head><body><div class="pl">${vides}${etiquettes}</div>
+      <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+      fen.document.close();
+      fermerEtiquetteCommande();
+    } catch (e) {
+      fen.close();
+      alert('Erreur : ' + e.message);
+    }
+  }
+
+  // ── Scanner « info » (page Commandes) : commande ou article → fiche ──
+  let _scanMode = 'sortie', _scanFiche = null;
+  async function ouvrirScanInfo(codeInitial) {
+    _scanMode = 'info';
+    _scanFiche = null;
+    appliquerModeScan();
+    document.getElementById('modal-scan-stock').style.display = 'flex';
+    document.getElementById('scan-panier').innerHTML = '<div style="color:#bbb;font-size:12px;text-align:center;padding:14px">Scannez l\'étiquette d\'une commande ou d\'un article.</div>';
+    setMessageScan('⏳ Préparation…', '#999');
+    try {
+      if (!(_commandesCache || []).length) await chargerCommandesPage();
+      if (!_peutVoirPrixActuel) { try { _peutVoirPrixActuel = await peutVoirPrixCommandes(); } catch (e) {} }
+      if (stockTablesConfigurees()) { try { await chargerStock(); } catch (e) {} }
+      await demarrerCameraSiActive();
+    } catch (e) {
+      setMessageScan('📷 Caméra indisponible (' + (e.message || e) + '). Utilisez la saisie manuelle ou une douchette.', '#c0392b');
+    }
+    if (codeInitial) { _dernierScan = { code: '', t: 0 }; traiterCodeScanne(codeInitial); }
+  }
+  function appliquerModeScan() {
+    const info = _scanMode === 'info';
+    document.getElementById('scan-titre').textContent = info ? '📷 Scanner une étiquette' : '📷 Sortie de stock par scan';
+    document.getElementById('scan-bloc-chantier').style.display = info ? 'none' : 'block';
+    document.getElementById('scan-pied').style.display = info ? 'none' : 'block';
+  }
+  function afficherFicheScan(fiche) {
+    _scanFiche = fiche;
+    const el = document.getElementById('scan-panier');
+    if (fiche.type === 'commande') {
+      const r = trouverCommandeParCode('CMD-' + fiche.id);
+      el.innerHTML = r ? renderCarteCommande(r, _peutVoirPrixActuel, 'scan') : '<div class="feuille-empty">Commande introuvable.</div>';
+      // Colis qui arrive : formulaire de réception ouvert (atelier par défaut),
+      // l'opérateur n'a plus qu'à saisir l'emplacement et valider.
+      const statut = r ? (estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], '')) : '';
+      if (r && (statut === 'En attente réception' || statut === 'Réception partielle') && !fiche.sansFormulaire) {
+        setTimeout(() => { try { toggleReceptionForm(r.id + '-scan', 'atelier'); } catch (e) {} }, 50);
+      } else if (r && statut === 'En attente AR') {
+        setMessageScan('⚠️ AR pas encore validé pour cette commande', '#a5761f');
+      }
+    } else {
+      const a = _articlesCache.find(x => x.id === fiche.id);
+      el.innerHTML = a ? renderCarteArticle(a) : '<div class="feuille-empty">Article introuvable.</div>';
+    }
+    el.scrollTop = 0;
+  }
+  function rafraichirFicheScan() {
+    if (_scanFiche && document.getElementById('modal-scan-stock')?.style.display === 'flex' && _scanMode === 'info') afficherFicheScan({ ..._scanFiche, sansFormulaire: true });
+  }
+
+  // ============================================================
+  // DOUCHETTE (Inateck BCST-23 ou toute douchette "clavier" HID)
+  // ------------------------------------------------------------
+  // • Scan depuis n'importe quel écran : une frappe très rapide terminée
+  //   par Entrée est reconnue comme un scan → ouverture de la fiche
+  //   (commande ou article) sans toucher la tablette.
+  // • Si un écran de scan est ouvert, le code y est traité directement
+  //   (panier de sortie ou fiche).
+  // • Filet de sécurité AZERTY/QWERTY : si la douchette et la tablette
+  //   n'ont pas la même disposition clavier, "CMD-123" arrive sous la forme
+  //   "C?D)&é"" : le code est retraduit automatiquement.
+  // ============================================================
+  const QWERTY_SUR_AZERTY = { '&':'1','é':'2','"':'3',"'":'4','(':'5','§':'6','è':'7','!':'8','ç':'9','à':'0',
+    ')':'-','?':'M',',':'m','A':'Q','Q':'A','a':'q','q':'a','Z':'W','W':'Z','z':'w','w':'z',';':',',':':'.','°':'_','_':'8','-':'6' };
+  function retraduireAzerty(code) {
+    return [...code].map(c => QWERTY_SUR_AZERTY[c] ?? c).join('');
+  }
+  // Le QR contient un lien vers l'appli (…?scan=CODE) pour pouvoir être lu
+  // par l'appareil photo de n'importe quel téléphone ; on en extrait le code.
+  function urlScan(code) {
+    return location.origin + location.pathname + '?scan=' + encodeURIComponent(code);
+  }
+  function extraireCodeScan(brut) {
+    const t = (brut || '').trim();
+    const m = t.match(/[?&]scan=([^&#\s]+)/i);
+    if (m) { try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; } }
+    return t;
+  }
+  function resoudreCodeScanne(brut) {
+    const c = extraireCodeScan(brut);
+    const connu = x => (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
+    if (!c || connu(c)) return c;
+    const t = retraduireAzerty(c);
+    return (t !== c && connu(t)) ? t : c;
+  }
+
+  let _bufDouchette = '', _tDouchette = 0, _debutDouchette = 0;
+  document.addEventListener('keydown', (e) => {
+    const cible = e.target;
+    const enSaisie = cible && (cible.tagName === 'TEXTAREA' || cible.isContentEditable ||
+      (cible.tagName === 'INPUT' && !['checkbox', 'radio', 'button'].includes(cible.type)));
+    // Le champ de l'écran de scan gère lui-même la douchette (saisieManuelleScan)
+    if (enSaisie) { _bufDouchette = ''; return; }
+    const now = Date.now();
+    if (e.key === 'Enter') {
+      const duree = now - _debutDouchette;
+      const code = _bufDouchette;
+      _bufDouchette = '';
+      // ≥ 3 caractères tapés en moins de 40 ms chacun en moyenne = douchette
+      if (code.length >= 3 && duree < code.length * 40) {
+        e.preventDefault();
+        traiterScanDouchetteGlobal(code);
+      }
+      return;
+    }
+    if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+    if (now - _tDouchette > 80) { _bufDouchette = ''; _debutDouchette = now; }
+    _bufDouchette += e.key;
+    _tDouchette = now;
+  }, true);
+
+  async function traiterScanDouchetteGlobal(code) {
+    if (!connectedCollab) return; // pas encore connecté
+    _dernierScan = { code: '', t: 0 }; // un appui gâchette = un scan voulu (pas d'anti-rebond)
+    const modal = document.getElementById('modal-scan-stock');
+    if (modal && modal.style.display === 'flex') { traiterCodeScanne(code); return; }
+    await ouvrirScanInfo(code);
+  }
+
+  function basculerCameraScan() {
+    const off = localStorage.getItem('gb_scan_camera') === 'off';
+    localStorage.setItem('gb_scan_camera', off ? 'on' : 'off');
+    majBoutonCamera();
+    if (off) demarrerCamera().catch(e => setMessageScan('📷 Caméra indisponible (' + (e.message || e) + ')', '#c0392b'));
+    else arreterCamera().then(() => setMessageScan('🔫 Mode douchette : scannez une étiquette', 'var(--gris-moyen)'));
+  }
+  function majBoutonCamera() {
+    const b = document.getElementById('scan-btn-camera');
+    if (b) b.textContent = localStorage.getItem('gb_scan_camera') === 'off' ? '📷 Activer la caméra' : '🔫 Douchette seule';
+    const zone = document.getElementById('scan-camera');
+    if (zone) zone.style.display = localStorage.getItem('gb_scan_camera') === 'off' ? 'none' : 'block';
+  }
+  async function arreterCamera() {
+    if (_scanner) { try { await _scanner.stop(); } catch (e) {} try { _scanner.clear(); } catch (e) {} _scanner = null; }
+  }
+  async function demarrerCameraSiActive() {
+    majBoutonCamera();
+    if (localStorage.getItem('gb_scan_camera') === 'off') { setMessageScan('🔫 Mode douchette : scannez une étiquette', 'var(--gris-moyen)'); return; }
+    await demarrerCamera();
+  }
+
+  // ============================================================
+  // MISE EN STOCK — après réception d'une commande STOCK ATELIER :
+  // emplacement (Zone/Rayon) + étiquette QR de chaque article entré.
+  // Les articles qui entrent pour la 1re fois sont cochés pour l'étiquette.
+  // ============================================================
+  let _miseEnStock = [];
+  function ouvrirMiseEnStock(entrees) {
+    // Regrouper par article (plusieurs lignes possibles pour un même article)
+    const parArticle = new Map();
+    entrees.filter(e => e.article).forEach(e => {
+      const x = parArticle.get(e.article.id) || { article: e.article, quantite: 0, nouveau: e.nouveau };
+      x.quantite += e.quantite; x.nouveau = x.nouveau || e.nouveau;
+      parArticle.set(e.article.id, x);
+    });
+    _miseEnStock = [...parArticle.values()];
+    if (!_miseEnStock.length) return;
+    const zones = new Set(), rayons = new Set();
+    _articlesCache.forEach(x => { if (x['Zone']) zones.add(x['Zone']); if (x['Rayon']) rayons.add(x['Rayon']); });
+    const optZ = [...zones].sort().map(z => `<option value="${echapperHtmlNote(z).replace(/"/g, '&quot;')}"></option>`).join('');
+    const optR = [...rayons].sort().map(z => `<option value="${echapperHtmlNote(z).replace(/"/g, '&quot;')}"></option>`).join('');
+    const st = 'width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;text-transform:uppercase';
+    document.getElementById('mes-liste').innerHTML = `<datalist id="mes-zones">${optZ}</datalist><datalist id="mes-rayons">${optR}</datalist>` +
+      _miseEnStock.map((x, i) => {
+        const a = x.article;
+        return `<div style="padding:10px 0;border-bottom:1px solid #f0f0f0">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+            <div style="font-size:12px;font-weight:700;color:var(--gris);min-width:0">${echapperHtmlNote(a['Designation'] || '')}${x.nouveau ? ' <span style="font-size:9px;background:#e8f5e9;color:#2e7d32;border-radius:6px;padding:1px 5px">NOUVEAU</span>' : ''}
+              <div style="font-size:10px;color:#999;font-weight:400">${echapperHtmlNote(codeBarreArticle(a))} · +${fmtQte(x.quantite)} ${echapperHtmlNote(a['Unite'] || '')}</div></div>
+            <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--gris-moyen);white-space:nowrap;cursor:pointer">
+              <input type="checkbox" id="mes-etiq-${i}" ${x.nouveau ? 'checked' : ''} /> 🏷️</label>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <input type="text" id="mes-zone-${i}" list="mes-zones" placeholder="Zone (RACK A)" value="${echapperHtmlNote(a['Zone'] || '').replace(/"/g, '&quot;')}" style="${st}" />
+            <input type="text" id="mes-rayon-${i}" list="mes-rayons" placeholder="Rayon (A-03)" value="${echapperHtmlNote(a['Rayon'] || '').replace(/"/g, '&quot;')}" style="${st}" />
+          </div>
+        </div>`;
+      }).join('');
+    document.getElementById('modal-mise-en-stock').style.display = 'flex';
+  }
+  function fermerMiseEnStock() {
+    document.getElementById('modal-mise-en-stock').style.display = 'none';
+    _miseEnStock = [];
+  }
+  async function validerMiseEnStock(imprimer) {
+    const maj = [], aImprimer = [];
+    _miseEnStock.forEach((x, i) => {
+      const zone = (document.getElementById('mes-zone-' + i).value || '').trim().toUpperCase();
+      const rayon = (document.getElementById('mes-rayon-' + i).value || '').trim().toUpperCase();
+      if (zone !== (x.article['Zone'] || '') || rayon !== (x.article['Rayon'] || '')) {
+        maj.push({ id: x.article.id, 'Zone': zone, 'Rayon': rayon });
+        x.article['Zone'] = zone; x.article['Rayon'] = rayon; // l'étiquette imprimée porte déjà le bon emplacement
+      }
+      if (document.getElementById('mes-etiq-' + i).checked) aImprimer.push(x.article.id);
+    });
+    // Impression en premier : la fenêtre doit s'ouvrir dans le geste de l'utilisateur
+    if (imprimer && aImprimer.length) imprimerEtiquettesArticles(aImprimer);
+    else if (imprimer) { alert('Cochez 🏷️ les articles à étiqueter.'); return; }
+    try {
+      for (let k = 0; k < maj.length; k += 200) {
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/batch/?user_field_names=true`, {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ items: maj.slice(k, k + 200) })
+        });
+        if (!r.ok) throw new Error('Baserow (' + r.status + ') : ' + (await r.text()));
+      }
+      fermerMiseEnStock();
+      if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+    } catch (e) {
+      console.error('Mise en stock', e);
+      alert('Emplacements non enregistrés : ' + e.message);
+    }
+  }
+
+  // ── Catalogue EBP complet (10 000 articles) : stocké dans le Worker, pas
+  // dans Baserow. La table Baserow « Articles » ne contient que les articles
+  // en stock ; la recherche complète interroge le Worker à la demande.
+  let _catalogueResultats = { q: '', items: [] };
+  let _timerCatalogue = null;
+  function headersWorker() { return { 'X-App-Key': WORKER_APP_KEY }; }
+  function programmerRechercheCatalogue() {
+    clearTimeout(_timerCatalogue);
+    const q = (document.getElementById('stock-recherche')?.value || '').trim();
+    if (q.length < 2) { _catalogueResultats = { q: '', items: [] }; return; }
+    _timerCatalogue = setTimeout(async () => {
+      try {
+        const r = await fetch(`${EBP_WORKER}/articles/search?q=${encodeURIComponent(q)}&limit=30`, { headers: headersWorker(), cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if ((document.getElementById('stock-recherche')?.value || '').trim() !== q) return; // recherche déjà changée
+        _catalogueResultats = { q, items: d.results || [] };
+        renderStock();
+      } catch (e) {
+        console.warn('Recherche catalogue EBP', e);
+        _catalogueResultats = { q, items: [], erreur: true };
+        renderStock();
+      }
+    }, 300);
+  }
+  async function lireCatalogueParCodes(codes) {
+    const liste = [...new Set(codes.filter(Boolean))];
+    if (!liste.length) return {};
+    try {
+      const r = await fetch(`${EBP_WORKER}/articles/get?codes=${encodeURIComponent(liste.join(','))}`, { headers: headersWorker(), cache: 'no-store' });
+      if (!r.ok) return {};
+      const d = await r.json();
+      const idx = {};
+      (d.results || []).forEach(x => { idx[normRef(x.code)] = x; });
+      return idx;
+    } catch (e) { return {}; }
+  }
+  function renderCarteCatalogue(x) {
+    const sous = [x.code ? 'EBP ' + x.code : '', x.ref ? 'Réf. ' + x.ref : '', x.fournisseur, x.famille].filter(Boolean).map(echapperHtmlNote).join(' · ');
+    const codeJs = String(x.code).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `<div style="background:#fafafa;border:1px dashed #ddd;border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <div style="min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--gris-moyen)">${echapperHtmlNote(x.designation || x.code)}</div>
+          ${sous ? `<div style="font-size:10px;color:#999;margin-top:2px">${sous}</div>` : ''}
+        </div>
+        <span style="flex-shrink:0;font-size:9px;font-weight:700;background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 7px">Catalogue EBP · pas en stock</span>
+      </div>
+      ${peutGererStock() ? `<button onclick="creerArticleDepuisCatalogue('${codeJs}')" style="margin-top:8px;background:#e8f0e7;border:none;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700;color:var(--vert);cursor:pointer">📍 Définir l'emplacement / stock mini</button>` : ''}
+    </div>`;
+  }
+  async function creerArticleDepuisCatalogue(code) {
+    const x = _catalogueResultats.items.find(i => i.code === code) || (await lireCatalogueParCodes([code]))[normRef(code)];
+    if (!x) { alert('Article introuvable dans le catalogue.'); return; }
+    const existant = _articlesCache.find(a => normRef(a['Code EBP']) === normRef(code));
+    if (existant) { ouvrirEditionArticle(existant.id); return; }
+    try {
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`, {
+        method: 'POST', headers: HEADERS, body: JSON.stringify({
+          'Designation': (x.designation || x.code).slice(0, 250), 'Code EBP': x.code, 'Reference fournisseur': x.ref || '',
+          'Fournisseur': x.fournisseur || '', 'Famille': x.famille || '', 'Unite': x.unite || '', 'Origine': 'EBP', 'Actif': true
+        })
+      });
+      if (!r.ok) throw new Error('Baserow (' + r.status + ') : ' + (await r.text()));
+      const row = await r.json();
+      _articlesCache.push(row);
+      renderStock();
+      ouvrirEditionArticle(row.id);
+    } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  // ── Mouvement manuel (Sortie / Retour / Inventaire) ──
+  let _mvtArticleId = null, _mvtType = null;
+  function ouvrirMouvementStock(id, type) {
+    const a = _articlesCache.find(x => x.id === id);
+    if (!a) return;
+    _mvtArticleId = id; _mvtType = type;
+    const qte = _stockParArticle[id] || 0;
+    const titres = { 'Sortie': '➖ Sortie de stock', 'Retour': '↩️ Retour en stock', 'Inventaire': '📋 Inventaire' };
+    document.getElementById('mvt-stock-titre').textContent = titres[type] || type;
+    document.getElementById('mvt-stock-article').innerHTML = `<b>${echapperHtmlNote(a['Designation'] || '')}</b><br><span style="color:#999">Stock actuel : ${fmtQte(qte)} ${echapperHtmlNote(a['Unite'] || 'u')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span>`;
+    document.getElementById('mvt-stock-qte-label').textContent = type === 'Inventaire' ? 'Quantité comptée' : 'Quantité';
+    document.getElementById('mvt-stock-qte').value = type === 'Inventaire' ? fmtQte(qte) : '';
+    document.getElementById('mvt-stock-chantier-bloc').style.display = type === 'Inventaire' ? 'none' : 'block';
+    document.getElementById('mvt-stock-chantier').value = '';
+    document.getElementById('mvt-stock-note').value = '';
+    // Liste des chantiers en cours pour l'autocomplétion
+    const dl = document.getElementById('mvt-stock-chantiers-list');
+    const noms = new Set();
+    (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé' && c['Nom du chantier']) noms.add(c['Nom du chantier']); });
+    (_commandesCache || []).forEach(r => { const n = (r['Chantier'] || [])[0]?.value; if (n) noms.add(n); });
+    dl.innerHTML = [...noms].sort().map(n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}"></option>`).join('');
+    document.getElementById('modal-mvt-stock').style.display = 'flex';
+    setTimeout(() => document.getElementById('mvt-stock-qte').focus(), 50);
+  }
+  function fermerMouvementStock() {
+    document.getElementById('modal-mvt-stock').style.display = 'none';
+    _mvtArticleId = null; _mvtType = null;
+  }
+
+  async function creerMouvementsStock(mouvements) {
+    // mouvements : [{ articleId, type, quantite, chantier, commande, ligneId, note, libelle }]
+    const aujourdhui = dateYMD(new Date());
+    const crees = [];
+    for (let i = 0; i < mouvements.length; i += 200) {
+      const lot = mouvements.slice(i, i + 200).map(m => ({
+        'Libelle': m.libelle || `${m.type} ${m.commande || ''}`.trim(),
+        'Article': [m.articleId],
+        'Type': m.type,
+        'Quantite': m.quantite,
+        'Date': aujourdhui,
+        'Chantier': m.chantier || '',
+        'Commande': m.commande || '',
+        'Ligne commande': m.ligneId || null,
+        'Par': connectedCollab || '',
+        'Note': m.note || ''
+      }));
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/batch/?user_field_names=true`, {
+        method: 'POST', headers: HEADERS, body: JSON.stringify({ items: lot })
+      });
+      if (!r.ok) throw new Error('Baserow a refusé le mouvement (' + r.status + ') : ' + (await r.text()));
+      const data = await r.json();
+      crees.push(...(data.items || []));
+    }
+    _mouvementsCache.push(...crees);
+    recalculerStock();
+    return crees;
+  }
+
+  async function validerMouvementStock() {
+    const a = _articlesCache.find(x => x.id === _mvtArticleId);
+    if (!a) return;
+    const brut = (document.getElementById('mvt-stock-qte').value || '').replace(',', '.').trim();
+    const saisie = parseFloat(brut);
+    if (isNaN(saisie) || saisie < 0 || (_mvtType !== 'Inventaire' && saisie === 0)) { alert('Quantité invalide.'); return; }
+    const actuel = _stockParArticle[a.id] || 0;
+    const chantier = document.getElementById('mvt-stock-chantier').value.trim();
+    const note = document.getElementById('mvt-stock-note').value.trim();
+    let quantite;
+    if (_mvtType === 'Sortie') {
+      if (!chantier) { alert('Merci d\'indiquer le chantier de destination.'); return; }
+      if (saisie > actuel && !confirm(`Stock insuffisant (${fmtQte(actuel)} disponible). Enregistrer quand même ? Le stock passera en négatif.`)) return;
+      quantite = -saisie;
+    } else if (_mvtType === 'Retour') {
+      quantite = saisie;
+    } else {
+      quantite = Math.round((saisie - actuel) * 1000) / 1000;
+      if (quantite === 0) { alert('Aucun écart : le stock est déjà juste.'); fermerMouvementStock(); return; }
+    }
+    const btn = document.getElementById('mvt-stock-valider');
+    btn.disabled = true; btn.textContent = '⏳';
+    try {
+      await creerMouvementsStock([{
+        articleId: a.id, type: _mvtType, quantite, chantier, note,
+        libelle: `${_mvtType} — ${a['Designation'] || ''}`.slice(0, 250)
+      }]);
+      fermerMouvementStock();
+      renderStock();
+      rafraichirFicheScan();
+    } catch (e) {
+      console.error('Erreur mouvement stock', e);
+      alert('Erreur : ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '✅ Valider';
+    }
+  }
+
+  // ── Fiche article (emplacement, stock mini, création manuelle) ──
+  let _artEditionId = null;
+  function ouvrirEditionArticle(id) {
+    const a = id ? _articlesCache.find(x => x.id === id) : null;
+    _artEditionId = a ? a.id : null;
+    const deEBP = a && (a['Origine'] || '') === 'EBP';
+    document.getElementById('art-edit-titre').textContent = a ? '✏️ Article & emplacement' : '➕ Nouvel article';
+    const champsCatalogue = ['designation', 'ref', 'fournisseur', 'unite'];
+    document.getElementById('art-edit-designation').value = a?.['Designation'] || '';
+    document.getElementById('art-edit-ref').value = a?.['Reference fournisseur'] || '';
+    document.getElementById('art-edit-fournisseur').value = a?.['Fournisseur'] || '';
+    document.getElementById('art-edit-unite').value = a?.['Unite'] || '';
+    champsCatalogue.forEach(c => {
+      const el = document.getElementById('art-edit-' + c);
+      el.readOnly = !!deEBP; el.style.background = deEBP ? '#f5f5f5' : '#fff';
+    });
+    document.getElementById('art-edit-info-ebp').style.display = deEBP ? 'block' : 'none';
+    document.getElementById('art-edit-zone').value = a?.['Zone'] || '';
+    document.getElementById('art-edit-rayon').value = a?.['Rayon'] || '';
+    document.getElementById('art-edit-mini').value = (a && a['Stock mini'] !== null && a['Stock mini'] !== undefined && a['Stock mini'] !== '') ? fmtQte(a['Stock mini']) : '';
+    const px = a ? parseFloat(a['Plan_X']) : NaN, py = a ? parseFloat(a['Plan_Y']) : NaN;
+    document.getElementById('reception-plan-x-art').value = isNaN(px) ? '' : px;
+    document.getElementById('reception-plan-y-art').value = isNaN(py) ? '' : py;
+    document.getElementById('plan-point-label-art').textContent = isNaN(px) ? 'Placer sur le plan (facultatif)' : '✅ Point placé sur le plan';
+    // Suggestions de zones/rayons déjà utilisés
+    const zones = new Set(), rayons = new Set();
+    _articlesCache.forEach(x => { if (x['Zone']) zones.add(x['Zone']); if (x['Rayon']) rayons.add(x['Rayon']); });
+    document.getElementById('art-edit-zones-list').innerHTML = [...zones].sort().map(z => `<option value="${echapperHtmlNote(z).replace(/"/g, '&quot;')}"></option>`).join('');
+    document.getElementById('art-edit-rayons-list').innerHTML = [...rayons].sort().map(z => `<option value="${echapperHtmlNote(z).replace(/"/g, '&quot;')}"></option>`).join('');
+    document.getElementById('modal-article-stock').style.display = 'flex';
+  }
+  function fermerEditionArticle() {
+    document.getElementById('modal-article-stock').style.display = 'none';
+    _artEditionId = null;
+  }
+  function effacerPointArticle() {
+    document.getElementById('reception-plan-x-art').value = '';
+    document.getElementById('reception-plan-y-art').value = '';
+    document.getElementById('plan-point-label-art').textContent = 'Placer sur le plan (facultatif)';
+  }
+
+  async function enregistrerArticle() {
+    const designation = document.getElementById('art-edit-designation').value.trim();
+    if (!designation) { alert('La désignation est obligatoire.'); return; }
+    const miniBrut = document.getElementById('art-edit-mini').value.replace(',', '.').trim();
+    const mini = miniBrut === '' ? null : parseFloat(miniBrut);
+    if (miniBrut !== '' && (isNaN(mini) || mini < 0)) { alert('Stock mini invalide.'); return; }
+    const px = parseFloat(document.getElementById('reception-plan-x-art').value);
+    const py = parseFloat(document.getElementById('reception-plan-y-art').value);
+    const payload = {
+      'Zone': document.getElementById('art-edit-zone').value.trim().toUpperCase(),
+      'Rayon': document.getElementById('art-edit-rayon').value.trim().toUpperCase(),
+      'Stock mini': mini,
+      'Plan_X': isNaN(px) ? null : px,
+      'Plan_Y': isNaN(py) ? null : py
+    };
+    const existant = _artEditionId ? _articlesCache.find(x => x.id === _artEditionId) : null;
+    const deEBP = existant && (existant['Origine'] || '') === 'EBP';
+    if (!deEBP) {
+      payload['Designation'] = designation;
+      payload['Reference fournisseur'] = document.getElementById('art-edit-ref').value.trim();
+      payload['Fournisseur'] = document.getElementById('art-edit-fournisseur').value.trim();
+      payload['Unite'] = document.getElementById('art-edit-unite').value.trim();
+    }
+    if (!existant) { payload['Origine'] = 'Commande'; payload['Actif'] = true; }
+    const btn = document.getElementById('art-edit-valider');
+    btn.disabled = true; btn.textContent = '⏳';
+    try {
+      const url = existant
+        ? `https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${existant.id}/?user_field_names=true`
+        : `https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`;
+      const r = await fetch(url, { method: existant ? 'PATCH' : 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+      if (!r.ok) throw new Error('Baserow a refusé l\'enregistrement (' + r.status + ') : ' + (await r.text()));
+      const row = await r.json();
+      if (existant) Object.assign(existant, row); else _articlesCache.push(row);
+      fermerEditionArticle();
+      renderStock();
+    } catch (e) {
+      console.error('Erreur enregistrement article', e);
+      alert('Erreur : ' + e.message);
+    } finally {
+      btn.disabled = false; btn.textContent = '💾 Enregistrer';
+    }
+  }
+
+  // ── Entrées automatiques à la réception d'une commande STOCK ATELIER ──
+  // Appelé par validerReception AVANT la mise à jour des lignes, pour
+  // calculer ce qui arrive réellement lors de CET arrivage (delta).
+  function calculerEntreesStockReception(commande, lignes, partielle, etatsLignes, statutAvant) {
+    if (!commande || !estCommandeStockAtelier(commande)) return [];
+    const dejaPartielle = statutAvant === 'Réception partielle';
+    const entrees = [];
+    lignes.forEach(l => {
+      const qteCmd = parseFloat(l['Quantite']);
+      if (isNaN(qteCmd) || qteCmd <= 0) return;
+      // Déjà reçu avant cet arrivage
+      let avant = 0;
+      if (dejaPartielle) avant = l['Non réceptionné'] ? (lireQteRecue(l) || 0) : qteCmd;
+      // Reçu après cet arrivage
+      const etat = partielle ? etatsLignes[l.id] : { manquant: false, qteRecue: null };
+      const apres = etat?.manquant ? (etat.qteRecue || 0) : qteCmd;
+      const delta = Math.round((apres - avant) * 1000) / 1000;
+      if (delta > 0) entrees.push({ ligne: l, quantite: delta });
+    });
+    return entrees;
+  }
+
+  async function enregistrerEntreesStock(commande, entrees) {
+    if (!entrees.length || !stockTablesConfigurees()) return;
+    await chargerStock();
+    const numero = commande['Numero commande'] || '';
+    // Articles inconnus de la bibliothèque : création automatique (Origine = Commande)
+    const aCreer = [];
+    entrees.forEach(e => {
+      e.article = trouverArticlePourLigne(e.ligne);
+      if (!e.article) aCreer.push(e);
+    });
+    if (aCreer.length) {
+      // Dédoublonnage : deux lignes identiques dans la même commande → un seul article
+      const uniques = new Map();
+      aCreer.forEach(e => {
+        const cle = normRef(codeArticleLigne(e.ligne)) || normTexte(e.ligne['Description']);
+        if (!uniques.has(cle)) uniques.set(cle, e.ligne);
+      });
+      const catalogue = await lireCatalogueParCodes([...uniques.values()].map(codeArticleLigne));
+      const items = [...uniques.values()].map(l => {
+        const x = catalogue[normRef(codeArticleLigne(l))];
+        if (x) return { // fiche reprise du catalogue EBP
+          'Designation': (x.designation || x.code).slice(0, 250), 'Code EBP': x.code, 'Reference fournisseur': x.ref || '',
+          'Fournisseur': x.fournisseur || commande['Fournisseur'] || '', 'Famille': x.famille || '', 'Unite': x.unite || l['Unite'] || '',
+          'Origine': 'EBP', 'Actif': true
+        };
+        return {
+        'Designation': (l['Description'] || codeArticleLigne(l) || 'Article').slice(0, 250),
+        // Code EBP repris de la ligne : la prochaine synchro /sync-articles
+        // reconnaît l'article et complète sa fiche (Origine → EBP), stock et
+        // emplacement conservés.
+        'Code EBP': codeArticleLigne(l),
+        'Fournisseur': commande['Fournisseur'] || '',
+        'Famille': l['Categorie'] || '',
+        'Unite': l['Unite'] || '',
+        'Origine': 'Commande',
+        'Actif': true
+      }; });
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/batch/?user_field_names=true`, {
+        method: 'POST', headers: HEADERS, body: JSON.stringify({ items })
+      });
+      if (!r.ok) throw new Error('Création des articles refusée (' + r.status + ') : ' + (await r.text()));
+      const data = await r.json();
+      _articlesCache.push(...(data.items || []));
+      aCreer.forEach(e => { e.article = trouverArticlePourLigne(e.ligne); });
+    }
+    // Article jamais entré en stock jusqu'ici = nouveau (étiquette à imprimer)
+    entrees.forEach(e => { if (e.article) e.nouveau = !_mouvementsCache.some(m => (m['Article'] || [])[0]?.id === e.article.id); });
+    await creerMouvementsStock(entrees.filter(e => e.article).map(e => ({
+      articleId: e.article.id, type: 'Entrée', quantite: e.quantite,
+      chantier: 'STOCK ATELIER', commande: numero, ligneId: e.ligne.id,
+      libelle: `Entrée ${numero} — ${e.article['Designation'] || ''}`.slice(0, 250)
+    })));
+    return entrees;
+  }
+
+  // ── Synchro de la bibliothèque depuis EBP (route Worker /sync-articles) ──
+  async function syncArticlesEBP() {
+    const btn = document.getElementById('btn-sync-articles');
+    const statut = document.getElementById('stock-sync-statut');
+    btn.disabled = true; btn.textContent = '⏳ Sync…';
+    statut.style.display = 'none';
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 55000);
+      const resp = await fetch(`${EBP_WORKER}/sync-articles`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
+      clearTimeout(t);
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      if (data.status === 'erreur') throw new Error(data.message || (data.erreurs || []).join(' · ') || 'erreur');
+      statut.style.cssText += ';background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7';
+      statut.textContent = `✅ Catalogue EBP : ${data.catalogue ?? '?'} articles · ${data.lus_ebp ?? 0} lu(s) dans EBP · ${data.maj ?? 0} fiche(s) en stock mise(s) à jour${data.rattaches ? ', ' + data.rattaches + ' rattachée(s)' : ''}${data.erreurs?.length ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+      await chargerStock(true);
+      renderStock();
+    } catch (e) {
+      statut.style.cssText += ';background:#fdecea;color:#c62828;border:1px solid #ef9a9a';
+      statut.textContent = '❌ Synchro articles : ' + (e.name === 'AbortError' ? 'délai dépassé (la synchro continue côté serveur, rechargez dans 1 min)' : e.message);
+    }
+    statut.style.display = 'block';
+    btn.disabled = false; btn.textContent = '🔄 Sync articles EBP';
+    setTimeout(() => { statut.style.display = 'none'; }, 10000);
+  }
+
+  // ============================================================
   // SYNC EBP → BASEROW (une commande à la fois)
   // ============================================================
   const EBP_WORKER = 'https://guerin-ebp-proxy.f-bouyer-guerin.workers.dev';
+  // Clé partagée avec le Worker (secret APP_KEY côté Cloudflare) : protège le catalogue articles.
+  const WORKER_APP_KEY = 'XiShD7hASbRbSwL7bqMVi2DAaXpAHaFN';
 
   async function syncEBP() {
     const btn    = document.getElementById('btn-sync-ebp');
@@ -11293,7 +12549,7 @@
 
       let data = null;
       try {
-        const resp = await fetch(`${EBP_WORKER}/sync?updateDate=0`, { cache: 'no-store', signal: controller.signal });
+        const resp = await fetch(`${EBP_WORKER}/sync?updateDate=0`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
         clearTimeout(timeoutId);
         data = await resp.json();
       } catch(fetchErr) {
@@ -11476,7 +12732,7 @@
       const controller = new AbortController();
       // Volume de lignes plus élevé côté commandes clients : délai plus généreux que côté fournisseurs.
       const timeoutId  = setTimeout(() => controller.abort(), 180000);
-      const resp = await fetch(`${EBP_WORKER}/sync-clients?updateDate=0`, { cache: 'no-store', signal: controller.signal });
+      const resp = await fetch(`${EBP_WORKER}/sync-clients?updateDate=0`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
       clearTimeout(timeoutId);
       const data = await resp.json();
 
@@ -11627,6 +12883,7 @@
       </div>` : '';
       actionsHTML = `
         ${badgeLieuPartiel}
+        ${true ? `<button onclick="ouvrirEtiquetteCommande(${r.id})" style="width:100%;margin-top:8px;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">🏷️ Étiquette de commande</button>` : ''}
         <div style="display:flex;gap:8px;margin-top:8px">
           <button id="btn-reception-atelier-${uid}" onclick="toggleReceptionForm('${uid}', 'atelier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🏭 Réceptionné atelier</button>
           <button id="btn-reception-chantier-${uid}" onclick="toggleReceptionForm('${uid}', 'chantier')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">📍 Sur chantier</button>
@@ -11653,6 +12910,9 @@
           ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
           ${planX !== null ? `<button type="button" onclick="voirPointSurPlan(${planX},${planY},{lieu:'${(lieu||'Emplacement').replace(/'/g,"\\'")}',chantier:'${chantierNom.replace(/'/g,"\\'")}',fourn:'${(r['Fournisseur']||'').replace(/'/g,"\\'")}',num:'${(r['Numero commande']||'').replace(/'/g,"\\'")}',statut:'${statut.replace(/'/g,"\\'")}'})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
         </div>`;
+      }
+      if (estStatutCommandeReceptionne(statut)) {
+        extras += `<button onclick="ouvrirEtiquetteCommande(${r.id})" style="width:100%;margin-top:8px;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">🏷️ Étiquette de commande</button>`;
       }
       if (statut === 'Réceptionné en atelier') {
         extras += `
@@ -11908,6 +13168,9 @@
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
+      // AR validé : imprimer l'étiquette QR qui sera collée sur le colis à son arrivée
+      try { ouvrirEtiquetteCommande(id, 'ar'); } catch (e) {}
+      rafraichirFicheScan();
     } catch (e) {
       console.error('Erreur validation AR', e);
       alert('Erreur lors de la mise à jour : ' + e.message);
@@ -11979,6 +13242,11 @@
       payload['1ere reception date'] = dateAujourdhui;
     }
     if (note) payload['Note statut'] = note;
+    // Stock atelier : ce qui entre réellement en stock lors de CET arrivage,
+    // calculé avant que l'état des lignes ne soit modifié ci-dessous.
+    const commandeRecue = (_commandesCache || []).find(c => c.id === id) || (_modalCommandesCache || []).find(c => c.id === id);
+    let entreesStock = [];
+    try { entreesStock = calculerEntreesStockReception(commandeRecue, lignes, partielle, etatsLignes, statutAvant); } catch (e) { console.error('Calcul entrées stock', e); }
     try {
       // Met à jour, article par article, l'indicateur "Non réceptionné" : coché =
       // toujours manquant, décoché = arrivé. En réception complète (non
@@ -12007,7 +13275,12 @@
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      if (entreesStock.length) {
+        try { const entrees = await enregistrerEntreesStock(commandeRecue, entreesStock); if (entrees?.length) ouvrirMiseEnStock(entrees); }
+        catch (e) { console.error('Entrée en stock', e); alert('⚠️ Réception enregistrée, mais l\'entrée en stock a échoué : ' + e.message + '\nFaites un inventaire sur les articles concernés.'); }
+      }
       await rafraichirApresActionCommande();
+      rafraichirFicheScan();
     } catch (e) {
       console.error('Erreur réception commande', e);
       alert('Erreur lors de la mise à jour : ' + e.message);
@@ -16929,6 +18202,7 @@
       <button onclick="syncEBP()" id="btn-sync-ebp" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
         <span id="sync-icon">🔄</span><span id="sync-label">Sync EBP</span>
       </button>
+      <button onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande ou article)" style="background:var(--vert);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:#fff">📷</button>
       <button onclick="ouvrirImpressionCommandes()" title="Imprimer" style="background:var(--vert-clair);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:var(--vert)">🖨️</button>
     </div>
   </div>
@@ -16945,6 +18219,7 @@
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
+      <button id="tab-commandes-stock" onclick="switchCommandesVue('stock')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📚 Stock atelier</button>
     </div>
   </div>
   </div>
@@ -17010,6 +18285,28 @@
       <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue Stock atelier : bibliothèque d'articles (EBP), quantités, emplacements -->
+  <div id="commandes-vue-stock" style="display:none">
+    <div style="padding:10px 16px 0">
+      <div id="stock-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
+      <button onclick="ouvrirScanSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:8px">📷 Sortie rapide par scan</button>
+      <div id="stock-outils-gestion" style="display:none;gap:8px;margin-bottom:8px">
+        <button id="btn-sync-articles" onclick="syncArticlesEBP()" style="flex:1;background:#e8f0e7;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🔄 Sync articles EBP</button>
+        <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
+        <button onclick="imprimerEtiquettesListe()" title="Imprimer les étiquettes QR des articles affichés" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Étiquettes</button>
+      </div>
+      <div id="stock-sync-statut" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600"></div>
+      <input type="text" id="stock-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon (tout le catalogue)…" oninput="renderStock(); programmerRechercheCatalogue()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
+      <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:4px">
+        <button class="stock-filtre-btn" data-filtre="tous" onclick="setFiltreStock('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
+        <button class="stock-filtre-btn" data-filtre="stock" onclick="setFiltreStock('stock')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">📦 En stock</button>
+        <button class="stock-filtre-btn" data-filtre="mini" onclick="setFiltreStock('mini')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">⚠️ Sous le mini</button>
+        <button class="stock-filtre-btn" data-filtre="sansemp" onclick="setFiltreStock('sansemp')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">📍 Sans emplacement</button>
+      </div>
+    </div>
+    <div id="stock-liste" style="padding:8px 16px 80px"></div>
   </div>
   </div>
 </div>
@@ -17175,6 +18472,129 @@
 </div>
 
 <!-- MODALE PLAN PLACEMENT -->
+<!-- MODALE ÉTIQUETTE DE COMMANDE -->
+<div id="modal-etiquette-commande" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerEtiquetteCommande()">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 24px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div id="etiq-cmd-titre" style="font-size:15px;font-weight:800;color:var(--gris)"></div>
+      <button onclick="fermerEtiquetteCommande()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div id="etiq-cmd-info" style="font-size:12px;line-height:1.6;margin-bottom:8px"></div>
+    <div id="etiq-cmd-aide" style="display:none;font-size:11px;color:#7c5200;background:#fdf3e0;border-radius:8px;padding:8px 10px;margin-bottom:12px;line-height:1.5">À l'arrivage, l'opérateur colle l'étiquette sur le colis, la scanne avec 📷 (page Commandes) et renseigne l'emplacement : la réception se valide depuis la fiche affichée.</div>
+    <div style="display:flex;gap:10px;margin-bottom:14px">
+      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Nombre d'exemplaires</label>
+        <input type="number" id="etiq-cmd-nb" min="1" max="40" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;margin-top:4px" /></div>
+      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Position de départ (1 à 8)</label>
+        <input type="number" id="etiq-cmd-pos" min="1" max="8" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;margin-top:4px" /></div>
+    </div>
+    <div style="font-size:10px;color:#999;margin:-8px 0 12px">Planche A4 de 8 étiquettes (2 × 4), numérotées de gauche à droite puis de haut en bas.</div>
+    <div style="display:flex;gap:8px">
+      <button onclick="fermerEtiquetteCommande()" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Plus tard</button>
+      <button onclick="imprimerEtiquetteCommande()" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">🏷️ Imprimer</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODALE MISE EN STOCK (emplacements + étiquettes après réception STOCK ATELIER) -->
+<div id="modal-mise-en-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:560px;max-height:92vh;display:flex;flex-direction:column;box-sizing:border-box">
+    <div style="padding:16px 16px 6px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:15px;font-weight:800;color:var(--gris)">📦 Mise en stock</div>
+        <button onclick="fermerMiseEnStock()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+      </div>
+      <div style="font-size:11px;color:var(--gris-moyen);margin-top:4px">Indiquez où chaque article est rangé et imprimez les étiquettes à coller sur le rayonnage.</div>
+    </div>
+    <div id="mes-liste" style="flex:1;overflow-y:auto;padding:0 16px"></div>
+    <div style="display:flex;gap:8px;padding:12px 16px calc(16px + env(safe-area-inset-bottom, 0px));border-top:1px solid #eee">
+      <button onclick="validerMiseEnStock(false)" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">💾 Enregistrer</button>
+      <button onclick="validerMiseEnStock(true)" style="flex:1.4;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">🏷️ Enregistrer + étiquettes</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODALE SCAN — sortie rapide par code-barres (caméra tablette ou douchette) -->
+<div id="modal-scan-stock" style="display:none;position:fixed;inset:0;background:#fff;z-index:450;flex-direction:column">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #eee;padding-top:calc(12px + env(safe-area-inset-top, 0px))">
+    <div id="scan-titre" style="font-size:15px;font-weight:800;color:var(--gris)">📷 Sortie de stock par scan</div>
+    <button id="scan-btn-camera" onclick="basculerCameraScan()" style="margin-left:auto;margin-right:10px;background:#f1f5f9;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🔫 Douchette seule</button>
+    <button onclick="fermerScanSortie()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#999">✕</button>
+  </div>
+  <div id="scan-bloc-chantier" style="padding:10px 16px 0">
+    <label style="font-size:11px;font-weight:700;color:#999">Chantier de destination</label>
+    <input type="text" id="scan-chantier" list="scan-chantiers-list" placeholder="Choisir le chantier…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" />
+    <datalist id="scan-chantiers-list"></datalist>
+  </div>
+  <div style="padding:0 16px">
+    <div id="scan-camera" style="width:100%;max-width:420px;margin:0 auto;border-radius:12px;overflow:hidden;background:#111;min-height:120px"></div>
+    <div id="scan-message" style="text-align:center;font-size:13px;font-weight:700;padding:8px 0;min-height:18px"></div>
+    <input type="text" id="scan-saisie" onkeydown="saisieManuelleScan(event)" placeholder="⌨️ Saisie manuelle + Entrée" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none" />
+  </div>
+  <div id="scan-panier" style="flex:1;overflow-y:auto;padding:4px 16px"></div>
+  <div id="scan-pied" style="padding:10px 16px calc(14px + env(safe-area-inset-bottom, 0px));border-top:1px solid #eee">
+    <button id="scan-valider" onclick="validerPanierSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer">✅ Valider la sortie</button>
+  </div>
+</div>
+
+<!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-mvt-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerMouvementStock()">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 24px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div id="mvt-stock-titre" style="font-size:15px;font-weight:800;color:var(--gris)"></div>
+      <button onclick="fermerMouvementStock()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div id="mvt-stock-article" style="font-size:12px;margin-bottom:12px;line-height:1.5"></div>
+    <label id="mvt-stock-qte-label" style="font-size:11px;font-weight:700;color:#999">Quantité</label>
+    <input type="text" inputmode="decimal" id="mvt-stock-qte" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:15px;font-weight:700;outline:none;margin:4px 0 10px" />
+    <div id="mvt-stock-chantier-bloc">
+      <label style="font-size:11px;font-weight:700;color:#999">Chantier</label>
+      <input type="text" id="mvt-stock-chantier" list="mvt-stock-chantiers-list" placeholder="Chantier de destination / d'origine…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 10px" />
+      <datalist id="mvt-stock-chantiers-list"></datalist>
+    </div>
+    <textarea id="mvt-stock-note" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;resize:vertical;min-height:40px;font-family:inherit;margin-bottom:10px"></textarea>
+    <button id="mvt-stock-valider" onclick="validerMouvementStock()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">✅ Valider</button>
+  </div>
+</div>
+
+<!-- MODALE FICHE ARTICLE (emplacement Zone/Rayon/plan, stock mini, article hors EBP) -->
+<div id="modal-article-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerEditionArticle()">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:520px;max-height:92vh;overflow-y:auto;padding:18px 16px 24px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div id="art-edit-titre" style="font-size:15px;font-weight:800;color:var(--gris)"></div>
+      <button onclick="fermerEditionArticle()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div id="art-edit-info-ebp" style="display:none;font-size:11px;color:#7c5200;background:#fdf3e0;border-radius:8px;padding:6px 10px;margin-bottom:8px">Article du catalogue EBP : désignation, référence, fournisseur et unité se modifient dans EBP.</div>
+    <label style="font-size:11px;font-weight:700;color:#999">Désignation</label>
+    <input type="text" id="art-edit-designation" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" />
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Réf. fournisseur</label>
+        <input type="text" id="art-edit-ref" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" /></div>
+      <div style="width:90px"><label style="font-size:11px;font-weight:700;color:#999">Unité</label>
+        <input type="text" id="art-edit-unite" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" /></div>
+    </div>
+    <label style="font-size:11px;font-weight:700;color:#999">Fournisseur</label>
+    <input type="text" id="art-edit-fournisseur" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 12px" />
+    <div style="font-size:12px;font-weight:800;color:var(--gris);margin-bottom:6px">📍 Emplacement</div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Zone</label>
+        <input type="text" id="art-edit-zone" list="art-edit-zones-list" placeholder="ex. RACK A" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px;text-transform:uppercase" />
+        <datalist id="art-edit-zones-list"></datalist></div>
+      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Rayon / étagère</label>
+        <input type="text" id="art-edit-rayon" list="art-edit-rayons-list" placeholder="ex. A-03" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px;text-transform:uppercase" />
+        <datalist id="art-edit-rayons-list"></datalist></div>
+    </div>
+    <input type="hidden" id="reception-plan-x-art" value="" />
+    <input type="hidden" id="reception-plan-y-art" value="" />
+    <div style="display:flex;gap:6px;margin-bottom:12px">
+      <button type="button" onclick="ouvrirPlanPoint('art')" id="btn-plan-point-art" style="flex:1;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;color:#4a7c3f;cursor:pointer;text-align:left">🗺️ <span id="plan-point-label-art">Placer sur le plan (facultatif)</span></button>
+      <button type="button" onclick="effacerPointArticle()" title="Retirer le point" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;color:#c0392b;cursor:pointer">✕</button>
+    </div>
+    <label style="font-size:11px;font-weight:700;color:#999">Stock mini (alerte)</label>
+    <input type="text" inputmode="decimal" id="art-edit-mini" placeholder="vide = pas d'alerte" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 14px" />
+    <button id="art-edit-valider" onclick="enregistrerArticle()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">💾 Enregistrer</button>
+  </div>
+</div>
+
 <div id="modal-plan-point" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.7);flex-direction:column">
   <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
     <div>
