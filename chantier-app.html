@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -16923,7 +16923,60 @@
       Object.entries(sommeCmdClients).forEach(([nom, m]) => { if (!(nom in prixVenteParChantier)) prixVenteParChantier[nom] = m; });
     }
 
-    return { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp };
+    // Sorties du stock atelier imputées aux chantiers (valeur figée au mouvement,
+    // sinon estimée au prix d'achat EBP actuel). Les commandes passées sur
+    // STOCK ATELIER ne sont pas affectées aux chantiers : seules les sorties le sont.
+    const stockParChantier = {};
+    if (peutVoirPrixExport && stockTablesConfigurees()) {
+      try {
+        const [mvts, arts] = await Promise.all([
+          fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/?user_field_names=true&size=200`),
+          fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true&size=200`)
+        ]);
+        const artParId = new Map(arts.map(a => [a.id, a]));
+        // Le chantier d'un mouvement est un texte : rapprochement insensible aux accents/casse
+        const nomParCle = new Map([...chantiersConcernes].map(n => [normTexte(n), n]));
+        mvts.forEach(m => {
+          const type = m['Type']?.value || m['Type'] || '';
+          if (type !== 'Sortie' && type !== 'Retour') return;
+          const nom = nomParCle.get(normTexte(m['Chantier'] || ''));
+          if (!nom) return;
+          const date = (m['Date'] || '').split('T')[0];
+          if (dateDebut && date && date < dateDebut) return;
+          if (dateFin && date && date > dateFin) return;
+          const a = artParId.get((m['Article'] || [])[0]?.id) || {};
+          const qte = Number(m['Quantite']) || 0;
+          let valeur = m['Valeur HT'], estime = false;
+          if (valeur === null || valeur === undefined || valeur === '') {
+            const pu = Number(a['Prix achat HT']);
+            valeur = pu > 0 ? qte * pu : null; estime = true;
+          }
+          (stockParChantier[nom] = stockParChantier[nom] || []).push({
+            date, type, article: a['Designation'] || (m['Article'] || [])[0]?.value || '?', unite: a['Unite'] || '',
+            qte: -qte, cout: valeur === null ? null : round2Ch(-Number(valeur)), estime
+          });
+        });
+      } catch (e) { console.error('Rentabilité : sorties de stock', e); }
+    }
+
+    return { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp, stockParChantier };
+  }
+
+  // Pour les exports Excel : sorties de stock ajoutées aux achats du chantier
+  // (une ligne par article, fournisseur « Stock atelier »).
+  function commandesAvecStock(commandesParChantier, stockParChantier) {
+    const res = {};
+    Object.entries(commandesParChantier || {}).forEach(([n, l]) => { res[n] = l.slice(); });
+    Object.entries(stockParChantier || {}).forEach(([n, lignes]) => {
+      const parArt = {};
+      lignes.forEach(l => {
+        const x = parArt[l.article] || (parArt[l.article] = { date: l.date, fournisseur: 'Stock atelier', numero: l.article, statut: 'Sortie de stock', montant: 0 });
+        x.montant = round2Ch(x.montant + (l.cout || 0));
+        if (l.date && (!x.date || l.date > x.date)) x.date = l.date;
+      });
+      res[n] = (res[n] || []).concat(Object.values(parArt).filter(x => x.montant));
+    });
+    return res;
   }
 
   async function exportFeuilleHeures(periode) {
@@ -16961,9 +17014,9 @@
 
       const donnees = await chargerDonneesAnalyseChantier(dateDebut, dateFin);
       if (!donnees) { alert('Aucune saisie pour cette période.'); return; }
-      const { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp } = donnees;
+      const { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp, stockParChantier } = donnees;
 
-      const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesParChantier, peutVoirPrixExport, prixVenteParChantier, commandesClientsParChantier);
+      const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesAvecStock(commandesParChantier, stockParChantier), peutVoirPrixExport, prixVenteParChantier, commandesClientsParChantier);
 
       // Diagnostic : chantiers exportés sans prix de vente
       let messageDiagPrix = '';
@@ -17147,13 +17200,16 @@
       const horsAnalyse = !estChantierAnalyse(c.nom);
       const cmds = d.commandesParChantier[c.nom] || [];
       const commandes = cmds.reduce((s, x) => s + x.montant, 0);
+      const sorties = (d.stockParChantier || {})[c.nom] || [];
+      const stock = sorties.reduce((s, x) => s + (x.cout || 0), 0);
+      const stockEstime = sorties.some(x => x.estime && x.cout !== null);
       const mo = c.heures * taux;
-      const cout = (mo + commandes) * coef;
+      const cout = (mo + commandes + stock) * coef;
       const pv = d.prixVenteParChantier[c.nom];
       const prix = (!horsAnalyse && typeof pv === 'number' && !isNaN(pv)) ? pv : null;
       const renta = prix !== null ? prix - cout : null;
       const marge = prix ? renta / prix : null;
-      return { ...c, horsAnalyse, cmds, commandes, mo, cout, prix, renta, marge, cmdClients: d.commandesClientsParChantier[c.nom] || [] };
+      return { ...c, horsAnalyse, cmds, commandes, sorties, stock, stockEstime, mo, cout, prix, renta, marge, cmdClients: d.commandesClientsParChantier[c.nom] || [] };
     });
   }
 
@@ -17195,7 +17251,7 @@
     try {
       const wb = await genererClasseurAnalyseChantier(
         d.dataAnalyse.filter(r => garder.has(r.chantier)),
-        pick(d.commandesParChantier), d.peutVoirPrixExport,
+        pick(commandesAvecStock(d.commandesParChantier, d.stockParChantier)), d.peutVoirPrixExport,
         pick(d.prixVenteParChantier), pick(d.commandesClientsParChantier),
         { taux, coef, ordre: noms });
       const buffer = await wb.xlsx.writeBuffer();
@@ -17270,6 +17326,8 @@
           <div style="color:var(--gris-moyen);margin-top:4px">👷 ${escRenta([...c.collabs].sort().join(', '))}</div>
           ${c.cmds.length ? `<div style="font-weight:700;margin:8px 0 4px">📦 Commandes fournisseurs (${c.cmds.length})</div>
             ${c.cmds.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.fournisseur)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
+          ${c.sorties.length ? `<div style="font-weight:700;margin:8px 0 4px">🗄️ Sorties du stock atelier (${c.sorties.length})</div>
+            ${c.sorties.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(x.unite)}${x.type === 'Retour' ? ' (retour)' : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.cmdClients.length ? `<div style="font-weight:700;margin:8px 0 4px">🧾 Commandes clients EBP (${c.cmdClients.length})</div>
             ${c.cmdClients.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.client)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
         </div>` : '';
@@ -17282,6 +17340,7 @@
           ${chiffre('Heures', hRenta(c.heures))}
           ${chiffre('Main d\'œuvre', eurRenta(c.mo))}
           ${chiffre('Commandes', eurRenta(c.commandes))}
+          ${c.sorties.length ? chiffre('Stock atelier', (c.stockEstime ? '~ ' : '') + eurRenta(c.stock)) : ''}
           ${chiffre('Coût revient', eurRenta(c.cout))}
           ${chiffre('Prix vente', c.horsAnalyse ? '—' : eurRenta(c.prix))}
           ${chiffre('Rentabilité', c.renta === null ? '—' : eurRenta(c.renta), coul)}
