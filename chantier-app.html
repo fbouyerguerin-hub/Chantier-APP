@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V12';
+  const APP_VERSION = 'V13';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -700,6 +700,9 @@
   //   Type (texte : Entrée / Sortie / Retour / Inventaire) · Quantite (décimal 3, négatif autorisé)
   //   Date (date) · Chantier (texte) · Commande (texte) · Ligne commande (nombre)
   //   Par (texte) · Note (texte long)
+  //   Prix unitaire HT (décimal 2) · Valeur HT (décimal 2, négatif autorisé)
+  //   → valeur figée au moment du mouvement : sorties au prix d'achat EBP de
+  //     l'article, entrées au prix réel de la ligne de commande.
   const TABLE_ARTICLES = '1237462';
   const TABLE_MOUVEMENTS_STOCK = '1237464';
   // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
@@ -11852,7 +11855,7 @@
   // Planche A4 de 8 étiquettes 99,1 × 67,7 mm ; position de départ réglable
   // pour réutiliser une planche entamée.
   // ============================================================
-  let _etiqCmdId = null;
+  let _etiqCmdId = null, _etiqCmdRow = null;
   function codeBarreCommande(r) { return 'CMD-' + r.id; }
   function trouverCommandeParCode(brut) {
     const code = (brut || '').toString().trim();
@@ -11863,10 +11866,12 @@
     return n ? (pool.find(c => normRef(c['Numero commande']) === n) || null) : null;
   }
 
-  function ouvrirEtiquetteCommande(id, contexte = '') {
-    const r = trouverCommandeParCode('CMD-' + id);
+  function ouvrirEtiquetteCommande(id, contexte = '', rowConnue = null) {
+    // rowConnue : ligne lue avant validation de l'AR (la commande peut avoir
+    // quitté la vue affichée après rafraîchissement, quel que soit son chantier).
+    const r = trouverCommandeParCode('CMD-' + id) || rowConnue;
     if (!r) { alert('Commande introuvable.'); return; }
-    _etiqCmdId = id;
+    _etiqCmdId = id; _etiqCmdRow = r;
     const chantier = (r['Chantier'] || [])[0]?.value || '';
     document.getElementById('etiq-cmd-titre').textContent = contexte === 'ar' ? '✅ AR validé — étiquette de réception' : '🏷️ Étiquette de commande';
     document.getElementById('etiq-cmd-aide').style.display = contexte === 'ar' ? 'block' : 'none';
@@ -11877,11 +11882,11 @@
   }
   function fermerEtiquetteCommande() {
     document.getElementById('modal-etiquette-commande').style.display = 'none';
-    _etiqCmdId = null;
+    _etiqCmdId = null; _etiqCmdRow = null;
   }
 
   async function imprimerEtiquetteCommande() {
-    const r = trouverCommandeParCode('CMD-' + _etiqCmdId);
+    const r = trouverCommandeParCode('CMD-' + _etiqCmdId) || _etiqCmdRow;
     if (!r) return;
     const nb = Math.max(1, Math.min(40, parseInt(document.getElementById('etiq-cmd-nb').value) || 1));
     const pos = Math.max(1, Math.min(8, parseInt(document.getElementById('etiq-cmd-pos').value) || 1));
@@ -11984,7 +11989,12 @@
       // l'opérateur n'a plus qu'à saisir l'emplacement et valider.
       const statut = r ? (estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], '')) : '';
       if (r && (statut === 'En attente réception' || statut === 'Réception partielle') && !fiche.sansFormulaire) {
-        setTimeout(() => { try { toggleReceptionForm(r.id + '-scan', 'atelier'); } catch (e) {} }, 50);
+        setTimeout(() => {
+          try {
+            toggleReceptionForm(r.id + '-scan', 'atelier');
+            document.getElementById('reception-form-' + r.id + '-scan')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          } catch (e) {}
+        }, 80);
       } else if (r && statut === 'En attente AR') {
         setMessageScan('⚠️ AR pas encore validé pour cette commande', '#a5761f');
       }
@@ -12232,6 +12242,98 @@
     } catch (e) { alert('Erreur : ' + e.message); }
   }
 
+  // ── Coût du stock consommé par chantier (gestionnaires) ──
+  // Sorties et retours valorisés : valeur figée à l'enregistrement si présente,
+  // sinon estimée au prix d'achat EBP actuel de l'article (marquée « ~ »).
+  let _coutsLignes = [];
+  function fmtEur(n) { return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
+  async function ouvrirCoutsChantiers() {
+    if (!peutGererStock()) return;
+    document.getElementById('modal-couts-stock').style.display = 'flex';
+    document.getElementById('couts-contenu').innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try { await chargerStock(true); renderCoutsChantiers(); }
+    catch (e) { document.getElementById('couts-contenu').innerHTML = '<div class="feuille-empty">❌ ' + echapperHtmlNote(e.message) + '</div>'; }
+  }
+  function calculerCoutsChantiers() {
+    const du = document.getElementById('couts-du')?.value || '';
+    const au = document.getElementById('couts-au')?.value || '';
+    const lignes = [];
+    _mouvementsCache.forEach(m => {
+      const type = m['Type']?.value || m['Type'] || '';
+      if (type !== 'Sortie' && type !== 'Retour') return;
+      const chantier = (m['Chantier'] || '').trim() || '(sans chantier)';
+      if (normTexte(chantier).includes('stock atelier')) return;
+      const date = m['Date'] || '';
+      if (du && date < du) return;
+      if (au && date > au) return;
+      const aid = (m['Article'] || [])[0]?.id;
+      const a = _articlesCache.find(x => x.id === aid) || {};
+      const qte = Number(m['Quantite']) || 0;
+      let valeur = m['Valeur HT'], pu = m['Prix unitaire HT'], estime = false;
+      if (valeur === null || valeur === undefined || valeur === '') {
+        const p = prixArticle(a);
+        pu = p; valeur = p === null ? null : qte * p; estime = true;
+      }
+      lignes.push({ chantier, date, type, article: a['Designation'] || (m['Article'] || [])[0]?.value || '?', code: a['Code EBP'] || '',
+                    unite: a['Unite'] || '', qte, pu: pu === null || pu === undefined || pu === '' ? null : Number(pu),
+                    cout: valeur === null ? null : -Number(valeur), estime, par: m['Par'] || '' });
+    });
+    return lignes;
+  }
+  function renderCoutsChantiers() {
+    const el = document.getElementById('couts-contenu');
+    _coutsLignes = calculerCoutsChantiers();
+    const parCh = {};
+    _coutsLignes.forEach(l => {
+      const g = parCh[l.chantier] || (parCh[l.chantier] = { total: 0, n: 0, sansPrix: 0, estime: false, lignes: [] });
+      g.n++; g.lignes.push(l);
+      if (l.cout === null) g.sansPrix++; else g.total += l.cout;
+      if (l.estime && l.cout !== null) g.estime = true;
+    });
+    // Valeur du stock restant en atelier
+    let valeurStock = 0;
+    _articlesCache.forEach(a => { const q = _stockParArticle[a.id] || 0, p = prixArticle(a); if (q > 0 && p !== null) valeurStock += q * p; });
+    const noms = Object.keys(parCh).sort((x, y) => parCh[y].total - parCh[x].total);
+    const total = noms.reduce((t, n) => t + parCh[n].total, 0);
+    let html = `<div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="flex:1;background:#e8f0e7;border-radius:10px;padding:8px 10px"><div style="color:#666">Consommé (période)</div><div style="font-size:16px;font-weight:800;color:var(--vert)">${fmtEur(total)}</div></div>
+      <div style="flex:1;background:var(--beige-clair);border-radius:10px;padding:8px 10px"><div style="color:#666">Valeur du stock atelier</div><div style="font-size:16px;font-weight:800;color:var(--gris)">${fmtEur(valeurStock)}</div></div>
+    </div>`;
+    if (_stockSansValorisation) html += `<div style="background:#fff3e0;border-radius:8px;padding:8px;margin-bottom:8px;color:#a35a00">⚠️ Champs « Prix unitaire HT » et « Valeur HT » absents de la table Mouvements stock : les coûts sont estimés au prix EBP actuel.</div>`;
+    if (!noms.length) html += '<div class="feuille-empty">Aucune sortie de stock sur la période.</div>';
+    noms.forEach((n, i) => {
+      const g = parCh[n];
+      html += `<details style="border:1px solid #eee;border-radius:10px;margin-bottom:6px;padding:8px 10px">
+        <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;font-weight:700">
+          <span>${echapperHtmlNote(n)} <span style="color:#999;font-weight:400">· ${g.n} mvt</span></span>
+          <span>${g.estime ? '~ ' : ''}${fmtEur(g.total)}${g.sansPrix ? ` <span style="color:#c62828;font-weight:400">(${g.sansPrix} sans prix)</span>` : ''}</span>
+        </summary>
+        <table style="width:100%;border-collapse:collapse;margin-top:6px">
+          ${g.lignes.sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(l => `<tr style="border-top:1px solid #f2f2f2">
+            <td style="padding:3px 4px;color:#999;white-space:nowrap">${echapperHtmlNote((l.date || '').split('-').reverse().join('/'))}</td>
+            <td style="padding:3px 4px">${echapperHtmlNote(l.article)}${l.type === 'Retour' ? ' <i style="color:#999">(retour)</i>' : ''}</td>
+            <td style="padding:3px 4px;text-align:right;white-space:nowrap">${fmtQte(-l.qte)} ${echapperHtmlNote(l.unite)}</td>
+            <td style="padding:3px 4px;text-align:right;white-space:nowrap">${l.cout === null ? '<span style="color:#c62828">—</span>' : (l.estime ? '~ ' : '') + fmtEur(l.cout)}</td>
+          </tr>`).join('')}
+        </table>
+      </details>`;
+    });
+    html += '<div style="color:#999;margin-top:6px">« ~ » : valeur estimée au prix d\'achat EBP actuel (mouvement enregistré avant la valorisation).</div>';
+    el.innerHTML = html;
+  }
+  function exporterCoutsChantiers() {
+    const esc = v => { const t = String(v ?? ''); return /[;"\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const num = v => v === null || v === undefined ? '' : String(Math.round(v * 100) / 100).replace('.', ',');
+    const lignes = [['Chantier', 'Date', 'Type', 'Code EBP', 'Article', 'Quantite', 'Unite', 'Prix unitaire HT', 'Cout HT', 'Estime', 'Par']]
+      .concat(_coutsLignes.map(l => [l.chantier, l.date, l.type, l.code, l.article, num(-l.qte), l.unite, num(l.pu), num(l.cout), l.estime ? 'oui' : '', l.par]));
+    const blob = new Blob(['\ufeff' + lignes.map(r => r.map(esc).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'couts_stock_chantiers_' + dateYMD(new Date()) + '.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
   // ── Mouvement manuel (Sortie / Retour / Inventaire) ──
   let _mvtArticleId = null, _mvtType = null;
   function ouvrirMouvementStock(id, type) {
@@ -12261,26 +12363,57 @@
     _mvtArticleId = null; _mvtType = null;
   }
 
+  // ── Valorisation des mouvements (coût imputé aux chantiers) ──
+  let _stockSansValorisation = false;
+  function prixArticle(a) {
+    const p = Number(a?.['Prix achat HT']);
+    return a && a['Prix achat HT'] !== null && a['Prix achat HT'] !== '' && !isNaN(p) && p > 0 ? p : null;
+  }
+  function prixUnitaireMouvement(m) {
+    if (m.prixUnitaire !== undefined && m.prixUnitaire !== null && !isNaN(m.prixUnitaire)) return Math.round(m.prixUnitaire * 100) / 100;
+    return prixArticle(_articlesCache.find(x => x.id === m.articleId));
+  }
+
   async function creerMouvementsStock(mouvements) {
     // mouvements : [{ articleId, type, quantite, chantier, commande, ligneId, note, libelle }]
     const aujourdhui = dateYMD(new Date());
     const crees = [];
     for (let i = 0; i < mouvements.length; i += 200) {
-      const lot = mouvements.slice(i, i + 200).map(m => ({
-        'Libelle': m.libelle || `${m.type} ${m.commande || ''}`.trim(),
-        'Article': [m.articleId],
-        'Type': m.type,
-        'Quantite': m.quantite,
-        'Date': aujourdhui,
-        'Chantier': m.chantier || '',
-        'Commande': m.commande || '',
-        'Ligne commande': m.ligneId || null,
-        'Par': connectedCollab || '',
-        'Note': m.note || ''
-      }));
-      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/batch/?user_field_names=true`, {
-        method: 'POST', headers: HEADERS, body: JSON.stringify({ items: lot })
+      const lot = mouvements.slice(i, i + 200).map(m => {
+        const row = {
+          'Libelle': m.libelle || `${m.type} ${m.commande || ''}`.trim(),
+          'Article': [m.articleId],
+          'Type': m.type,
+          'Quantite': m.quantite,
+          'Date': aujourdhui,
+          'Chantier': m.chantier || '',
+          'Commande': m.commande || '',
+          'Ligne commande': m.ligneId || null,
+          'Par': connectedCollab || '',
+          'Note': m.note || ''
+        };
+        if (!_stockSansValorisation) {
+          const pu = prixUnitaireMouvement(m);
+          if (pu !== null) {
+            row['Prix unitaire HT'] = pu;
+            row['Valeur HT'] = Math.round((Number(m.quantite) || 0) * pu * 100) / 100;
+          }
+        }
+        return row;
       });
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/batch/?user_field_names=true`;
+      let r = await fetch(url, { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: lot }) });
+      if (!r.ok && r.status === 400 && !_stockSansValorisation) {
+        // Champs « Prix unitaire HT » / « Valeur HT » pas encore créés dans Baserow :
+        // on enregistre quand même le mouvement, sans valorisation.
+        const txt = await r.text();
+        if (/Prix unitaire HT|Valeur HT|field/i.test(txt)) {
+          console.warn('Mouvements stock : champs de valorisation absents, enregistrement sans prix.', txt);
+          _stockSansValorisation = true;
+          lot.forEach(x => { delete x['Prix unitaire HT']; delete x['Valeur HT']; });
+          r = await fetch(url, { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: lot }) });
+        } else throw new Error('Baserow a refusé le mouvement (400) : ' + txt);
+      }
       if (!r.ok) throw new Error('Baserow a refusé le mouvement (' + r.status + ') : ' + (await r.text()));
       const data = await r.json();
       crees.push(...(data.items || []));
@@ -12485,6 +12618,8 @@
     await creerMouvementsStock(entrees.filter(e => e.article).map(e => ({
       articleId: e.article.id, type: 'Entrée', quantite: e.quantite,
       chantier: 'STOCK ATELIER', commande: numero, ligneId: e.ligne.id,
+      prixUnitaire: (Number(e.ligne['Montant HT']) > 0 && Number(e.ligne['Quantite']) > 0)
+        ? Number(e.ligne['Montant HT']) / Number(e.ligne['Quantite']) : undefined,
       libelle: `Entrée ${numero} — ${e.article['Designation'] || ''}`.slice(0, 250)
     })));
     return entrees;
@@ -12967,12 +13102,15 @@
       ${actionsHTML}
       ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<button onclick="supprimerCommande(${r.id})" style="width:100%;margin-top:10px;background:none;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px;font-size:10px;font-weight:700;cursor:pointer">🗑️ Supprimer cette commande</button>` : ''}
     `;
+    // Fiche ouverte par scan d'étiquette : détail déplié d'office, sinon les
+    // actions (réception, emplacement, départ chantier) restent invisibles.
+    const detailsOuvert = contexte === 'scan';
     const detailsHTML = `
       <div onclick="toggleDetailsCommande('${uid}')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding:5px 8px;background:#fafafa;border-radius:6px;font-size:10px;font-weight:700;color:var(--gris-moyen)">
         <span>▸ Détail${nbArticles ? ` (${nbArticles} article${nbArticles > 1 ? 's' : ''})` : ''}</span>
-        <span id="details-chevron-${uid}">▸</span>
+        <span id="details-chevron-${uid}">${detailsOuvert ? '▾' : '▸'}</span>
       </div>
-      <div id="details-${uid}" style="display:none">${contenuDetails}</div>
+      <div id="details-${uid}" style="display:${detailsOuvert ? 'block' : 'none'}">${contenuDetails}</div>
     `;
 
     const detailsRetourHTML = peutSignalerRetour ? `
@@ -13167,9 +13305,11 @@
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      const rowMaj = await rPatch.json().catch(() => null);
       await rafraichirApresActionCommande();
-      // AR validé : imprimer l'étiquette QR qui sera collée sur le colis à son arrivée
-      try { ouvrirEtiquetteCommande(id, 'ar'); } catch (e) {}
+      // AR validé : étiquette QR pour TOUTES les commandes (atelier ou chantier),
+      // collée sur le colis à son arrivée.
+      try { ouvrirEtiquetteCommande(id, 'ar', rowMaj && rowMaj.id ? rowMaj : null); } catch (e) { console.error('Étiquette commande', e); }
       rafraichirFicheScan();
     } catch (e) {
       console.error('Erreur validation AR', e);
@@ -18296,6 +18436,7 @@
         <button id="btn-sync-articles" onclick="syncArticlesEBP()" style="flex:1;background:#e8f0e7;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🔄 Sync articles EBP</button>
         <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
         <button onclick="imprimerEtiquettesListe()" title="Imprimer les étiquettes QR des articles affichés" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Étiquettes</button>
+        <button onclick="ouvrirCoutsChantiers()" title="Coût du stock consommé par chantier" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">💶 Coûts</button>
       </div>
       <div id="stock-sync-statut" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600"></div>
       <input type="text" id="stock-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon (tout le catalogue)…" oninput="renderStock(); programmerRechercheCatalogue()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
@@ -18537,6 +18678,21 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-couts-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;padding:18px 16px 16px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">💶 Stock consommé par chantier</div>
+      <button onclick="document.getElementById('modal-couts-stock').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <input type="date" id="couts-du" onchange="renderCoutsChantiers()" style="flex:1;border:1px solid #ddd;border-radius:8px;padding:6px;font-size:12px" />
+      <input type="date" id="couts-au" onchange="renderCoutsChantiers()" style="flex:1;border:1px solid #ddd;border-radius:8px;padding:6px;font-size:12px" />
+      <button onclick="exporterCoutsChantiers()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">⬇️ CSV</button>
+    </div>
+    <div id="couts-contenu" style="overflow-y:auto;flex:1;font-size:12px"></div>
+  </div>
+</div>
+
 <div id="modal-mvt-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerMouvementStock()">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:18px 16px 24px;box-sizing:border-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
