@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V13';
+  const APP_VERSION = 'V14';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11335,9 +11335,19 @@
     const v = Math.round((Number(n) || 0) * 1000) / 1000;
     return String(v).replace('.', ',');
   }
+  // Commande destinée au stock : chantier « STOCK ATELIER » OU aucun chantier
+  // affecté dans EBP. À la réception, une case « Entrer en stock » (cochée par
+  // défaut) permet d'exclure une commande de frais généraux.
   function estCommandeStockAtelier(r) {
-    const nom = (r?.['Chantier'] || [])[0]?.value || '';
+    const ch = (r?.['Chantier'] || [])[0];
+    const nom = ch?.value || '';
+    if (!ch || !nom.trim()) return true;
     return normTexte(nom).includes('stock atelier');
+  }
+  // Lignes qui ne sont pas de la marchandise (port, transport, emballage…)
+  function estLigneFrais(l) {
+    return /\b(frais|port|transport|livraison|emballage|eco[- ]?(participation|contribution)|consigne)\b/i.test(normTexte(l['Description'] || ''))
+      && !codeArticleLigne(l);
   }
 
   // Code article EBP d'une ligne de commande fournisseur : le Worker /sync
@@ -11633,6 +11643,7 @@
     if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
     _scanMode = 'sortie'; _scanFiche = null;
     appliquerModeScan();
+    { const b = document.getElementById('scan-btn-relancer'); if (b) b.style.display = 'none'; }
     document.getElementById('modal-scan-stock').style.display = 'flex';
     _panierSortie = [];
     renderPanierSortie();
@@ -11663,11 +11674,27 @@
     _scanner = new Html5Qrcode('scan-camera', { formatsToSupport: formats, verbose: false });
     await _scanner.start(
       { facingMode: 'environment' },
-      { fps: 12, qrbox: (w, h) => { const c = Math.floor(Math.min(w, h) * 0.7); return { width: c, height: c }; } },
+      { fps: 12, aspectRatio: 1.777778 }, // image large et basse ; lecture sur toute l'image
       (texte) => traiterCodeScanne(texte),
       () => {}
     );
     setMessageScan('📷 Visez une étiquette', 'var(--gris-moyen)');
+  }
+
+  // Fiche affichée après scan : la caméra s'efface pour laisser la place au
+  // formulaire (réception, emplacement…). Un bouton permet de rescanner.
+  async function masquerCameraScan() {
+    const zone = document.getElementById('scan-camera');
+    if (zone) zone.style.display = 'none';
+    await arreterCamera();
+    const b = document.getElementById('scan-btn-relancer');
+    if (b) b.style.display = localStorage.getItem('gb_scan_camera') === 'off' ? 'none' : 'block';
+  }
+  async function relancerCameraScan() {
+    const b = document.getElementById('scan-btn-relancer');
+    if (b) b.style.display = 'none';
+    try { await demarrerCameraSiActive(); }
+    catch (e) { setMessageScan('📷 Caméra indisponible (' + (e.message || e) + ')', '#c0392b'); }
   }
 
   async function fermerScanSortie() {
@@ -11960,6 +11987,7 @@
     _scanMode = 'info';
     _scanFiche = null;
     appliquerModeScan();
+    { const b = document.getElementById('scan-btn-relancer'); if (b) b.style.display = 'none'; }
     document.getElementById('modal-scan-stock').style.display = 'flex';
     document.getElementById('scan-panier').innerHTML = '<div style="color:#bbb;font-size:12px;text-align:center;padding:14px">Scannez l\'étiquette d\'une commande ou d\'un article.</div>';
     setMessageScan('⏳ Préparation…', '#999');
@@ -11981,6 +12009,7 @@
   }
   function afficherFicheScan(fiche) {
     _scanFiche = fiche;
+    if (_scanMode === 'info' && !fiche.sansFormulaire) masquerCameraScan().catch(() => {});
     const el = document.getElementById('scan-panier');
     if (fiche.type === 'commande') {
       const r = trouverCommandeParCode('CMD-' + fiche.id);
@@ -12556,6 +12585,7 @@
     lignes.forEach(l => {
       const qteCmd = parseFloat(l['Quantite']);
       if (isNaN(qteCmd) || qteCmd <= 0) return;
+      if (estLigneFrais(l)) return;
       // Déjà reçu avant cet arrivage
       let avant = 0;
       if (dejaPartielle) avant = l['Non réceptionné'] ? (lireQteRecue(l) || 0) : qteCmd;
@@ -13033,6 +13063,10 @@
             🔶 Réception partielle (il manque des articles)
           </label>
           <div id="reception-manquants-${uid}" style="display:none;margin-bottom:6px">${renderFormArticlesManquants(r, uid)}</div>
+          ${estCommandeStockAtelier(r) ? `<label id="reception-stock-bloc-${uid}" style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--vert);font-weight:700;margin-bottom:6px;cursor:pointer;background:#e8f0e7;border-radius:8px;padding:7px 10px">
+            <input type="checkbox" id="reception-stock-${uid}" checked />
+            📦 Entrer les articles en stock atelier${(r['Chantier'] || []).length ? '' : ' <span style="font-weight:400;color:#666">(commande sans chantier)</span>'}
+          </label>` : ''}
           <textarea id="reception-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
           <button onclick="validerReception('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider la réception</button>
         </div>`;
@@ -13267,6 +13301,8 @@
     const styleInactif = { background: 'var(--beige-clair)', color: 'var(--gris)' };
     if (btnAtelier) Object.assign(btnAtelier.style, type === 'atelier' ? styleActif : styleInactif);
     if (btnChantier) Object.assign(btnChantier.style, type === 'chantier' ? styleActif : styleInactif);
+    const blocStock = document.getElementById('reception-stock-bloc-' + uid);
+    if (blocStock) blocStock.style.display = type === 'atelier' ? 'flex' : 'none';
   }
 
   function toggleValiderARForm(uid) {
@@ -13386,7 +13422,10 @@
     // calculé avant que l'état des lignes ne soit modifié ci-dessous.
     const commandeRecue = (_commandesCache || []).find(c => c.id === id) || (_modalCommandesCache || []).find(c => c.id === id);
     let entreesStock = [];
-    try { entreesStock = calculerEntreesStockReception(commandeRecue, lignes, partielle, etatsLignes, statutAvant); } catch (e) { console.error('Calcul entrées stock', e); }
+    // Entrée en stock : réception en atelier uniquement, et case « Entrer en stock » cochée
+    const caseStock = document.getElementById('reception-stock-' + uid);
+    const entrerEnStock = type === 'atelier' && (!caseStock || caseStock.checked);
+    try { if (entrerEnStock) entreesStock = calculerEntreesStockReception(commandeRecue, lignes, partielle, etatsLignes, statutAvant); } catch (e) { console.error('Calcul entrées stock', e); }
     try {
       // Met à jour, article par article, l'indicateur "Non réceptionné" : coché =
       // toujours manquant, décoché = arrivé. En réception complète (non
@@ -18667,7 +18706,16 @@
     <datalist id="scan-chantiers-list"></datalist>
   </div>
   <div style="padding:0 16px">
-    <div id="scan-camera" style="width:100%;max-width:420px;margin:0 auto;border-radius:12px;overflow:hidden;background:#111;min-height:120px"></div>
+    <style>
+      /* Aperçu caméra compact : bandeau de hauteur limitée, image recadrée */
+      #scan-camera { position:relative; height:min(26vh,200px); }
+      #scan-camera video { width:100% !important; height:100% !important; object-fit:cover; display:block; }
+      #scan-camera #qr-shaded-region, #scan-camera canvas { display:none !important; }
+      #scan-camera::after { content:''; position:absolute; left:50%; top:50%; width:min(52%,150px); aspect-ratio:1; transform:translate(-50%,-50%);
+        border:2px solid rgba(255,255,255,.85); border-radius:10px; box-shadow:0 0 0 9999px rgba(0,0,0,.25); pointer-events:none; }
+    </style>
+    <div id="scan-camera" style="width:100%;max-width:420px;margin:0 auto;border-radius:12px;overflow:hidden;background:#111"></div>
+    <button id="scan-btn-relancer" onclick="relancerCameraScan()" style="display:none;width:100%;max-width:420px;margin:0 auto;background:#f1f5f9;border:none;border-radius:10px;padding:9px;font-size:13px;font-weight:700;color:var(--gris);cursor:pointer">📷 Scanner une autre étiquette</button>
     <div id="scan-message" style="text-align:center;font-size:13px;font-weight:700;padding:8px 0;min-height:18px"></div>
     <input type="text" id="scan-saisie" onkeydown="saisieManuelleScan(event)" placeholder="⌨️ Saisie manuelle + Entrée" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none" />
   </div>
