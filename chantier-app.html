@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V14';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11827,7 +11827,9 @@
 
   // ── Impression des étiquettes (planche A4 21 étiquettes 63,5 × 38,1 mm) ──
   async function imprimerEtiquettesArticles(ids) {
-    const articles = ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean);
+    return imprimerEtiquettesArticlesObjets(ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean));
+  }
+  async function imprimerEtiquettesArticlesObjets(articles) {
     if (!articles.length) { alert('Aucun article à imprimer : filtrez ou recherchez d\'abord la liste voulue.'); return; }
     if (articles.length > 21 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 21)} planche(s) A4). Continuer ?`)) return;
     const fen = window.open('', '_blank');
@@ -11875,6 +11877,33 @@
       alert('Erreur : ' + e.message);
     }
   }
+  // ── Étiquettes rayonnage des articles d'une commande ──
+  // Une étiquette par article commandé (dédoublonné), même s'il n'est pas
+  // encore en stock : le QR porte le code article EBP de la ligne, reconnu au
+  // scan dès que l'article est entré en stock. Lignes de frais exclues.
+  function articlesEtiquettesCommande(r) {
+    const vus = new Map();
+    (_commandesLignesCache[r.id] || []).forEach(l => {
+      if (estLigneFrais(l)) return;
+      const a = trouverArticlePourLigne(l);
+      const code = a ? codeBarreArticle(a) : codeArticleLigne(l);
+      if (!code || vus.has(normRef(code))) return;
+      vus.set(normRef(code), a || { 'Designation': (l['Description'] || code).slice(0, 250), 'Code EBP': code });
+    });
+    return [...vus.values()];
+  }
+  async function imprimerEtiquettesRayonnageCommande(id) {
+    const r = trouverCommandeParCode('CMD-' + id) || (_etiqCmdRow && _etiqCmdRow.id === id ? _etiqCmdRow : null);
+    if (!r) { alert('Commande introuvable.'); return; }
+    // Pas d'attente réseau ici : la fenêtre d'impression doit s'ouvrir dans la
+    // foulée du clic (sinon bloquée sur iPhone). Sans stock chargé, l'étiquette
+    // porte le code EBP de la ligne, sans emplacement.
+    if (stockTablesConfigurees() && !_stockCharge) chargerStock().catch(() => {});
+    const articles = articlesEtiquettesCommande(r);
+    if (!articles.length) { alert('Aucun article avec code EBP dans cette commande (lignes en texte libre ou frais uniquement).'); return; }
+    return imprimerEtiquettesArticlesObjets(articles);
+  }
+
   function imprimerEtiquettesListe() {
     imprimerEtiquettesArticles((_stockListeAffichee || []).map(a => a.id));
   }
@@ -11909,6 +11938,11 @@
     document.getElementById('etiq-cmd-info').innerHTML = `<b>${echapperHtmlNote(r['Numero commande'] || '')}</b> · ${echapperHtmlNote(r['Fournisseur'] || '')}<br>🏗 ${echapperHtmlNote(chantier)}${r['Lieu de réception'] ? `<br>📍 ${echapperHtmlNote(r['Lieu de réception'])}` : ''}`;
     document.getElementById('etiq-cmd-nb').value = localStorage.getItem('gb_etiq_cmd_nb_' + id) || '1';
     document.getElementById('etiq-cmd-pos').value = localStorage.getItem('gb_etiq_cmd_pos') || '1';
+    // Commande de stock : étiquettes rayonnage des articles commandés (planche L7160)
+    const btnRay = document.getElementById('etiq-cmd-rayonnage');
+    const nbRay = estCommandeStockAtelier(r) ? articlesEtiquettesCommande(r).length : 0;
+    btnRay.style.display = nbRay ? 'block' : 'none';
+    btnRay.textContent = `🗄️ Étiquettes rayonnage (${nbRay} article${nbRay > 1 ? 's' : ''}) — planche L7160`;
     document.getElementById('modal-etiquette-commande').style.display = 'flex';
   }
   function fermerEtiquetteCommande() {
@@ -13137,6 +13171,7 @@
         <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this, '${uid}')" />
       </label>
       <div id="doc-statut-${uid}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
+      ${(estCommandeStockAtelier(r) && nbArticles) ? `<button onclick="imprimerEtiquettesRayonnageCommande(${r.id})" style="width:100%;margin-top:8px;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">🗄️ Étiquettes rayonnage des articles</button>` : ''}
       ${actionsHTML}
       ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<button onclick="supprimerCommande(${r.id})" style="width:100%;margin-top:10px;background:none;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px;font-size:10px;font-weight:700;cursor:pointer">🗑️ Supprimer cette commande</button>` : ''}
     `;
@@ -18672,6 +18707,7 @@
         <input type="number" id="etiq-cmd-pos" min="1" max="8" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;margin-top:4px" /></div>
     </div>
     <div style="font-size:10px;color:#999;margin:-8px 0 12px">Planche A4 de 8 étiquettes (2 × 4), numérotées de gauche à droite puis de haut en bas.</div>
+    <button id="etiq-cmd-rayonnage" onclick="imprimerEtiquettesRayonnageCommande(_etiqCmdId)" style="display:none;width:100%;margin-bottom:10px;background:#e8f0e7;color:var(--vert);border:none;border-radius:10px;padding:10px;font-size:13px;font-weight:700;cursor:pointer"></button>
     <div style="display:flex;gap:8px">
       <button onclick="fermerEtiquetteCommande()" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Plus tard</button>
       <button onclick="imprimerEtiquetteCommande()" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">🏷️ Imprimer</button>
