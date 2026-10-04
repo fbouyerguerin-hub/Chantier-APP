@@ -676,7 +676,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11768,13 +11768,25 @@
     if (_scanner) { try { await _scanner.stop(); } catch (e) {} }
     const F = window.Html5QrcodeSupportedFormats || {};
     const formats = [F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.DATA_MATRIX].filter(v => v !== undefined);
-    _scanner = new Html5Qrcode('scan-camera', { formatsToSupport: formats, verbose: false });
-    await _scanner.start(
-      { facingMode: 'environment' },
-      { fps: 12, aspectRatio: 1.777778 }, // image large et basse ; lecture sur toute l'image
-      (texte) => traiterCodeScanne(texte, 'camera'),
-      () => {}
-    );
+    // Détecteur natif du téléphone (BarcodeDetector, Android/Chrome) quand il existe :
+    // nettement plus rapide et tolérant que le décodage JavaScript.
+    _scanner = new Html5Qrcode('scan-camera', { formatsToSupport: formats, verbose: false,
+      experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
+    const surLecture = (texte) => traiterCodeScanne(texte, 'camera');
+    try {
+      await _scanner.start(
+        { facingMode: 'environment' },
+        { fps: 15,
+          // Image HD + mise au point continue : petits QR (lignes de la fiche A4) nets
+          videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 },
+                              advanced: [{ focusMode: 'continuous' }] } },
+        surLecture, () => {}
+      );
+    } catch (e) {
+      // Caméra qui refuse ces réglages : démarrage standard
+      console.warn('Caméra HD refusée, réglages standard', e);
+      await _scanner.start({ facingMode: 'environment' }, { fps: 12 }, surLecture, () => {});
+    }
     setMessageScan('📷 Visez une étiquette', 'var(--gris-moyen)');
   }
 
@@ -11945,7 +11957,7 @@
       document.body.appendChild(tmp);
       const imgs = articles.map(a => {
         tmp.innerHTML = '';
-        new QRCode(tmp, { text: urlScan(codeBarreArticle(a)), width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+        new QRCode(tmp, { text: urlScan(codeBarreArticle(a)), width: 256, height: 256, correctLevel: QRCode.CorrectLevel.L });
         const c = tmp.querySelector('canvas');
         return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
       });
@@ -12071,13 +12083,15 @@
       document.body.appendChild(tmp);
       const qrDe = (texte, px) => {
         tmp.innerHTML = '';
-        new QRCode(tmp, { text: texte, width: px, height: px, correctLevel: QRCode.CorrectLevel.M });
+        new QRCode(tmp, { text: texte, width: px, height: px, correctLevel: QRCode.CorrectLevel.L });
         const c = tmp.querySelector('canvas');
         return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
       };
       const qrCmd = qrDe(urlScan(codeBarreCommande(r)), 300);
       const lignes = _commandesLignesCache[r.id] || [];
-      const qrLignes = lignes.map(l => qrDe(urlScan('LIG-' + l.id), 160));
+      // QR de ligne : code seul (« LIG-123 », lu uniquement depuis l'appli) → QR
+      // très peu dense, lisible même petit et à distance par la caméra.
+      const qrLignes = lignes.map(l => qrDe('LIG-' + l.id, 160));
       tmp.remove();
       const esc = s => echapperHtmlNote(s == null ? '' : String(s));
       const fd = d => d ? new Date(String(d).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
@@ -12700,7 +12714,7 @@
   // quantité à retourner par article, « Tout retourner », scan à la douchette
   // (+1 par scan), puis un seul enregistrement groupé. Chaque retour est valorisé
   // au prix moyen des sorties vers ce chantier : il annule exactement le coût imputé.
-  let _retourLignes = [];
+  let _retourLignes = [], _retourChantierAffiche = null;
   function soldesChantierStock(chantier) {
     const cle = normTexte(chantier);
     const parArt = {};
@@ -12723,40 +12737,56 @@
   async function ouvrirRetourChantier() {
     if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
     document.getElementById('modal-retour-chantier').style.display = 'flex';
+    _retourLignes = []; _retourChantierAffiche = null; suggestionsRetour('');
     const sel = document.getElementById('retour-chantier');
     sel.innerHTML = '<option value="">⏳ Chargement…</option>';
     document.getElementById('retour-liste').innerHTML = '';
     try { await chargerStock(true); } catch (e) { sel.innerHTML = '<option value="">❌ ' + echapperHtmlNote(e.message) + '</option>'; return; }
-    // Chantiers ayant encore du matériel sorti (libellé tel que saisi à la sortie)
+    // Tous les chantiers (liste de référence + chantiers des sorties) ; ceux qui ont
+    // encore du matériel sorti viennent en tête. Un retour de surplus (matériel
+    // commandé pour le chantier, jamais sorti du stock) est aussi possible.
     const noms = {};
+    const ajouter = n => { n = (n || '').trim(); if (n && !normTexte(n).includes('stock atelier') && !noms[normTexte(n)]) noms[normTexte(n)] = n; };
+    (tableData['Chantiers'] || []).forEach(c => ajouter(c.value));
+    (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé') ajouter(c['Nom du chantier']); });
     (_mouvementsCache || []).forEach(m => {
       const type = m['Type']?.value || m['Type'] || '';
-      const n = (m['Chantier'] || '').trim();
-      if ((type === 'Sortie' || type === 'Retour') && n && !noms[normTexte(n)]) noms[normTexte(n)] = n;
+      if (type === 'Sortie' || type === 'Retour') ajouter(m['Chantier']);
     });
-    const avecSolde = Object.values(noms).filter(n => soldesChantierStock(n).length).sort((a, b) => a.localeCompare(b));
-    sel.innerHTML = '<option value="">— Choisir le chantier —</option>' + avecSolde.map(n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}">${echapperHtmlNote(n)}</option>`).join('');
+    const tous = Object.values(noms).sort((a, b) => a.localeCompare(b));
+    const avecSolde = tous.filter(n => soldesChantierStock(n).length);
+    const autres = tous.filter(n => !avecSolde.includes(n));
+    const opt = n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}">${echapperHtmlNote(n)}</option>`;
+    sel.innerHTML = '<option value="">— Choisir le chantier —</option>'
+      + (avecSolde.length ? `<optgroup label="📦 Matériel sorti en attente de retour">${avecSolde.map(opt).join('')}</optgroup>` : '')
+      + (autres.length ? `<optgroup label="Autres chantiers (retour de surplus)">${autres.map(opt).join('')}</optgroup>` : '');
     const dernier = localStorage.getItem('gb_scan_chantier') || '';
-    if (avecSolde.some(n => normTexte(n) === normTexte(dernier))) sel.value = avecSolde.find(n => normTexte(n) === normTexte(dernier));
-    if (!avecSolde.length) document.getElementById('retour-liste').innerHTML = '<div class="feuille-empty">Aucun matériel sorti en attente de retour.</div>';
+    const trouve = tous.find(n => normTexte(n) === normTexte(dernier));
+    if (trouve) sel.value = trouve;
+    if (!tous.length) document.getElementById('retour-liste').innerHTML = '<div class="feuille-empty">Aucun chantier disponible.</div>';
     renderRetourChantier();
   }
   function renderRetourChantier() {
     const chantier = document.getElementById('retour-chantier').value;
     const el = document.getElementById('retour-liste');
-    if (!chantier) { _retourLignes = []; if (!el.innerHTML.includes('Aucun')) el.innerHTML = '<div class="feuille-empty">Choisissez un chantier.</div>'; return; }
-    _retourLignes = soldesChantierStock(chantier).map(x => ({ ...x, article: _articlesCache.find(a => a.id === x.articleId) || {}, qte: 0 }))
-      .sort((a, b) => (a.article['Designation'] || '').localeCompare(b.article['Designation'] || ''));
+    if (!chantier) { _retourLignes = []; _retourChantierAffiche = null; if (!el.innerHTML.includes('Aucun')) el.innerHTML = '<div class="feuille-empty">Choisissez un chantier.</div>'; return; }
+    // Changement de chantier : on repart des sorties de ce chantier
+    if (_retourChantierAffiche !== chantier) {
+      _retourChantierAffiche = chantier;
+      _retourLignes = soldesChantierStock(chantier).map(x => ({ ...x, article: _articlesCache.find(a => a.id === x.articleId) || {}, qte: 0 }))
+        .sort((a, b) => (a.article['Designation'] || '').localeCompare(b.article['Designation'] || ''));
+    }
     // Focus du champ scan (douchette) sauf sur téléphone, pour ne pas ouvrir le clavier
     if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => document.getElementById('retour-scan')?.focus({ preventScroll: true }), 50);
     el.innerHTML = _retourLignes.map((l, i) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f2f2f2">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l.article['Designation'] || '?')}</div>
-          <div style="color:#999;font-size:11px">${echapperHtmlNote(codeBarreArticle(l.article))} · sorti : <b>${fmtQte(l.solde)}</b> ${echapperHtmlNote(l.article['Unite'] || '')}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
+          <div style="color:#999;font-size:11px">${echapperHtmlNote(codeBarreArticle(l.article))} · ${l.surplus ? '<b style="color:#a35a00">surplus (non sorti du stock)</b>' : `sorti : <b>${fmtQte(l.solde)}</b>`} ${echapperHtmlNote(l.article['Unite'] || '')}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
         </div>
-        <button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>
+        ${l.surplus ? '' : `<button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>`}
         <input type="number" id="retour-qte-${i}" min="0" step="any" value="" placeholder="0" inputmode="decimal" onchange="majQteRetour(${i}, this.value)" style="width:70px;padding:7px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-weight:700;text-align:right" />
-      </div>`).join('') || '<div class="feuille-empty">Plus rien à retourner pour ce chantier.</div>';
+      </div>`).join('') || '<div class="feuille-empty">Aucun matériel sorti du stock vers ce chantier.<br>Scannez ou recherchez les articles qui reviennent (surplus).</div>';
+    _retourLignes.forEach((l, i) => { const inp = document.getElementById('retour-qte-' + i); if (inp && l.qte) inp.value = String(l.qte); });
     majBoutonRetour();
   }
   function majQteRetour(i, v) {
@@ -12765,10 +12795,10 @@
     if (q < 0) q = 0;
     l.qte = q;
     const inp = document.getElementById('retour-qte-' + i);
-    if (inp) { inp.value = q ? String(q) : ''; inp.style.borderColor = q > l.solde + 0.0005 ? '#c62828' : '#ddd'; }
+    if (inp) { inp.value = q ? String(q) : ''; inp.style.borderColor = !l.surplus && q > l.solde + 0.0005 ? '#c62828' : '#ddd'; }
     majBoutonRetour();
   }
-  function remplirRetourChantier(tout) { _retourLignes.forEach((l, i) => majQteRetour(i, tout ? l.solde : 0)); }
+  function remplirRetourChantier(tout) { _retourLignes.forEach((l, i) => { if (!l.surplus) majQteRetour(i, tout ? l.solde : 0); else if (!tout) majQteRetour(i, 0); }); }
   function majBoutonRetour() {
     const n = _retourLignes.filter(l => l.qte > 0).length;
     const b = document.getElementById('retour-valider');
@@ -12777,19 +12807,52 @@
   }
   function scanRetourChantier(brut) {
     const code = resoudreCodeScanne(brut); if (!code) return;
-    if (!_retourLignes.length) { bipScan(false); alert('Choisissez d\'abord le chantier.'); return; }
+    if (!document.getElementById('retour-chantier').value) { bipScan(false); alert('Choisissez d\'abord le chantier.'); return; }
     const a = trouverArticleParCode(code);
-    const i = a ? _retourLignes.findIndex(l => l.articleId === a.id) : -1;
-    if (i < 0) { bipScan(false); alert(a ? `« ${a['Designation']} » n'est pas sorti sur ce chantier.` : `Code inconnu : ${code}`); return; }
+    if (!a) {
+      // Pas un code : recherche par désignation, ajout direct si un seul résultat
+      const res = rechercherArticlesRetour(code);
+      if (res.length === 1) { ajouterArticleRetour(res[0].id); return; }
+      bipScan(false);
+      if (res.length) suggestionsRetour(code); else alert(`Article inconnu : ${code}\n(seuls les articles déjà référencés au stock peuvent être retournés)`);
+      return;
+    }
+    ajouterArticleRetour(a.id);
+  }
+  function ajouterArticleRetour(articleId) {
+    let i = _retourLignes.findIndex(l => l.articleId === articleId);
+    if (i < 0) {
+      // Surplus : article revenu du chantier sans être sorti du stock par l'appli
+      _retourLignes.push({ articleId, solde: 0, qteSortie: 0, valSortie: 0, valConnue: false, surplus: true,
+                           article: _articlesCache.find(x => x.id === articleId) || {}, qte: 0 });
+      i = _retourLignes.length - 1;
+      renderRetourChantier();
+    }
+    suggestionsRetour('');
     majQteRetour(i, (_retourLignes[i].qte || 0) + 1);
     bipScan(true);
     document.getElementById('retour-qte-' + i)?.scrollIntoView({ block: 'nearest' });
+  }
+  function rechercherArticlesRetour(q) {
+    const t = normTexte(q || '');
+    if (t.length < 2) return [];
+    const mots = t.split(/\s+/).filter(Boolean);
+    return (_articlesCache || []).filter(a => {
+      const h = normTexte((a['Designation'] || '') + ' ' + (a['Code EBP'] || '') + ' ' + (a['Reference fournisseur'] || ''));
+      return mots.every(m => h.includes(m));
+    }).slice(0, 8);
+  }
+  function suggestionsRetour(q) {
+    const el = document.getElementById('retour-sugg'); if (!el) return;
+    const res = (q || '').trim().length >= 3 ? rechercherArticlesRetour(q) : [];
+    el.innerHTML = res.map(a => `<div onclick="ajouterArticleRetour(${a.id}); document.getElementById('retour-scan').value=''" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:3px;font-size:12px;background:#fafafa">
+        <b>${echapperHtmlNote(a['Designation'] || '?')}</b> <span style="color:#999">· ${echapperHtmlNote(codeBarreArticle(a))}</span></div>`).join('');
   }
   async function validerRetourChantier() {
     const chantier = document.getElementById('retour-chantier').value;
     const lignes = _retourLignes.filter(l => l.qte > 0);
     if (!chantier || !lignes.length) return;
-    const trop = lignes.filter(l => l.qte > l.solde + 0.0005);
+    const trop = lignes.filter(l => !l.surplus && l.qte > l.solde + 0.0005);
     if (trop.length && !confirm(`${trop.length} article(s) : quantité retournée supérieure à la quantité sortie. Valider quand même ?`)) return;
     const b = document.getElementById('retour-valider');
     b.disabled = true; b.textContent = '⏳ Enregistrement…';
@@ -12803,6 +12866,7 @@
       bipScan(true);
       alert(`✅ Retour enregistré : ${lignes.length} article(s) remis en stock depuis ${chantier}.`);
       await chargerStock(true);
+      _retourChantierAffiche = null;
       renderRetourChantier();
       if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
     } catch (e) {
@@ -19318,7 +19382,7 @@
   <div style="padding:0 16px">
     <style>
       /* Aperçu caméra compact : bandeau de hauteur limitée, image recadrée */
-      #scan-camera { position:relative; height:min(26vh,200px); }
+      #scan-camera { position:relative; height:min(32vh,240px); }
       #scan-camera video { width:100% !important; height:100% !important; object-fit:cover; display:block; }
       #scan-camera #qr-shaded-region, #scan-camera canvas { display:none !important; }
       #scan-camera::after { content:''; position:absolute; left:50%; top:50%; width:min(52%,150px); aspect-ratio:1; transform:translate(-50%,-50%);
@@ -19344,7 +19408,8 @@
     </div>
     <label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
     <select id="retour-chantier" onchange="renderRetourChantier()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;margin:4px 0 8px;background:#fff"></select>
-    <input type="text" id="retour-scan" placeholder="🔫 Scanner un article (ajoute 1)…" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:8px" />
+    <input type="text" id="retour-scan" placeholder="🔫 Scanner ou rechercher un article…" autocomplete="off" oninput="suggestionsRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';suggestionsRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
+    <div id="retour-sugg" style="margin-bottom:6px"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px">
       <button onclick="remplirRetourChantier(true)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout retourner</button>
       <button onclick="remplirRetourChantier(false)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout effacer</button>
