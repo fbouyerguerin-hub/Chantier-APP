@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V28';
+  const APP_VERSION = 'V29';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11732,7 +11732,7 @@
     return `<div style="margin-top:10px;border-top:1px solid #f0f0f0;padding-top:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <span style="font-size:10px;color:#999">Code étiquette : <b style="font-family:monospace;color:var(--gris)">${echapperHtmlNote(codeBarreArticle(a))}</b></span>
-        ${peutGererStock() ? `<button onclick="imprimerEtiquettesArticles([${a.id}])" style="background:var(--beige-clair);border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Imprimer l'étiquette</button>` : ''}
+        ${peutGererStock() && aCodeEbp(a) ? `<button onclick="imprimerEtiquettesArticles([${a.id}])" style="background:var(--beige-clair);border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Imprimer l'étiquette</button>` : ''}
       </div>
       <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;margin-bottom:4px">Mouvements</div>
       ${lignesMvt ? `<table style="width:100%;border-collapse:collapse">${lignesMvt}</table>` : '<div style="font-size:11px;color:#bbb">Aucun mouvement.</div>'}
@@ -12027,8 +12027,17 @@
   async function imprimerEtiquettesArticles(ids) {
     return imprimerEtiquettesArticlesObjets(ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean));
   }
+  // Seuls les articles référencés dans EBP (champ « Code EBP » renseigné) reçoivent
+  // une étiquette QR ; les articles « hors EBP » sont écartés.
+  function aCodeEbp(a) { return !!String(a?.['Code EBP'] || '').trim(); }
   async function imprimerEtiquettesArticlesObjets(articles) {
-    if (!articles.length) { alert('Aucun article à imprimer : filtrez ou recherchez d\'abord la liste voulue.'); return; }
+    const sansCode = articles.filter(a => !aCodeEbp(a));
+    articles = articles.filter(aCodeEbp);
+    if (!articles.length) {
+      alert(sansCode.length ? 'Aucun de ces articles n\'a de code EBP : pas d\'étiquette QR possible.' : 'Aucun article à imprimer : filtrez ou recherchez d\'abord la liste voulue.');
+      return;
+    }
+    if (sansCode.length && !confirm(`${sansCode.length} article(s) sans code EBP ne seront pas étiquetés. Imprimer les ${articles.length} autre(s) ?`)) return;
     if (articles.length > 8 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 8)} planche(s) A4 de 8). Continuer ?`)) return;
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
@@ -12193,9 +12202,9 @@
     (_commandesLignesCache[r.id] || []).forEach(l => {
       if (estLigneFrais(l)) return;
       const a = trouverArticlePourLigne(l);
-      const code = a ? codeBarreArticle(a) : codeArticleLigne(l);
+      const code = (a && aCodeEbp(a)) ? String(a['Code EBP']).trim() : codeArticleLigne(l);
       if (!code || vus.has(normRef(code))) return;
-      vus.set(normRef(code), a || { 'Designation': (l['Description'] || code).slice(0, 250), 'Code EBP': code });
+      vus.set(normRef(code), (a && aCodeEbp(a)) ? a : { 'Designation': (l['Description'] || code).slice(0, 250), 'Code EBP': code });
     });
     return [...vus.values()];
   }
@@ -12808,7 +12817,7 @@
             <div style="font-size:12px;font-weight:700;color:var(--gris);min-width:0">${echapperHtmlNote(a['Designation'] || '')}${x.nouveau ? ' <span style="font-size:9px;background:#e8f5e9;color:#2e7d32;border-radius:6px;padding:1px 5px">NOUVEAU</span>' : ''}
               <div style="font-size:10px;color:#999;font-weight:400">${echapperHtmlNote(codeBarreArticle(a))} · +${fmtQte(x.quantite)} ${echapperHtmlNote(a['Unite'] || '')}</div></div>
             <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--gris-moyen);white-space:nowrap;cursor:pointer">
-              <input type="checkbox" id="mes-etiq-${i}" ${x.nouveau ? 'checked' : ''} /> 🏷️</label>
+              <input type="checkbox" id="mes-etiq-${i}" ${x.nouveau && aCodeEbp(a) ? 'checked' : ''} ${aCodeEbp(a) ? '' : 'disabled title="Pas de code EBP : pas d\'étiquette QR"'} /> 🏷️</label>
           </div>
           <div style="display:flex;gap:6px;margin-top:6px">
             <input type="text" id="mes-zone-${i}" list="mes-zones" placeholder="Zone (RACK A)" value="${echapperHtmlNote(a['Zone'] || '').replace(/"/g, '&quot;')}" style="${st}" />
