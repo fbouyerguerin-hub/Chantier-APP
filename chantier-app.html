@@ -659,7 +659,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -703,6 +703,15 @@
   //   Prix unitaire HT (décimal 2) · Valeur HT (décimal 2, négatif autorisé)
   //   → valeur figée au moment du mouvement : sorties au prix d'achat EBP de
   //     l'article, entrées au prix réel de la ligne de commande.
+  // Table « Non conformites » (réception express, bouton ⚠️ Non conforme).
+  // Champs (noms exacts) : Libelle (texte principal) · Date (date) · Commande
+  //   (texte) · Fournisseur (texte) · Chantier (texte) · Ligne commande (nombre)
+  //   · Code article (texte) · Designation (texte) · Quantite commandee (nombre
+  //   3 déc.) · Quantite non conforme (nombre 3 déc.) · Motif (texte) ·
+  //   Description (texte long) · Photo (fichier) · Signale par (texte) ·
+  //   Statut (texte : Ouverte / Clôturée)
+  // Vide = non conformités consignées seulement dans la note de la commande.
+  const TABLE_NON_CONFORMITES = '1240840';
   const TABLE_ARTICLES = '1237462';
   const TABLE_MOUVEMENTS_STOCK = '1237464';
   // Statuts considérés comme "réceptionnés" (commande traitée) : reléguée
@@ -11720,6 +11729,16 @@
     const now = Date.now();
     if (code === _dernierScan.code && now - _dernierScan.t < 1500) return;
     _dernierScan = { code, t: now };
+    // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
+    if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code)) { bipScan(true); return; }
+    if (/^LIG-\d+$/i.test(code)) {
+      const r = trouverCommandeDeLigne(Number(code.split('-')[1]));
+      if (!r) { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return; }
+      if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Fiche de commande : utilisez 📷 sur la page Commandes', '#a5761f'); return; }
+      bipScan(true);
+      afficherFicheScan({ type: 'commande', id: r.id });
+      return;
+    }
     // Étiquette de commande
     if (/^CMD-\d+$/i.test(code) || (_scanMode === 'info' && trouverCommandeParCode(code))) {
       const r = trouverCommandeParCode(code);
@@ -11933,7 +11952,7 @@
     if (!r) { alert('Commande introuvable.'); return; }
     _etiqCmdId = id; _etiqCmdRow = r;
     const chantier = (r['Chantier'] || [])[0]?.value || '';
-    document.getElementById('etiq-cmd-titre').textContent = contexte === 'ar' ? '✅ AR validé — étiquette de réception' : '🏷️ Étiquette de commande';
+    document.getElementById('etiq-cmd-titre').textContent = contexte === 'ar' ? '✅ AR validé — fiche de réception A4' : '🖨️ Fiche de réception A4';
     document.getElementById('etiq-cmd-aide').style.display = contexte === 'ar' ? 'block' : 'none';
     document.getElementById('etiq-cmd-info').innerHTML = `<b>${echapperHtmlNote(r['Numero commande'] || '')}</b> · ${echapperHtmlNote(r['Fournisseur'] || '')}<br>🏗 ${echapperHtmlNote(chantier)}${r['Lieu de réception'] ? `<br>📍 ${echapperHtmlNote(r['Lieu de réception'])}` : ''}`;
     document.getElementById('etiq-cmd-nb').value = localStorage.getItem('gb_etiq_cmd_nb_' + id) || '1';
@@ -11950,66 +11969,112 @@
     _etiqCmdId = null; _etiqCmdRow = null;
   }
 
+  // Fiche de réception A4 : toutes les informations de la commande (sans prix),
+  // QR de la commande (réception conforme en un scan) et QR par ligne (signaler
+  // un manquant / une non-conformité en scannant la ligne).
   async function imprimerEtiquetteCommande() {
     const r = trouverCommandeParCode('CMD-' + _etiqCmdId) || _etiqCmdRow;
     if (!r) return;
-    const nb = Math.max(1, Math.min(40, parseInt(document.getElementById('etiq-cmd-nb').value) || 1));
-    const pos = Math.max(1, Math.min(8, parseInt(document.getElementById('etiq-cmd-pos').value) || 1));
+    const nb = Math.max(1, Math.min(10, parseInt(document.getElementById('etiq-cmd-nb').value) || 1));
     localStorage.setItem('gb_etiq_cmd_nb_' + r.id, String(nb));
-    // Position suivante sur la planche (pour la prochaine impression)
-    localStorage.setItem('gb_etiq_cmd_pos', String(((pos - 1 + nb) % 8) + 1));
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
-    fen.document.write('<p style="font-family:sans-serif">⏳ Génération de l\'étiquette…</p>');
+    fen.document.write('<p style="font-family:sans-serif">⏳ Génération de la fiche…</p>');
     try {
       await chargerLibScan('qrcode');
       const tmp = document.createElement('div');
       tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
       document.body.appendChild(tmp);
-      new QRCode(tmp, { text: urlScan(codeBarreCommande(r)), width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
-      const c = tmp.querySelector('canvas');
-      const qr = c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      const qrDe = (texte, px) => {
+        tmp.innerHTML = '';
+        new QRCode(tmp, { text: texte, width: px, height: px, correctLevel: QRCode.CorrectLevel.M });
+        const c = tmp.querySelector('canvas');
+        return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      };
+      const qrCmd = qrDe(urlScan(codeBarreCommande(r)), 300);
+      const lignes = _commandesLignesCache[r.id] || [];
+      const qrLignes = lignes.map(l => qrDe(urlScan('LIG-' + l.id), 160));
       tmp.remove();
-      const esc = s => echapperHtmlNote(s || '');
-      const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], '');
+      const esc = s => echapperHtmlNote(s == null ? '' : String(s));
+      const fd = d => d ? new Date(String(d).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
       const chantier = (r['Chantier'] || [])[0]?.value || '';
-      const dRec = r['Date reception'] ? new Date(r['Date reception'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
-      const recPar = extraireValeurChamp(r['Receptionne par'], '');
-      const dPrev = r['Date reception prevue'] ? new Date(r['Date reception prevue'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
-      const nbArt = (_commandesLignesCache[r.id] || []).length;
-      const nbManq = (_commandesLignesCache[r.id] || []).filter(l => l['Non réceptionné']).length;
-      const vides = Array.from({ length: pos - 1 }, () => '<div class="et vide"></div>').join('');
-      const etiquettes = Array.from({ length: nb }, (_, i) => `<div class="et">
-        <div class="g"><img src="${qr}" /><div class="cq">${esc(codeBarreCommande(r))}</div></div>
-        <div class="d">
-          <div class="ch">${esc(chantier)}</div>
-          ${r['Lieu de réception'] ? `<div class="em">📍 ${esc(r['Lieu de réception'])}</div>` : '<div class="sc">📷 À scanner à l\'arrivée pour saisir l\'emplacement</div>'}
-          <div class="nu">${esc(r['Numero commande'])}</div>
-          <div class="fo">${esc(r['Fournisseur'])}</div>
-          ${r['Reference complete'] ? `<div class="pt">${esc(r['Reference complete'])}</div>` : ''}
-          <div class="pt">${nbArt ? nbArt + ' article(s)' : ''}${nbManq ? ` · <b>⚠️ ${nbManq} manquant(s)</b>` : ''}</div>
-          ${dRec ? `<div class="pt">📥 ${dRec}${recPar ? ' · ' + esc(recPar) : ''}</div>` : (dPrev ? `<div class="pt">📅 Réception prévue le ${dPrev}</div>` : '')}
-          ${statut === 'Réception partielle' ? '<div class="pa">RÉCEPTION PARTIELLE</div>' : ''}
-        </div></div>`).join('');
+      const stock = estCommandeStockAtelier(r);
+      const partielle = estCommandePartielle(r);
+      const infos = [
+        ['Fournisseur', r['Fournisseur']],
+        ['Chantier', chantier || (stock ? 'Sans chantier → stock atelier' : '')],
+        ['Date commande', fd(r['Date commande'])],
+        ['Réception prévue', fd(r['Date reception prevue'])],
+        ['AR validé', fd(r['Date validation AR']) + (r['Valide par'] ? ' · ' + extraireValeurChamp(r['Valide par'], '') : '')],
+        ['Référence', r['Reference complete']],
+        ['Destination', stock ? 'STOCK ATELIER' : (r['Lieu de réception'] || '')],
+      ].filter(x => x[1]);
+      const lignesHTML = lignes.map((l, i) => {
+        const code = codeArticleLigne(l);
+        const qte = (l['Quantite'] !== undefined && l['Quantite'] !== null && l['Quantite'] !== '') ? fmtQte(l['Quantite']) : '';
+        const reste = partielle && l['Non réceptionné'] ? ` <span class="pa">reste à recevoir${lireQteRecue(l) ? ' (déjà ' + fmtQte(lireQteRecue(l)) + ')' : ''}</span>` : (partielle ? ' <span class="ok">reçu</span>' : '');
+        return `<tr>
+          <td class="q"><img src="${qrLignes[i]}" /></td>
+          <td class="n">${i + 1}</td>
+          <td><div class="de">${esc(l['Description'])}${reste}</div>
+              <div class="co">${code ? 'Code EBP <b>' + esc(code) + '</b>' : ''}${l['Reference fournisseur'] ? ' · Réf. fourn. ' + esc(l['Reference fournisseur']) : ''}</div></td>
+          <td class="qt">${qte} ${esc(l['Unite'] || '')}</td>
+          <td class="ck">☐</td>
+        </tr>`;
+      }).join('');
+      const page = `<div class="pg">
+        <div class="hd">
+          <div class="tt">
+            <div class="lo">GUÉRIN BÂTIMENTS — Fiche de réception</div>
+            <div class="nu">${esc(r['Numero commande'])}</div>
+            ${partielle ? '<div class="pa big">RÉCEPTION PARTIELLE EN COURS</div>' : ''}
+            <table class="inf">${infos.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('')}</table>
+          </div>
+          <div class="qc"><img src="${qrCmd}" /><div>${esc(codeBarreCommande(r))}</div><div class="hint">Scanner : réception</div></div>
+        </div>
+        <div class="mode">
+          <b>✅ Conforme</b> : scanner le QR de la commande → « Conforme — tout réceptionner ».
+          <b>⚠️ Non conforme</b> : scanner le QR de la commande → « Non conforme », puis le QR de chaque ligne manquante ou défectueuse.
+        </div>
+        <table class="li">
+          <thead><tr><th></th><th>#</th><th>Article</th><th>Qté</th><th>Reçu</th></tr></thead>
+          <tbody>${lignesHTML || '<tr><td colspan="5" style="padding:4mm;color:#777">Aucune ligne détaillée sur cette commande.</td></tr>'}</tbody>
+        </table>
+        <div class="ft">Réceptionné le ____ / ____ / ________ par ______________________ · Emplacement : ______________________</div>
+      </div>`;
       fen.document.open();
-      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquette ${esc(r['Numero commande'])}</title><style>
-        @page { size: A4; margin: 13mm 4.6mm; }
-        body { margin: 0; font-family: Arial, sans-serif; }
-        .pl { display: grid; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 67.7mm; column-gap: 2.5mm; }
-        .et { box-sizing: border-box; padding: 3mm; display: flex; gap: 3mm; overflow: hidden; break-inside: avoid; }
-        .g { flex-shrink: 0; width: 40mm; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .g img { width: 40mm; height: 40mm; image-rendering: pixelated; }
-        .cq { font-family: monospace; font-size: 8pt; margin-top: 1mm; }
-        .d { min-width: 0; display: flex; flex-direction: column; gap: 1.2mm; justify-content: center; }
-        .ch { font-size: 13pt; font-weight: 800; line-height: 1.1; max-height: 2.3em; overflow: hidden; }
-        .em { font-size: 11pt; font-weight: 800; color: #000; border: 0.4mm solid #000; border-radius: 1.5mm; padding: 0.8mm 2mm; align-self: flex-start; }
-        .nu { font-size: 10pt; font-weight: 700; font-family: monospace; }
-        .fo { font-size: 9pt; }
-        .pt { font-size: 7.5pt; color: #444; }
-        .pa { font-size: 8pt; font-weight: 800; background: #000; color: #fff; padding: 0.6mm 2mm; align-self: flex-start; }
-        .sc { font-size: 8pt; font-weight: 700; border: 0.3mm dashed #000; border-radius: 1.5mm; padding: 0.8mm 2mm; align-self: flex-start; }
-        @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
-      </style></head><body><div class="pl">${vides}${etiquettes}</div>
+      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Réception ${esc(r['Numero commande'])}</title><style>
+        @page { size: A4; margin: 10mm; }
+        body { margin: 0; font-family: Arial, sans-serif; color: #000; }
+        .pg { page-break-after: always; }
+        .pg:last-child { page-break-after: auto; }
+        .hd { display: flex; gap: 6mm; align-items: flex-start; border-bottom: 0.6mm solid #000; padding-bottom: 3mm; }
+        .tt { flex: 1; min-width: 0; }
+        .lo { font-size: 9pt; font-weight: 700; color: #555; letter-spacing: .3mm; }
+        .nu { font-size: 24pt; font-weight: 800; font-family: monospace; margin: 1mm 0 2mm; }
+        .inf { border-collapse: collapse; font-size: 10pt; }
+        .inf th { text-align: left; font-weight: 400; color: #555; padding: 0.5mm 4mm 0.5mm 0; white-space: nowrap; vertical-align: top; }
+        .inf td { font-weight: 700; padding: 0.5mm 0; }
+        .qc { width: 48mm; text-align: center; font-family: monospace; font-size: 9pt; }
+        .qc img { width: 48mm; height: 48mm; image-rendering: pixelated; display: block; }
+        .hint { font-family: Arial; font-size: 8pt; color: #555; }
+        .mode { font-size: 8.5pt; background: #f2f2f2; border-radius: 2mm; padding: 2mm 3mm; margin: 3mm 0; line-height: 1.5; }
+        .li { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+        .li thead th { text-align: left; font-size: 8pt; color: #555; border-bottom: 0.4mm solid #000; padding: 1mm; }
+        .li td { border-bottom: 0.2mm solid #bbb; padding: 1mm; vertical-align: middle; }
+        .li tr { break-inside: avoid; }
+        .q { width: 17mm; } .q img { width: 16mm; height: 16mm; image-rendering: pixelated; display: block; }
+        .n { width: 6mm; color: #777; text-align: center; }
+        .de { font-weight: 700; }
+        .co { font-size: 8.5pt; color: #333; margin-top: 0.5mm; }
+        .qt { width: 24mm; text-align: right; font-weight: 800; white-space: nowrap; font-size: 11pt; }
+        .ck { width: 12mm; text-align: center; font-size: 16pt; }
+        .pa { font-size: 7.5pt; font-weight: 800; background: #000; color: #fff; padding: 0.3mm 1.5mm; border-radius: 1mm; margin-left: 1mm; white-space: nowrap; display: inline-block; }
+        .pa.big { display: inline-block; font-size: 9pt; margin: 0 0 2mm; }
+        .ok { font-size: 7.5pt; color: #777; margin-left: 1mm; }
+        .ft { margin-top: 5mm; font-size: 9pt; color: #333; }
+        @media screen { body { background: #eee; padding: 10px; } .pg { background: #fff; width: 190mm; padding: 10mm; margin: 0 auto 10px; box-sizing: border-box; } }
+      </style></head><body>${Array.from({ length: nb }, () => page).join('')}
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
       fen.document.close();
       fermerEtiquetteCommande();
@@ -12051,18 +12116,14 @@
     const el = document.getElementById('scan-panier');
     if (fiche.type === 'commande') {
       const r = trouverCommandeParCode('CMD-' + fiche.id);
-      el.innerHTML = r ? renderCarteCommande(r, _peutVoirPrixActuel, 'scan') : '<div class="feuille-empty">Commande introuvable.</div>';
-      // Colis qui arrive : formulaire de réception ouvert (atelier par défaut),
-      // l'opérateur n'a plus qu'à saisir l'emplacement et valider.
       const statut = r ? (estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], '')) : '';
-      if (r && (statut === 'En attente réception' || statut === 'Réception partielle') && !fiche.sansFormulaire) {
-        setTimeout(() => {
-          try {
-            toggleReceptionForm(r.id + '-scan', 'atelier');
-            document.getElementById('reception-form-' + r.id + '-scan')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-          } catch (e) {}
-        }, 80);
-      } else if (r && statut === 'En attente AR') {
+      const receptionPossible = r && (statut === 'En attente réception' || statut === 'Réception partielle') && !fiche.sansFormulaire;
+      // Colis qui arrive : panneau « réception express » (conforme / non conforme)
+      // au-dessus de la fiche ; le formulaire détaillé reste accessible dessous.
+      _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', ecarts: {}, selection: null } : null;
+      el.innerHTML = r ? `<div id="rx-panel"></div>${renderCarteCommande(r, _peutVoirPrixActuel, 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
+      if (receptionPossible) renderRecExpress();
+      if (r && statut === 'En attente AR') {
         setMessageScan('⚠️ AR pas encore validé pour cette commande', '#a5761f');
       }
     } else {
@@ -12071,6 +12132,207 @@
     }
     el.scrollTop = 0;
   }
+  // ============================================================
+  // RÉCEPTION EXPRESS (scan de la fiche commande A4)
+  // • Conforme : un bouton, toute la commande est réceptionnée en atelier.
+  // • Non conforme : on scanne (ou touche) les lignes concernées sur la fiche
+  //   A4 — ou l'étiquette article — et on indique pour chacune la quantité
+  //   reçue conforme et le motif. Manquant → réception partielle ; autre motif
+  //   → non-conformité enregistrée (table Non conformites) + réception partielle.
+  // S'appuie sur validerReception() (mêmes règles stock / partiel / statuts).
+  // ============================================================
+  let _recExpress = null;
+  const MOTIFS_NC = ['Manquant', 'Endommagé', 'Erreur article', 'Erreur quantité', 'Autre'];
+  function trouverCommandeDeLigne(ligneId) {
+    const id = Object.keys(_commandesLignesCache || {}).find(k => (_commandesLignesCache[k] || []).some(l => l.id === ligneId));
+    return id ? trouverCommandeParCode('CMD-' + id) : null;
+  }
+  function lignesAttendues(r) {
+    const toutes = _commandesLignesCache[r.id] || [];
+    return estCommandePartielle(r) ? toutes.filter(l => l['Non réceptionné']) : toutes;
+  }
+  function qteDejaRecue(r, l) { return estCommandePartielle(r) && l['Non réceptionné'] ? (lireQteRecue(l) || 0) : 0; }
+  function selectionLigneExpressParCode(code) {
+    const rx = _recExpress; if (!rx) return false;
+    const r = trouverCommandeParCode('CMD-' + rx.id); if (!r) return false;
+    const lignes = lignesAttendues(r);
+    let l = null;
+    const m = code.match(/^LIG-(\d+)$/i);
+    if (m) l = lignes.find(x => x.id === Number(m[1]));
+    else {
+      const n = normRef(code);
+      l = lignes.find(x => normRef(codeArticleLigne(x)) === n || normRef(x['Reference fournisseur']) === n);
+    }
+    if (!l) return false;
+    selectionnerLigneExpress(l.id);
+    setMessageScan(`✅ Ligne : ${(l['Description'] || '').slice(0, 60)}`, 'var(--vert)');
+    return true;
+  }
+  function selectionnerLigneExpress(ligneId) {
+    const rx = _recExpress; if (!rx) return;
+    if (!rx.ecarts[ligneId]) rx.ecarts[ligneId] = { aujourdhui: 0, motif: 'Manquant', detail: '', photo: null };
+    rx.selection = ligneId;
+    renderRecExpress();
+    setTimeout(() => document.getElementById('rx-ligne-' + ligneId)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 50);
+  }
+  function retirerEcartExpress(ligneId) {
+    const rx = _recExpress; if (!rx) return;
+    delete rx.ecarts[ligneId];
+    if (rx.selection === ligneId) rx.selection = null;
+    renderRecExpress();
+  }
+  function majEcartExpress(ligneId, champ, valeur) {
+    const e = _recExpress?.ecarts[ligneId]; if (!e) return;
+    if (champ === 'aujourdhui') { const v = parseFloat(String(valeur).replace(',', '.')); e.aujourdhui = isNaN(v) || v < 0 ? 0 : v; }
+    else e[champ] = valeur;
+    if (champ === 'motif') renderRecExpress();
+  }
+  function modeRecExpress(mode) { if (_recExpress) { _recExpress.mode = mode; renderRecExpress(); } }
+  function scanSaisieExpress(ev, input) {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    const code = resoudreCodeScanne(input.value); input.value = '';
+    if (!code) return;
+    if (selectionLigneExpressParCode(code)) bipScan(true);
+    else { bipScan(false); setMessageScan(`❌ « ${code} » ne correspond à aucune ligne attendue de cette commande`, '#c0392b'); }
+  }
+  function renderRecExpress() {
+    const rx = _recExpress, panel = document.getElementById('rx-panel');
+    if (!rx || !panel) return;
+    const r = trouverCommandeParCode('CMD-' + rx.id);
+    if (!r) { panel.innerHTML = ''; return; }
+    const esc = echapperHtmlNote;
+    const stock = estCommandeStockAtelier(r);
+    const lieuDefaut = (document.getElementById('rx-lieu')?.value) ?? (r['Lieu de réception'] || (stock ? 'Stock atelier' : ''));
+    const partielle = estCommandePartielle(r);
+    const lignes = lignesAttendues(r);
+    const nbEcarts = Object.keys(rx.ecarts).length;
+    let html = `<div style="background:#f4f8f3;border:1.5px solid var(--vert);border-radius:12px;padding:12px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:800;color:var(--vert);margin-bottom:6px">📦 Réception ${partielle ? '— complément (réception partielle en cours)' : ''}</div>
+      <label style="font-size:11px;font-weight:700;color:#777">Emplacement du colis</label>
+      <input type="text" id="rx-lieu" value="${esc(lieuDefaut).replace(/"/g, '&quot;')}" placeholder="Ex. quai, rack B…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:8px;font-size:13px;margin:3px 0 8px" />`;
+    if (rx.mode === 'choix') {
+      html += `<div style="font-size:12px;color:#555;margin-bottom:8px">${lignes.length} ligne(s) attendue(s). Tout est-il présent et en bon état ?</div>
+        <div style="display:flex;gap:8px">
+          <button onclick="validerRecExpress(false)" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:800;cursor:pointer">✅ Conforme — tout réceptionner</button>
+          <button onclick="modeRecExpress('nc')" style="flex:1;background:#fff3e0;color:#a35a00;border:1.5px solid #f0b46b;border-radius:10px;padding:14px;font-size:13px;font-weight:800;cursor:pointer">⚠️ Non conforme</button>
+        </div>`;
+    } else {
+      html += `<div style="font-size:12px;color:#a35a00;font-weight:700;margin-bottom:6px">⚠️ Scannez sur la fiche A4 les lignes manquantes ou non conformes (ou touchez-les). Les lignes non signalées sont réceptionnées en totalité.</div>
+        <input type="text" placeholder="🔫 Scanner une ligne / un article…" autocomplete="off" onkeydown="scanSaisieExpress(event, this)" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px dashed #f0b46b;border-radius:8px;font-size:12px;margin-bottom:6px" />
+        <div style="max-height:46vh;overflow-y:auto">` + lignes.map(l => {
+          const e = rx.ecarts[l.id];
+          const qteCmd = parseFloat(l['Quantite']);
+          const deja = qteDejaRecue(r, l);
+          const code = codeArticleLigne(l);
+          if (!e) return `<div onclick="selectionnerLigneExpress(${l.id})" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:6px 4px;border-bottom:1px solid #eee;font-size:12px">
+              <span><b>${esc(l['Description'] || '?')}</b>${code ? ` <span style="color:#999">· ${esc(code)}</span>` : ''}</span>
+              <span style="white-space:nowrap;color:#2e7d32">✓ ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd - deja)} ${esc(l['Unite'] || '')}</span></div>`;
+          return `<div id="rx-ligne-${l.id}" style="background:#fff;border:1.5px solid #f0b46b;border-radius:10px;padding:8px;margin:6px 0;font-size:12px">
+              <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(l['Description'] || '?')}</b><button onclick="retirerEcartExpress(${l.id})" title="Finalement conforme" style="background:none;border:none;color:#999;cursor:pointer;font-size:14px">✕</button></div>
+              <div style="color:#999;margin-bottom:6px">${code ? esc(code) + ' · ' : ''}commandé : ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd)} ${esc(l['Unite'] || '')}${deja ? ` · déjà reçu : ${fmtQte(deja)}` : ''}</div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <span>Reçu conforme aujourd'hui :</span>
+                <input type="number" min="0" step="any" inputmode="decimal" value="${e.aujourdhui || ''}" placeholder="0" onchange="majEcartExpress(${l.id}, 'aujourdhui', this.value)" style="width:70px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:700;text-align:right" />
+                <select onchange="majEcartExpress(${l.id}, 'motif', this.value)" style="padding:6px;border:1px solid #ccc;border-radius:6px">${MOTIFS_NC.map(m => `<option ${m === e.motif ? 'selected' : ''}>${m}</option>`).join('')}</select>
+              </div>
+              ${e.motif !== 'Manquant' ? `<textarea placeholder="Description de la non-conformité…" onchange="majEcartExpress(${l.id}, 'detail', this.value)" style="width:100%;box-sizing:border-box;margin-top:6px;padding:6px;border:1px solid #ccc;border-radius:6px;font-family:inherit;font-size:12px;min-height:38px">${esc(e.detail)}</textarea>
+                <label style="display:inline-block;margin-top:4px;background:#f1f5f9;border-radius:6px;padding:5px 10px;cursor:pointer">📷 ${e.photo ? esc(e.photo.name) : 'Photo'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="_recExpress.ecarts[${l.id}].photo = this.files[0] || null; renderRecExpress()" /></label>` : ''}
+            </div>`;
+        }).join('') + `</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button onclick="modeRecExpress('choix'); _recExpress.ecarts = {}; renderRecExpress()" style="flex:1;background:var(--beige-clair);border:none;border-radius:10px;padding:12px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Annuler</button>
+          <button onclick="validerRecExpress(true)" ${nbEcarts ? '' : 'disabled'} style="flex:2;background:#e67e22;opacity:${nbEcarts ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:800;cursor:pointer">Valider la réception (${nbEcarts} écart${nbEcarts > 1 ? 's' : ''})</button>
+        </div>`;
+    }
+    panel.innerHTML = html + '</div>';
+  }
+
+  async function validerRecExpress(avecEcarts) {
+    const rx = _recExpress; if (!rx) return;
+    const r = trouverCommandeParCode('CMD-' + rx.id); if (!r) return;
+    const uid = rx.uid;
+    const form = document.getElementById('reception-form-' + uid);
+    if (!form) { alert('Formulaire de réception introuvable : rechargez la fiche.'); return; }
+    const lieu = (document.getElementById('rx-lieu')?.value || '').trim();
+    if (!lieu) { alert('Indiquez l\'emplacement du colis.'); document.getElementById('rx-lieu')?.focus(); return; }
+    const lignes = _commandesLignesCache[r.id] || [];
+    const ecarts = avecEcarts ? rx.ecarts : {};
+    // Contrôles : la quantité conforme doit rester inférieure à ce qui est attendu
+    for (const [lid, e] of Object.entries(ecarts)) {
+      const l = lignes.find(x => x.id === Number(lid)); if (!l) continue;
+      const qteCmd = parseFloat(l['Quantite']);
+      const cumul = qteDejaRecue(r, l) + e.aujourdhui;
+      if (!isNaN(qteCmd) && cumul >= qteCmd) { alert(`« ${l['Description'] || 'article'} » : la quantité conforme couvre toute la commande — retirez l'écart (✕) ou corrigez la quantité.`); return; }
+    }
+    // Pilote le formulaire standard, puis le valide (mêmes règles stock / statuts)
+    form.dataset.type = 'atelier';
+    document.getElementById('reception-lieu-' + uid).value = lieu;
+    const cbPartielle = document.getElementById('reception-partielle-' + uid);
+    const ids = Object.keys(ecarts).map(Number);
+    if (cbPartielle) cbPartielle.checked = ids.length > 0;
+    document.querySelectorAll('.manquant-ligne-check-' + uid).forEach(cb => {
+      const lid = Number(cb.dataset.ligneId);
+      cb.checked = ids.includes(lid);
+      const inp = document.querySelector(`.manquant-qte-input-${uid}[data-ligne-id="${lid}"]`);
+      if (inp && ids.includes(lid)) { const l = lignes.find(x => x.id === lid); inp.value = String(Math.round((qteDejaRecue(r, l) + ecarts[lid].aujourdhui) * 1000) / 1000); }
+    });
+    const resume = ids.map(lid => {
+      const l = lignes.find(x => x.id === lid) || {}, e = ecarts[lid];
+      return `• ${l['Description'] || 'article'} : ${e.motif}${e.detail ? ' — ' + e.detail : ''} (reçu conforme ${fmtQte(e.aujourdhui)}/${fmtQte(parseFloat(l['Quantite']) || 0)})`;
+    }).join('\n');
+    const note = document.getElementById('reception-note-' + uid);
+    if (note) note.value = resume ? 'Réception non conforme :\n' + resume : '';
+    const ok = await validerReception(uid, r.id);
+    if (!ok) return;
+    const nc = ids.filter(lid => ecarts[lid].motif !== 'Manquant');
+    if (nc.length) {
+      try { await enregistrerNonConformites(r, nc.map(lid => ({ ligne: lignes.find(x => x.id === lid), ...ecarts[lid] }))); }
+      catch (e) { console.error('Non conformités', e); alert('⚠️ Réception enregistrée, mais la non-conformité n\'a pas pu être créée : ' + e.message + '\nElle figure dans la note de la commande.'); }
+    }
+    _recExpress = null;
+    setMessageScan(ids.length ? `⚠️ Réception partielle enregistrée (${ids.length} écart(s))` : '✅ Commande réceptionnée', ids.length ? '#a5761f' : 'var(--vert)');
+  }
+
+  async function enregistrerNonConformites(r, items) {
+    if (!/^\d+$/.test(TABLE_NON_CONFORMITES)) {
+      alert('ℹ️ Table « Non conformites » pas encore créée : la non-conformité est consignée dans la note de la commande.');
+      return;
+    }
+    const rows = [];
+    for (const it of items) {
+      const l = it.ligne || {};
+      const qteCmd = parseFloat(l['Quantite']) || 0;
+      let photo = [];
+      if (it.photo) {
+        const fd = new FormData(); fd.append('file', it.photo);
+        const up = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+        if (up.ok) photo = [{ name: (await up.json()).name }];
+      }
+      rows.push({
+        'Libelle': `${r['Numero commande'] || ''} — ${it.motif} — ${(l['Description'] || '').slice(0, 120)}`,
+        'Date': dateYMD(new Date()),
+        'Commande': r['Numero commande'] || '',
+        'Fournisseur': r['Fournisseur'] || '',
+        'Chantier': (r['Chantier'] || [])[0]?.value || '',
+        'Ligne commande': l.id || null,
+        'Code article': codeArticleLigne(l) || '',
+        'Designation': l['Description'] || '',
+        'Quantite commandee': qteCmd,
+        'Quantite non conforme': Math.max(0, qteCmd - qteDejaRecue(r, l) - (it.aujourdhui || 0)),
+        'Motif': it.motif,
+        'Description': it.detail || '',
+        'Photo': photo,
+        'Signale par': connectedCollab || '',
+        'Statut': 'Ouverte'
+      });
+    }
+    const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_NON_CONFORMITES}/batch/?user_field_names=true`, {
+      method: 'POST', headers: HEADERS, body: JSON.stringify({ items: rows })
+    });
+    if (!res.ok) throw new Error('Baserow (' + res.status + ') : ' + (await res.text()).slice(0, 200));
+  }
+
   function rafraichirFicheScan() {
     if (_scanFiche && document.getElementById('modal-scan-stock')?.style.display === 'flex' && _scanMode === 'info') afficherFicheScan({ ..._scanFiche, sansFormulaire: true });
   }
@@ -12105,7 +12367,7 @@
   }
   function resoudreCodeScanne(brut) {
     const c = extraireCodeScan(brut);
-    const connu = x => (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
+    const connu = x => /^LIG-\d+$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
     if (!c || connu(c)) return c;
     const t = retraduireAzerty(c);
     return (t !== c && connu(t)) ? t : c;
@@ -12139,6 +12401,8 @@
   async function traiterScanDouchetteGlobal(code) {
     if (!connectedCollab) return; // pas encore connecté
     _dernierScan = { code: '', t: 0 }; // un appui gâchette = un scan voulu (pas d'anti-rebond)
+    const modalRetour = document.getElementById('modal-retour-chantier');
+    if (modalRetour && modalRetour.style.display === 'flex') { scanRetourChantier(code); return; }
     const modal = document.getElementById('modal-scan-stock');
     if (modal && modal.style.display === 'flex') { traiterCodeScanne(code); return; }
     await ouvrirScanInfo(code);
@@ -12307,6 +12571,123 @@
       renderStock();
       ouvrirEditionArticle(row.id);
     } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  // ── Retour chantier en masse ──
+  // Chantier choisi → liste des articles qui y sont partis (sorties − retours),
+  // quantité à retourner par article, « Tout retourner », scan à la douchette
+  // (+1 par scan), puis un seul enregistrement groupé. Chaque retour est valorisé
+  // au prix moyen des sorties vers ce chantier : il annule exactement le coût imputé.
+  let _retourLignes = [];
+  function soldesChantierStock(chantier) {
+    const cle = normTexte(chantier);
+    const parArt = {};
+    (_mouvementsCache || []).forEach(m => {
+      const type = m['Type']?.value || m['Type'] || '';
+      if ((type !== 'Sortie' && type !== 'Retour') || normTexte(m['Chantier'] || '') !== cle) return;
+      const aid = (m['Article'] || [])[0]?.id;
+      if (!aid) return;
+      const x = parArt[aid] || (parArt[aid] = { articleId: aid, solde: 0, qteSortie: 0, valSortie: 0, valConnue: true });
+      const q = Number(m['Quantite']) || 0;
+      x.solde -= q; // sortie négative → solde positif sur le chantier
+      if (type === 'Sortie') {
+        x.qteSortie += -q;
+        if (m['Valeur HT'] === null || m['Valeur HT'] === undefined || m['Valeur HT'] === '') x.valConnue = false;
+        else x.valSortie += -Number(m['Valeur HT']);
+      }
+    });
+    return Object.values(parArt).filter(x => x.solde > 0.0005);
+  }
+  async function ouvrirRetourChantier() {
+    if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
+    document.getElementById('modal-retour-chantier').style.display = 'flex';
+    const sel = document.getElementById('retour-chantier');
+    sel.innerHTML = '<option value="">⏳ Chargement…</option>';
+    document.getElementById('retour-liste').innerHTML = '';
+    try { await chargerStock(true); } catch (e) { sel.innerHTML = '<option value="">❌ ' + echapperHtmlNote(e.message) + '</option>'; return; }
+    // Chantiers ayant encore du matériel sorti (libellé tel que saisi à la sortie)
+    const noms = {};
+    (_mouvementsCache || []).forEach(m => {
+      const type = m['Type']?.value || m['Type'] || '';
+      const n = (m['Chantier'] || '').trim();
+      if ((type === 'Sortie' || type === 'Retour') && n && !noms[normTexte(n)]) noms[normTexte(n)] = n;
+    });
+    const avecSolde = Object.values(noms).filter(n => soldesChantierStock(n).length).sort((a, b) => a.localeCompare(b));
+    sel.innerHTML = '<option value="">— Choisir le chantier —</option>' + avecSolde.map(n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}">${echapperHtmlNote(n)}</option>`).join('');
+    const dernier = localStorage.getItem('gb_scan_chantier') || '';
+    if (avecSolde.some(n => normTexte(n) === normTexte(dernier))) sel.value = avecSolde.find(n => normTexte(n) === normTexte(dernier));
+    if (!avecSolde.length) document.getElementById('retour-liste').innerHTML = '<div class="feuille-empty">Aucun matériel sorti en attente de retour.</div>';
+    renderRetourChantier();
+  }
+  function renderRetourChantier() {
+    const chantier = document.getElementById('retour-chantier').value;
+    const el = document.getElementById('retour-liste');
+    if (!chantier) { _retourLignes = []; if (!el.innerHTML.includes('Aucun')) el.innerHTML = '<div class="feuille-empty">Choisissez un chantier.</div>'; return; }
+    _retourLignes = soldesChantierStock(chantier).map(x => ({ ...x, article: _articlesCache.find(a => a.id === x.articleId) || {}, qte: 0 }))
+      .sort((a, b) => (a.article['Designation'] || '').localeCompare(b.article['Designation'] || ''));
+    // Focus du champ scan (douchette) sauf sur téléphone, pour ne pas ouvrir le clavier
+    if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => document.getElementById('retour-scan')?.focus({ preventScroll: true }), 50);
+    el.innerHTML = _retourLignes.map((l, i) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f2f2f2">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l.article['Designation'] || '?')}</div>
+          <div style="color:#999;font-size:11px">${echapperHtmlNote(codeBarreArticle(l.article))} · sorti : <b>${fmtQte(l.solde)}</b> ${echapperHtmlNote(l.article['Unite'] || '')}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
+        </div>
+        <button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>
+        <input type="number" id="retour-qte-${i}" min="0" step="any" value="" placeholder="0" inputmode="decimal" onchange="majQteRetour(${i}, this.value)" style="width:70px;padding:7px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-weight:700;text-align:right" />
+      </div>`).join('') || '<div class="feuille-empty">Plus rien à retourner pour ce chantier.</div>';
+    majBoutonRetour();
+  }
+  function majQteRetour(i, v) {
+    const l = _retourLignes[i]; if (!l) return;
+    let q = parseFloat(String(v).replace(',', '.')) || 0;
+    if (q < 0) q = 0;
+    l.qte = q;
+    const inp = document.getElementById('retour-qte-' + i);
+    if (inp) { inp.value = q ? String(q) : ''; inp.style.borderColor = q > l.solde + 0.0005 ? '#c62828' : '#ddd'; }
+    majBoutonRetour();
+  }
+  function remplirRetourChantier(tout) { _retourLignes.forEach((l, i) => majQteRetour(i, tout ? l.solde : 0)); }
+  function majBoutonRetour() {
+    const n = _retourLignes.filter(l => l.qte > 0).length;
+    const b = document.getElementById('retour-valider');
+    b.disabled = !n; b.style.opacity = n ? '1' : '.5';
+    b.textContent = n ? `✅ Valider le retour (${n} article${n > 1 ? 's' : ''})` : '✅ Valider le retour';
+  }
+  function scanRetourChantier(brut) {
+    const code = resoudreCodeScanne(brut); if (!code) return;
+    if (!_retourLignes.length) { bipScan(false); alert('Choisissez d\'abord le chantier.'); return; }
+    const a = trouverArticleParCode(code);
+    const i = a ? _retourLignes.findIndex(l => l.articleId === a.id) : -1;
+    if (i < 0) { bipScan(false); alert(a ? `« ${a['Designation']} » n'est pas sorti sur ce chantier.` : `Code inconnu : ${code}`); return; }
+    majQteRetour(i, (_retourLignes[i].qte || 0) + 1);
+    bipScan(true);
+    document.getElementById('retour-qte-' + i)?.scrollIntoView({ block: 'nearest' });
+  }
+  async function validerRetourChantier() {
+    const chantier = document.getElementById('retour-chantier').value;
+    const lignes = _retourLignes.filter(l => l.qte > 0);
+    if (!chantier || !lignes.length) return;
+    const trop = lignes.filter(l => l.qte > l.solde + 0.0005);
+    if (trop.length && !confirm(`${trop.length} article(s) : quantité retournée supérieure à la quantité sortie. Valider quand même ?`)) return;
+    const b = document.getElementById('retour-valider');
+    b.disabled = true; b.textContent = '⏳ Enregistrement…';
+    try {
+      await creerMouvementsStock(lignes.map(l => ({
+        articleId: l.articleId, type: 'Retour', quantite: l.qte, chantier, note: 'Retour chantier groupé',
+        libelle: `Retour — ${l.article['Designation'] || ''}`.slice(0, 250),
+        // prix moyen des sorties vers ce chantier (sinon prix EBP actuel)
+        prixUnitaire: (l.valConnue && l.qteSortie > 0) ? l.valSortie / l.qteSortie : undefined
+      })));
+      bipScan(true);
+      alert(`✅ Retour enregistré : ${lignes.length} article(s) remis en stock depuis ${chantier}.`);
+      await chargerStock(true);
+      renderRetourChantier();
+      if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+    } catch (e) {
+      console.error('Retour chantier', e);
+      alert('Erreur : ' + e.message);
+      majBoutonRetour();
+    }
   }
 
   // ── Coût du stock consommé par chantier (gestionnaires) ──
@@ -13499,6 +13880,7 @@
       }
       await rafraichirApresActionCommande();
       rafraichirFicheScan();
+      return true;
     } catch (e) {
       console.error('Erreur réception commande', e);
       alert('Erreur lors de la mise à jour : ' + e.message);
@@ -18569,6 +18951,7 @@
     <div style="padding:10px 16px 0">
       <div id="stock-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <button onclick="ouvrirScanSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:8px">📷 Sortie rapide par scan</button>
+      <button onclick="ouvrirRetourChantier()" style="width:100%;background:#fff;color:var(--vert);border:1.5px solid var(--vert);border-radius:10px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px">↩️ Retour chantier en masse</button>
       <div id="stock-outils-gestion" style="display:none;gap:8px;margin-bottom:8px">
         <button id="btn-sync-articles" onclick="syncArticlesEBP()" style="flex:1;background:#e8f0e7;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🔄 Sync articles EBP</button>
         <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
@@ -18758,14 +19141,14 @@
       <button onclick="fermerEtiquetteCommande()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
     </div>
     <div id="etiq-cmd-info" style="font-size:12px;line-height:1.6;margin-bottom:8px"></div>
-    <div id="etiq-cmd-aide" style="display:none;font-size:11px;color:#7c5200;background:#fdf3e0;border-radius:8px;padding:8px 10px;margin-bottom:12px;line-height:1.5">À l'arrivage, l'opérateur colle l'étiquette sur le colis, la scanne avec 📷 (page Commandes) et renseigne l'emplacement : la réception se valide depuis la fiche affichée.</div>
+    <div id="etiq-cmd-aide" style="display:none;font-size:11px;color:#7c5200;background:#fdf3e0;border-radius:8px;padding:8px 10px;margin-bottom:12px;line-height:1.5">À l'arrivage, la fiche A4 accompagne le colis. L'opérateur scanne le QR de la commande : <b>Conforme</b> → tout est réceptionné en un clic ; <b>Non conforme</b> → il scanne les lignes manquantes ou défectueuses, saisit la quantité reçue et le motif (avec photo si besoin).</div>
     <div style="display:flex;gap:10px;margin-bottom:14px">
       <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Nombre d'exemplaires</label>
         <input type="number" id="etiq-cmd-nb" min="1" max="40" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;margin-top:4px" /></div>
-      <div style="flex:1"><label style="font-size:11px;font-weight:700;color:#999">Position de départ (1 à 8)</label>
+      <div style="flex:1;display:none"><label style="font-size:11px;font-weight:700;color:#999">Position de départ (1 à 8)</label>
         <input type="number" id="etiq-cmd-pos" min="1" max="8" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700;margin-top:4px" /></div>
     </div>
-    <div style="font-size:10px;color:#999;margin:-8px 0 12px">Planche A4 de 8 étiquettes (2 × 4), numérotées de gauche à droite puis de haut en bas.</div>
+    <div style="font-size:10px;color:#999;margin:-8px 0 12px">Fiche A4 (papier normal) : informations de la commande, QR commande et un QR par ligne, à joindre au colis.</div>
     <button id="etiq-cmd-rayonnage" onclick="imprimerEtiquettesRayonnageCommande(_etiqCmdId)" style="display:none;width:100%;margin-bottom:10px;background:#e8f0e7;color:var(--vert);border:none;border-radius:10px;padding:10px;font-size:13px;font-weight:700;cursor:pointer"></button>
     <div style="display:flex;gap:8px">
       <button onclick="fermerEtiquetteCommande()" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">Plus tard</button>
@@ -18825,6 +19208,24 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-retour-chantier" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:92vh;display:flex;flex-direction:column;padding:16px;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">↩️ Retour chantier</div>
+      <button onclick="document.getElementById('modal-retour-chantier').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
+    <select id="retour-chantier" onchange="renderRetourChantier()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;margin:4px 0 8px;background:#fff"></select>
+    <input type="text" id="retour-scan" placeholder="🔫 Scanner un article (ajoute 1)…" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:8px" />
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button onclick="remplirRetourChantier(true)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout retourner</button>
+      <button onclick="remplirRetourChantier(false)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout effacer</button>
+    </div>
+    <div id="retour-liste" style="overflow-y:auto;flex:1;font-size:12px;min-height:80px"></div>
+    <button id="retour-valider" onclick="validerRetourChantier()" style="margin-top:10px;width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer">✅ Valider le retour</button>
+  </div>
+</div>
+
 <div id="modal-couts-stock" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;padding:18px 16px 16px;box-sizing:border-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
