@@ -678,7 +678,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11546,6 +11546,7 @@
   async function ouvrirVueStock() {
     const listeEl = document.getElementById('stock-liste');
     const outils = document.getElementById('stock-outils-gestion');
+    { const be = document.getElementById('btn-etiq-catalogue'); if (be) be.style.display = peutGererStock() ? 'block' : 'none'; }
     if (outils) outils.style.display = peutGererStock() ? 'flex' : 'none';
     if (!stockTablesConfigurees()) {
       listeEl.innerHTML = `<div class="feuille-empty" style="text-align:left;font-size:12px;line-height:1.5">⚙️ Module stock non configuré : créez les tables Baserow <b>Articles</b> et <b>Mouvements stock</b>, puis renseignez TABLE_ARTICLES et TABLE_MOUVEMENTS_STOCK dans l'appli.</div>`;
@@ -12052,6 +12053,114 @@
       alert('Erreur : ' + e.message);
     }
   }
+  // ── Impression en masse : tout le catalogue EBP (ou une sélection) ──
+  // Le catalogue (sans prix) est lu sur le Worker. Les articles déjà en stock
+  // gardent leur emplacement sur l'étiquette. Impression par lots de 50
+  // planches (400 étiquettes) pour rester fluide dans le navigateur.
+  const EC_LOT = 400;
+  let _ecCatalogue = [], _ecSelection = [];
+  const _ecPanier = new Map(); // code → article à imprimer (sélection manuelle)
+  const EC_AFFICHES = 150;     // résultats cochables affichés
+  async function ouvrirEtiquettesCatalogue() {
+    if (!peutGererStock()) return;
+    document.getElementById('modal-etiq-catalogue').style.display = 'flex';
+    document.getElementById('ec-resume').textContent = '⏳ Chargement du catalogue…';
+    document.getElementById('ec-lots').innerHTML = '';
+    try {
+      const [r] = await Promise.all([
+        fetch(`${EBP_WORKER}/articles/all`, { headers: headersWorker(), cache: 'no-store' }),
+        stockTablesConfigurees() ? chargerStock().catch(() => {}) : null
+      ]);
+      if (!r.ok) throw new Error(r.status === 404 ? 'Worker à mettre à jour (route /articles/all, v8.4)' : 'Worker ' + r.status);
+      const d = await r.json();
+      _ecCatalogue = d.results || [];
+      const opts = (id, libelle, valeurs) => {
+        document.getElementById(id).innerHTML = `<option value="">${libelle}</option>` +
+          [...new Set(valeurs.filter(Boolean))].sort((a, b) => a.localeCompare(b)).map(v => `<option value="${echapperHtmlNote(v).replace(/"/g, '&quot;')}">${echapperHtmlNote(v)}</option>`).join('');
+      };
+      opts('ec-fournisseur', 'Tous les fournisseurs', _ecCatalogue.map(x => x.fournisseur));
+      opts('ec-famille', 'Toutes les familles', _ecCatalogue.map(x => x.famille));
+      document.getElementById('ec-famille').style.display = _ecCatalogue.some(x => x.famille) ? '' : 'none';
+      majEtiquettesCatalogue();
+    } catch (e) {
+      document.getElementById('ec-resume').textContent = '❌ ' + e.message;
+    }
+  }
+  function majEtiquettesCatalogue() {
+    const mots = normTexte(document.getElementById('ec-texte').value || '').split(/\s+/).filter(Boolean);
+    const fourn = document.getElementById('ec-fournisseur').value;
+    const fam = document.getElementById('ec-famille').value;
+    const enStock = document.getElementById('ec-stock').checked;
+    const tri = document.getElementById('ec-tri').value;
+    const stockParCode = new Map((_articlesCache || []).map(a => [normRef(a['Code EBP']), a]));
+    let liste = _ecCatalogue.filter(x => {
+      if (fourn && x.fournisseur !== fourn) return false;
+      if (fam && x.famille !== fam) return false;
+      if (enStock && !stockParCode.has(normRef(x.code))) return false;
+      if (mots.length) { const h = normTexte(`${x.designation} ${x.code} ${x.ref}`); if (!mots.every(m => h.includes(m))) return false; }
+      return true;
+    });
+    const cle = { code: x => x.code, designation: x => x.designation, fournisseur: x => `${x.fournisseur} ${x.designation}` }[tri] || (x => x.code);
+    liste.sort((a, b) => String(cle(a) || '').localeCompare(String(cle(b) || ''), 'fr', { numeric: true }));
+    // Objet « article » pour l'étiquette : fiche du stock si elle existe (emplacement)
+    _ecSelection = liste.map(x => stockParCode.get(normRef(x.code)) || { 'Designation': x.designation, 'Code EBP': x.code });
+    const n = _ecSelection.length;
+    document.getElementById('ec-resume').innerHTML = n
+      ? `${n} étiquette(s) · <b>${Math.ceil(n / 8)} planche(s)</b> de 8 (format L7165)`
+      : 'Aucun article ne correspond.';
+    const lots = [];
+    for (let i = 0; i < n; i += EC_LOT) lots.push([i, Math.min(n, i + EC_LOT)]);
+    // Liste cochable : on compose sa sélection au fil des recherches
+    const visibles = _ecSelection.slice(0, EC_AFFICHES);
+    const htmlListe = n ? `
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <button onclick="ecCocherAffiches(true)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">☑️ Cocher les ${visibles.length} affichés</button>
+        <button onclick="ecCocherAffiches(false)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">☐ Décocher les affichés</button>
+      </div>` + visibles.map((a, i) => {
+        const code = codeBarreArticle(a), coche = _ecPanier.has(normRef(code));
+        return `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #f2f2f2;cursor:pointer;${coche ? 'background:#f4f8f3;' : ''}">
+          <input type="checkbox" ${coche ? 'checked' : ''} onchange="ecCocher(${i}, this.checked)" style="width:20px;height:20px;accent-color:var(--vert);flex-shrink:0" />
+          <span style="flex:1;min-width:0;font-size:12px"><b>${echapperHtmlNote(a['Designation'] || '?')}</b><br><span style="color:#999">${echapperHtmlNote(code)}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span></span>
+        </label>`;
+      }).join('') + (n > EC_AFFICHES ? `<div style="font-size:11px;color:#999;padding:6px 4px">… ${n - EC_AFFICHES} autres résultats : affinez la recherche pour les voir.</div>` : '') : '';
+    const htmlTous = lots.map(([a, b], k) => `
+      <button onclick="imprimerLotCatalogue(${a}, ${b}, this)" style="width:100%;margin-bottom:6px;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;text-align:left">
+        🖨️ ${lots.length > 1 ? `Lot ${k + 1}/${lots.length} — ` : ''}étiquettes ${a + 1} à ${b} <span style="font-weight:400;opacity:.85">(${Math.ceil((b - a) / 8)} planches)</span>
+      </button>`).join('') + (lots.length > 1 ? '<div style="font-size:11px;color:#999">Imprimez les lots l\'un après l\'autre : chaque lot ouvre sa propre fenêtre d\'impression. Le bouton passe en gris une fois imprimé.</div>' : '');
+    document.getElementById('ec-lots').innerHTML = htmlListe + (n ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--gris)">🖨️ Imprimer tous les résultats de la recherche (${n})</summary><div style="margin-top:6px">${htmlTous}</div></details>` : '');
+    renderPanierCatalogue();
+  }
+  function ecCocher(i, coche) {
+    const a = _ecSelection[i]; if (!a) return;
+    const k = normRef(codeBarreArticle(a));
+    if (coche) _ecPanier.set(k, a); else _ecPanier.delete(k);
+    renderPanierCatalogue();
+  }
+  function ecCocherAffiches(coche) {
+    _ecSelection.slice(0, EC_AFFICHES).forEach(a => { const k = normRef(codeBarreArticle(a)); if (coche) _ecPanier.set(k, a); else _ecPanier.delete(k); });
+    majEtiquettesCatalogue();
+  }
+  function renderPanierCatalogue() {
+    const el = document.getElementById('ec-panier');
+    const n = _ecPanier.size;
+    el.style.display = n ? 'block' : 'none';
+    if (!n) return;
+    el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="flex:1;font-size:12px;font-weight:800;color:var(--vert)">🧺 Sélection : ${n} étiquette(s) · ${Math.ceil(n / 8)} planche(s)</span>
+        <button onclick="imprimerPanierCatalogue()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la sélection</button>
+        <button onclick="_ecPanier.clear(); majEtiquettesCatalogue()" style="background:#fff;border:1px solid #c5d9c3;border-radius:8px;padding:8px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">Vider</button>
+      </div>`;
+  }
+  function imprimerPanierCatalogue() {
+    const liste = [..._ecPanier.values()];
+    if (liste.length > EC_LOT) { alert(`Sélection de ${liste.length} étiquettes : imprimez-la en plusieurs fois (${EC_LOT} au maximum par impression).`); return; }
+    imprimerEtiquettesArticlesObjets(liste);
+  }
+  function imprimerLotCatalogue(a, b, btn) {
+    imprimerEtiquettesArticlesObjets(_ecSelection.slice(a, b));
+    if (btn) { btn.style.background = '#95a5a6'; btn.innerHTML = '✓ ' + btn.innerHTML.replace('🖨️ ', ''); }
+  }
+
   // ── Étiquettes rayonnage des articles d'une commande ──
   // Une étiquette par article commandé (dédoublonné), même s'il n'est pas
   // encore en stock : le QR porte le code article EBP de la ligne, reconnu au
@@ -19387,6 +19496,7 @@
         <button onclick="imprimerEtiquettesListe()" title="Imprimer les étiquettes QR des articles affichés" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Étiquettes</button>
         <button onclick="ouvrirCoutsChantiers()" title="Coût du stock consommé par chantier" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">💶 Coûts</button>
       </div>
+      <button id="btn-etiq-catalogue" onclick="ouvrirEtiquettesCatalogue()" style="display:none;width:100%;background:#fff;border:1.5px dashed var(--vert);border-radius:10px;padding:9px;font-size:12px;font-weight:800;color:var(--vert);cursor:pointer;margin-bottom:8px">🖨️ Étiquettes en masse — catalogue EBP</button>
       <div id="stock-sync-statut" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600"></div>
       <input type="text" id="stock-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon (tout le catalogue)…" oninput="renderStock(); programmerRechercheCatalogue()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
       <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:4px">
@@ -19637,6 +19747,29 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-etiq-catalogue" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:92vh;display:flex;flex-direction:column;padding:16px;box-sizing:border-box;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">🖨️ Étiquettes en masse — catalogue EBP</div>
+      <button onclick="document.getElementById('modal-etiq-catalogue').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <input type="text" id="ec-texte" placeholder="Filtrer : désignation, code ou référence (vide = tout)" oninput="majEtiquettesCatalogue()" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px" />
+    <div style="display:flex;gap:6px">
+      <select id="ec-fournisseur" onchange="majEtiquettesCatalogue()" style="flex:1;min-width:0;padding:7px;border:1px solid #ddd;border-radius:8px;font-size:12px"></select>
+      <select id="ec-famille" onchange="majEtiquettesCatalogue()" style="flex:1;min-width:0;padding:7px;border:1px solid #ddd;border-radius:8px;font-size:12px"></select>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px">
+      <select id="ec-tri" onchange="majEtiquettesCatalogue()" style="padding:7px;border:1px solid #ddd;border-radius:8px;font-size:12px">
+        <option value="code">Tri par code EBP</option><option value="designation">Tri par désignation</option><option value="fournisseur">Tri par fournisseur</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="ec-stock" onchange="majEtiquettesCatalogue()" /> Seulement les articles en stock</label>
+    </div>
+    <div id="ec-panier" style="display:none;background:#e8f0e7;border-radius:10px;padding:8px 10px"></div>
+    <div id="ec-resume" style="font-size:12px;font-weight:700;color:var(--gris);background:#f6f6f6;border-radius:8px;padding:8px 10px">⏳ Chargement du catalogue…</div>
+    <div id="ec-lots" style="overflow-y:auto;flex:1;min-height:60px"></div>
+  </div>
+</div>
+
 <div id="modal-retour-chantier" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerRetourChantier()">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:92vh;display:flex;flex-direction:column;padding:16px;box-sizing:border-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
