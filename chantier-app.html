@@ -662,7 +662,7 @@
   const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12029,8 +12029,9 @@
       }).join('');
       const page = `<div class="pg">
         <div class="hd">
+          <div class="lg"><img src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guérin Bâtiments" onerror="this.outerHTML='<b style=&quot;font-size:13pt;line-height:1.1&quot;>GUÉRIN<br>BÂTIMENTS</b>'" /></div>
           <div class="tt">
-            <div class="lo">GUÉRIN BÂTIMENTS — Fiche de réception</div>
+            <div class="lo">Fiche de réception</div>
             <div class="nu">${esc(r['Numero commande'])}</div>
             ${partielle ? '<div class="pa big">RÉCEPTION PARTIELLE EN COURS</div>' : ''}
             <table class="inf">${infos.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('')}</table>
@@ -12055,13 +12056,15 @@
         .pg:last-child { page-break-after: auto; }
         .hd { display: flex; gap: 6mm; align-items: flex-start; border-bottom: 0.6mm solid #000; padding-bottom: 3mm; }
         .tt { flex: 1; min-width: 0; }
-        .lo { font-size: 9pt; font-weight: 700; color: #555; letter-spacing: .3mm; }
+        .lg { width: 38mm; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: flex-start; padding-top: 1mm; }
+        .lg img { width: 38mm; max-height: 30mm; object-fit: contain; object-position: left top; }
+        .lo { font-size: 10pt; font-weight: 700; color: #555; letter-spacing: .3mm; text-transform: uppercase; }
         .nu { font-size: 24pt; font-weight: 800; font-family: monospace; margin: 1mm 0 2mm; }
         .inf { border-collapse: collapse; font-size: 10pt; }
         .inf th { text-align: left; font-weight: 400; color: #555; padding: 0.5mm 4mm 0.5mm 0; white-space: nowrap; vertical-align: top; }
         .inf td { font-weight: 700; padding: 0.5mm 0; }
-        .qc { width: 48mm; text-align: center; font-family: monospace; font-size: 9pt; }
-        .qc img { width: 48mm; height: 48mm; image-rendering: pixelated; display: block; }
+        .qc { width: 42mm; text-align: center; font-family: monospace; font-size: 9pt; }
+        .qc img { width: 42mm; height: 42mm; image-rendering: pixelated; display: block; }
         .hint { font-family: Arial; font-size: 8pt; color: #555; }
         .mode { font-size: 8.5pt; background: #f2f2f2; border-radius: 2mm; padding: 2mm 3mm; margin: 3mm 0; line-height: 1.5; }
         .li { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
