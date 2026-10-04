@@ -676,7 +676,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V14';
+  const APP_VERSION = 'V15';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -985,6 +985,10 @@
     if (document.visibilityState === 'visible' && connectedViewId) {
       updateBadgeMessages();
       chargerMessageIndividuel();
+      // Retour sur l'appli (mobile) : on relit les validations d'heures
+      if (typeof viderCacheBaserow === 'function') viderCacheBaserow();
+      if (document.getElementById('modal-validation-heures')?.style.display === 'flex') rafraichirValidationHeures();
+      else if (typeof majWidgetValidationHeures === 'function') majWidgetValidationHeures();
     }
   });
 
@@ -1028,7 +1032,9 @@
     const h = new Headers((init && init.headers) || undefined);
     h.delete('Authorization');
     if (_sessionApp) h.set('X-Session', _sessionApp);
-    return _fetchNatifBrut(GB_WORKER + '/bw' + url.replace(/^https?:\/\/api\.baserow\.io/, ''), { ...(init || {}), headers: h })
+    // cache: 'no-store' : sur mobile (Safari / Chrome Android, PWA installée) le navigateur
+    // peut resservir une ancienne réponse HTTP de la passerelle → données non actualisées.
+    return _fetchNatifBrut(GB_WORKER + '/bw' + url.replace(/^https?:\/\/api\.baserow\.io/, ''), { cache: 'no-store', ...(init || {}), headers: h })
       .then(r => { if (r.status === 401 && r.headers.get('X-Session-Expiree')) sessionExpiree(); return r; });
   }
   async function _fetchNatif(input, init) {
@@ -7833,6 +7839,7 @@
   async function ouvrirValidationHeures(lundiStr, listePrechargee) {
     _validationLundi = lundiStr || lundiSemainePrecedente();
     document.getElementById('modal-validation-heures').style.display = 'flex';
+    if (typeof reinitBoutonValidation === 'function') { reinitBoutonValidation(); msgValidation(''); }
     initValidationPad();
     await rafraichirValidationHeures(listePrechargee);
   }
@@ -7929,7 +7936,7 @@
 
         return `<div style="border:1.5px solid ${f.valide ? '#c5d9c3' : (cocheeParDefaut ? '#f0d9a8' : '#eee')};border-radius:10px;padding:9px 10px;margin-bottom:8px;background:${f.valide ? '#f7fbf6' : '#fff'}">
           <div style="display:flex;align-items:flex-start;gap:9px">
-            <input type="checkbox" class="validation-check" data-idx="${idx}" ${selectionnable ? '' : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
+            <input type="checkbox" class="validation-check" data-idx="${idx}" onchange="reinitBoutonValidation();msgValidation('')" ${selectionnable ? '' : 'disabled'} style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:var(--vert)">
             <div style="flex:1;min-width:0">
               <div style="display:flex;justify-content:space-between;gap:8px">
                 <span style="font-size:14px;font-weight:800;color:var(--gris)">${echapperHTMLAff(f.nom)}${f.poste ? ` <span style="font-size:11px;font-weight:400;color:#999">${echapperHTMLAff(f.poste)}</span>` : ''}</span>
@@ -7978,60 +7985,108 @@
     if (_validationCanvas) _validationCanvas.getContext('2d').clearRect(0, 0, _validationCanvas.width, _validationCanvas.height);
   }
 
-  async function validerHeuresSelection() {
-    const idxs = [...document.querySelectorAll('#validation-liste .validation-check:checked:not(:disabled)')].map(cb => parseInt(cb.dataset.idx));
-    const feuilles = idxs.map(i => ({ f: _validationDonnees[i], idx: i })).filter(x => x.f && !x.f.valide && !x.f.estMoi);
-    if (!feuilles.length) { alert('⚠️ Cochez au moins une feuille d\'heures à valider.'); return; }
-
-    // Feuilles non signées par le collaborateur : motif obligatoire
-    const manquants = [];
-    feuilles.forEach(x => {
-      if (x.f.signe) return;
-      const sel = document.querySelector(`#validation-liste .validation-motif[data-idx="${x.idx}"]`);
-      let motif = sel ? sel.value : '';
-      if (motif === 'Autre') {
-        const precision = (document.getElementById('validation-motif-autre-' + x.idx)?.value || '').trim();
-        motif = precision ? 'Autre : ' + precision : '';
-      }
-      x.motif = motif;
-      if (!motif) manquants.push(x.f.nom);
-    });
-    if (manquants.length) { alert('⚠️ Indiquez le motif de validation sans signature pour :\n' + manquants.join(', ')); return; }
-
-    const ctx = _validationCanvas.getContext('2d');
-    const pixels = ctx.getImageData(0, 0, _validationCanvas.width, _validationCanvas.height).data;
-    if (!pixels.some((p, i) => i % 4 === 3 && p > 0)) { alert('⚠️ Veuillez apposer votre signature avant de valider.'); return; }
-    const nbSans = feuilles.filter(x => !x.f.signe).length;
-    if (!confirm(`Valider et signer ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures pour la semaine du ${formatDateFr(_validationLundi)} ?` +
-      (nbSans ? `\n\n⚠️ Dont ${nbSans} sans signature du collaborateur : votre visa engage seul la validation de ces heures.` : ''))) return;
-
+  // Message affiché dans la modale (remplace alert/confirm : si le navigateur a bloqué
+  // les boîtes de dialogue de la page, confirm() renvoie false sans rien afficher
+  // et le bouton semblait ne rien faire).
+  function msgValidation(texte, type) {
+    const el = document.getElementById('validation-message');
+    if (!el) return;
+    if (!texte) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    const styles = {
+      erreur: 'background:#fdecea;color:#c0392b;border:1px solid #f5c6cb',
+      info:   'background:#fff8e1;color:#5d4037;border:1px solid #f9a825',
+      ok:     'background:#e8f0e7;color:#2f5a27;border:1px solid #c5d9c3'
+    };
+    el.style.cssText = 'display:block;border-radius:10px;padding:9px 12px;margin-top:10px;font-size:12px;font-weight:700;line-height:1.5;' + (styles[type] || styles.info);
+    el.innerHTML = texte;
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  let _validationConfirmeJusqua = 0;
+  function reinitBoutonValidation() {
+    _validationConfirmeJusqua = 0;
     const btn = document.getElementById('btn-valider-heures');
-    btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
-    const signatureBase64 = _validationCanvas.toDataURL('image/png');
-    const base = { 'Signature validation': signatureBase64, 'Valide par': connectedCollab || '', 'Date validation': dateYMD(new Date()) };
-    const envoyer = (url, method, body) => fetch(url, { method, headers: HEADERS, body: JSON.stringify(body) })
-      .then(async r => { if (!r.ok) throw new Error(await r.text()); return r; });
-    const resultats = await Promise.allSettled(feuilles.map(({ f, motif }) => {
-      if (f.sig) {
-        // Ligne existante (signée par le collaborateur, ou déjà créée sans signature)
-        const body = f.signe ? base : { ...base, 'Motif sans signature': motif };
-        return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${f.sig.id}/?user_field_names=true`, 'PATCH', body);
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Valider et signer la sélection'; btn.style.background = 'var(--vert)'; }
+  }
+
+  async function validerHeuresSelection() {
+    const btn = document.getElementById('btn-valider-heures');
+    try {
+      const idxs = [...document.querySelectorAll('#validation-liste .validation-check:checked:not(:disabled)')].map(cb => parseInt(cb.dataset.idx));
+      const feuilles = idxs.map(i => ({ f: _validationDonnees[i], idx: i })).filter(x => x.f && !x.f.valide && !x.f.estMoi);
+      if (!feuilles.length) {
+        reinitBoutonValidation();
+        // Met en évidence les cases à cocher
+        document.querySelectorAll('#validation-liste .validation-check:not(:disabled)').forEach(cb => { cb.style.outline = '3px solid #e65100'; setTimeout(() => cb.style.outline = '', 2500); });
+        msgValidation('⚠️ Cochez d\'abord la ou les feuilles à valider (case à gauche du nom), puis cliquez à nouveau sur « Valider et signer ».', 'erreur');
+        return;
       }
-      // Aucune ligne : création d'une feuille validée sans signature du collaborateur
-      return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true`, 'POST',
-        { 'Collaborateur': [f.collabId], 'Semaine': _validationLundi, ...base, 'Motif sans signature': motif });
-    }));
-    btn.disabled = false; btn.textContent = '✅ Valider et signer la sélection';
-    const echecs = resultats.map((r, i) => r.status === 'rejected' ? feuilles[i].f.nom : null).filter(Boolean);
-    if (echecs.length) {
-      console.error('Échecs validation heures', resultats.filter(r => r.status === 'rejected').map(r => r.reason));
-      alert(`⚠️ ${feuilles.length - echecs.length} feuille(s) validée(s), ${echecs.length} en échec :\n${echecs.join(', ')}\n\nVérifiez que les champs "Signature validation", "Valide par", "Date validation" et "Motif sans signature" existent dans la table Signatures.`);
-    } else {
-      alert(`✅ ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures validée${feuilles.length > 1 ? 's' : ''}.`);
+
+      // Feuilles non signées par le collaborateur : motif obligatoire
+      const manquants = [];
+      feuilles.forEach(x => {
+        if (x.f.signe) return;
+        const sel = document.querySelector(`#validation-liste .validation-motif[data-idx="${x.idx}"]`);
+        let motif = sel ? sel.value : '';
+        if (motif === 'Autre') {
+          const precision = (document.getElementById('validation-motif-autre-' + x.idx)?.value || '').trim();
+          motif = precision ? 'Autre : ' + precision : '';
+        }
+        x.motif = motif;
+        if (!motif) manquants.push(x.f.nom);
+      });
+      if (manquants.length) { reinitBoutonValidation(); msgValidation('⚠️ Feuille non signée par le collaborateur : choisissez le motif de validation sans signature pour <b>' + manquants.map(echapperHTMLAff).join(', ') + '</b>.', 'erreur'); return; }
+
+      if (!_validationCanvas) initValidationPad();
+      const ctx = _validationCanvas.getContext('2d');
+      const pixels = ctx.getImageData(0, 0, _validationCanvas.width, _validationCanvas.height).data;
+      if (!pixels.some((p, i) => i % 4 === 3 && p > 0)) { reinitBoutonValidation(); msgValidation('⚠️ Apposez votre signature dans le cadre avant de valider.', 'erreur'); return; }
+
+      // Confirmation en deux clics (sans confirm())
+      const nbSans = feuilles.filter(x => !x.f.signe).length;
+      if (Date.now() > _validationConfirmeJusqua) {
+        _validationConfirmeJusqua = Date.now() + 15000;
+        btn.textContent = `👉 Confirmer la validation (${feuilles.length})`;
+        btn.style.background = '#e65100';
+        msgValidation(`Valider et signer ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} pour la semaine du ${formatDateFr(_validationLundi)} : <b>${feuilles.map(x => echapperHTMLAff(x.f.nom)).join(', ')}</b>.` +
+          (nbSans ? `<br>⚠️ Dont ${nbSans} sans signature du collaborateur : votre visa engage seul la validation de ces heures.` : '') +
+          '<br>Cliquez sur le bouton orange pour confirmer.', 'info');
+        setTimeout(() => { if (_validationConfirmeJusqua && Date.now() > _validationConfirmeJusqua) { reinitBoutonValidation(); msgValidation(''); } }, 15500);
+        return;
+      }
+      _validationConfirmeJusqua = 0;
+
+      btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; btn.style.background = 'var(--vert)';
+      msgValidation('⏳ Enregistrement des validations…', 'info');
+      const signatureBase64 = _validationCanvas.toDataURL('image/png');
+      const base = { 'Signature validation': signatureBase64, 'Valide par': connectedCollab || '', 'Date validation': dateYMD(new Date()) };
+      const envoyer = (url, method, body) => fetch(url, { method, headers: HEADERS, body: JSON.stringify(body) })
+        .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status} — ${await r.text()}`); return r; });
+      const resultats = await Promise.allSettled(feuilles.map(({ f, motif }) => {
+        if (f.sig) {
+          const body = f.signe ? base : { ...base, 'Motif sans signature': motif };
+          return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/${f.sig.id}/?user_field_names=true`, 'PATCH', body);
+        }
+        return envoyer(`https://api.baserow.io/api/database/rows/table/${TABLE_SIGNATURES}/?user_field_names=true`, 'POST',
+          { 'Collaborateur': [f.collabId], 'Semaine': _validationLundi, ...base, 'Motif sans signature': motif });
+      }));
+      const echecs = resultats.map((r, i) => r.status === 'rejected' ? { nom: feuilles[i].f.nom, err: String(r.reason?.message || r.reason).slice(0, 200) } : null).filter(Boolean);
+      effacerSignatureValidation();
+      await rafraichirValidationHeures();
+      reinitBoutonValidation();
+      if (echecs.length) {
+        console.error('Échecs validation heures', echecs);
+        msgValidation(`⚠️ ${feuilles.length - echecs.length} feuille(s) validée(s), ${echecs.length} en échec :<br>` +
+          echecs.map(e => `<b>${echapperHTMLAff(e.nom)}</b> : ${echapperHTMLAff(e.err)}`).join('<br>') +
+          '<br>Vérifiez que les champs « Signature validation », « Valide par », « Date validation » et « Motif sans signature » existent dans la table Signatures.', 'erreur');
+      } else {
+        msgValidation(`✅ ${feuilles.length} feuille${feuilles.length > 1 ? 's' : ''} d'heures validée${feuilles.length > 1 ? 's' : ''}.`, 'ok');
+      }
+      majWidgetValidationHeures();
+    } catch (e) {
+      console.error('Validation heures', e);
+      reinitBoutonValidation();
+      msgValidation('❌ Erreur inattendue : ' + echapperHTMLAff(e.message || String(e)), 'erreur');
     }
-    effacerSignatureValidation();
-    await rafraichirValidationHeures();
-    majWidgetValidationHeures();
   }
 
   let _editChantiersCache = [];
@@ -18620,7 +18675,10 @@
         <div style="font-size:17px;font-weight:800;color:var(--gris)">✅ Validation des heures</div>
         <div style="font-size:12px;color:#888;margin-top:2px">Vérifiez les heures saisies et signées par les collaborateurs, puis apposez votre visa.</div>
       </div>
-      <button onclick="fermerValidationHeures()" style="background:#f0f0f0;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">✕</button>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button onclick="viderCacheBaserow();rafraichirValidationHeures()" title="Actualiser" style="background:#f0f0f0;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">🔄</button>
+        <button onclick="fermerValidationHeures()" style="background:#f0f0f0;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">✕</button>
+      </div>
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;background:#f7f2ea;border-radius:10px;padding:6px 8px;margin-bottom:12px">
       <button onclick="changerSemaineValidation(-1)" style="background:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:14px;cursor:pointer">◀</button>
@@ -18634,6 +18692,7 @@
       </div>
       <div style="font-size:12px;font-weight:700;color:var(--gris);margin-bottom:6px">Votre signature (visa du responsable) :</div>
       <canvas id="validation-canvas" width="420" height="150" style="width:100%;border:2px solid #ddd;border-radius:10px;touch-action:none;cursor:crosshair;background:#f9f9f9"></canvas>
+      <div id="validation-message" style="display:none"></div>
       <div style="display:flex;gap:10px;margin-top:10px">
         <button onclick="effacerSignatureValidation()" style="flex:0 0 auto;background:#f0f0f0;border:none;border-radius:10px;padding:12px 14px;font-size:13px;cursor:pointer">🗑️ Effacer</button>
         <button id="btn-valider-heures" onclick="validerHeuresSelection()" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">✅ Valider et signer la sélection</button>
