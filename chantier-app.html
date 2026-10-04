@@ -659,10 +659,24 @@
 <div id="bulle-tooltip" class="bulle-tooltip" style="display:none"></div>
 
 <script>
-  const BASEROW_TOKEN = '4vSm9h4oSi8zZO1yfXhWdflU9IHLdTQh';
+  // ── SÉCURITÉ (V14) ──
+  // L'appli ne contient plus aucune clé : toutes les requêtes Baserow passent
+  // par le Worker (/bw/…), qui détient la clé dans ses secrets Cloudflare et
+  // applique les droits du profil connecté (jeton de session obtenu à la
+  // connexion, valable 24 h).
+  const GB_WORKER = 'https://guerin-ebp-proxy.f-bouyer-guerin.workers.dev';
+  const BASEROW_TOKEN = 'session'; // valeur factice : l'en-tête est remplacé par le jeton de session
+  let _sessionApp = null;
+  let _sessionExpireeSignalee = false;
+  function sessionExpiree() {
+    if (_sessionExpireeSignalee) return;
+    _sessionExpireeSignalee = true;
+    alert('Votre session a expiré : merci de vous reconnecter.');
+    location.reload();
+  }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V14';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -842,22 +856,23 @@
     if (btn) { btn.textContent = 'Connexion…'; btn.disabled = true; }
 
     try {
-      const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, {
-        headers: { 'Authorization': `Token ${BASEROW_TOKEN}` }
+      // Vérification par le Worker (mot de passe jamais lu par l'appli)
+      const res = await _fetchNatifBrut(GB_WORKER + '/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifiant: id, mdp })
       });
-      const data = await res.json();
-      const users = data.results || [];
-      const user = users.find(u =>
-        u['Identifiant']?.toLowerCase() === id &&
-        u['Mot de passe'] === mdp &&
-        u['Actif'] === true
-      );
-
-      if (!user) {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.session) {
+        errEl.textContent = res.status === 429 ? '⏳ ' + (data.error || 'Trop d\'essais, réessayez plus tard.')
+          : res.status === 401 ? '❌ Identifiant ou mot de passe incorrect.' : '❌ ' + (data.error || 'Erreur de connexion.');
         errEl.style.display = 'block';
         document.getElementById('login-mdp').value = '';
         return;
       }
+      _sessionApp = data.session;
+      const user = data.user;
+      // Listes de référence (collaborateurs, chantiers…) : chargées une fois connecté
+      await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
 
       errEl.style.display = 'none';
       connectedUserRowId = user.id;
@@ -1008,14 +1023,22 @@
     const suivant = _baserowFile.shift();
     if (suivant) suivant();
   }
+  // Requête Baserow redirigée vers la passerelle du Worker, avec le jeton de session
+  function _fetchViaWorker(url, init) {
+    const h = new Headers((init && init.headers) || undefined);
+    h.delete('Authorization');
+    if (_sessionApp) h.set('X-Session', _sessionApp);
+    return _fetchNatifBrut(GB_WORKER + '/bw' + url.replace(/^https?:\/\/api\.baserow\.io/, ''), { ...(init || {}), headers: h })
+      .then(r => { if (r.status === 401 && r.headers.get('X-Session-Expiree')) sessionExpiree(); return r; });
+  }
   async function _fetchNatif(input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
-    if (!url.startsWith('https://api.baserow.io/')) return _fetchNatifBrut(input, init);
+    if (!/^https?:\/\/api\.baserow\.io\//.test(url)) return _fetchNatifBrut(input, init);
     if (_baserowEnCours >= BASEROW_MAX_SIMULTANEES) await new Promise(r => _baserowFile.push(r));
     _baserowEnCours++;
     try {
       for (let essai = 0; ; essai++) {
-        const res = await _fetchNatifBrut(input, init);
+        const res = await _fetchViaWorker(url, init);
         if (res.status !== 429 || essai >= 3) return res;
         await new Promise(r => setTimeout(r, 800 * (essai + 1)));
       }
@@ -1271,7 +1294,6 @@
     if (versionTag) versionTag.textContent = 'Version ' + APP_VERSION;
     const todayLocal = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
     document.getElementById('field-date').value = todayLocal;
-    await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
     ajouterLigne();
     showPage('page-login');
   }
@@ -4099,21 +4121,18 @@
     btn.disabled = true;
     btn.textContent = 'Vérification…';
     try {
-      const resGet = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + connectedUserRowId + '/?user_field_names=true', { headers: HEADERS });
-      if (!resGet.ok) throw new Error('Impossible de vérifier le compte.');
-      const u = await resGet.json();
-      if ((u['Mot de passe'] || '') !== actuel) {
+      const resPw = await _fetchNatifBrut(GB_WORKER + '/password', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Session': _sessionApp || '' },
+        body: JSON.stringify({ actuel, nouveau })
+      });
+      const dPw = await resPw.json().catch(() => ({}));
+      if (resPw.status === 403) {
         afficherMessageMdp('Mot de passe actuel incorrect.', true);
         btn.disabled = false;
         btn.textContent = 'Enregistrer';
         return;
       }
-
-      btn.textContent = 'Enregistrement…';
-      const resPatch = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/' + connectedUserRowId + '/?user_field_names=true', {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Mot de passe': nouveau })
-      });
-      if (!resPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + resPatch.status + ') : ' + (await resPatch.text()));
+      if (!resPw.ok) throw new Error(dPw.error || ('Erreur ' + resPw.status));
 
       afficherMessageMdp('✅ Mot de passe modifié avec succès.', false);
       setTimeout(fermerModalMotDePasse, 1500);
@@ -12515,7 +12534,7 @@
   // en stock ; la recherche complète interroge le Worker à la demande.
   let _catalogueResultats = { q: '', items: [] };
   let _timerCatalogue = null;
-  function headersWorker() { return { 'X-App-Key': WORKER_APP_KEY }; }
+  function headersWorker() { return { 'X-Session': _sessionApp || '' }; }
   function programmerRechercheCatalogue() {
     clearTimeout(_timerCatalogue);
     const q = (document.getElementById('stock-recherche')?.value || '').trim();
@@ -13112,9 +13131,9 @@
   // ============================================================
   // SYNC EBP → BASEROW (une commande à la fois)
   // ============================================================
-  const EBP_WORKER = 'https://guerin-ebp-proxy.f-bouyer-guerin.workers.dev';
+  const EBP_WORKER = GB_WORKER;
   // Clé partagée avec le Worker (secret APP_KEY côté Cloudflare) : protège le catalogue articles.
-  const WORKER_APP_KEY = 'XiShD7hASbRbSwL7bqMVi2DAaXpAHaFN';
+  const WORKER_APP_KEY = ''; // plus utilisée (V14 : jeton de session)
 
   async function syncEBP() {
     const btn    = document.getElementById('btn-sync-ebp');
@@ -15163,6 +15182,7 @@
     document.getElementById('user-section-collab').style.display = isCreation ? 'block' : 'none';
     document.getElementById('user-section-modif').style.display = isCreation ? 'none' : 'block';
 
+    document.getElementById('user-mdp').placeholder = 'Mot de passe';
     if (isCreation) {
       document.getElementById('user-nom').value = '';
       document.getElementById('user-email').value = '';
@@ -15176,7 +15196,8 @@
         document.getElementById('user-nom-modif-label').textContent = nomUser;
         document.getElementById('user-nom-hidden').value = nomUser;
         document.getElementById('user-id').value = u['Identifiant'] || '';
-        document.getElementById('user-mdp').value = u['Mot de passe'] || '';
+        document.getElementById('user-mdp').value = ''; // jamais renvoyé par le Worker
+        document.getElementById('user-mdp').placeholder = 'Laisser vide pour ne pas changer';
         document.getElementById('user-droit').value = u['Droit']?.value || u['Droit'] || 'Utilisateur';
         document.getElementById('user-actif').value = u['Actif'] !== false ? 'true' : 'false';
         // Poste depuis Collaborateurs : recherche directe par nom (indépendante
