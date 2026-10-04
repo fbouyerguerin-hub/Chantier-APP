@@ -676,7 +676,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12313,8 +12313,14 @@
     const nbEcarts = Object.keys(rx.ecarts).length;
     let html = `<div style="background:#f4f8f3;border:1.5px solid var(--vert);border-radius:12px;padding:12px;margin-bottom:10px">
       <div style="font-size:13px;font-weight:800;color:var(--vert);margin-bottom:6px">📦 Réception ${partielle ? '— complément (réception partielle en cours)' : ''}</div>
-      <label style="font-size:11px;font-weight:700;color:#777">Emplacement du colis</label>
-      <input type="text" id="rx-lieu" value="${esc(lieuDefaut).replace(/"/g, '&quot;')}" placeholder="Ex. quai, rack B…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:8px;font-size:13px;margin:3px 0 8px" />`;
+      ${(() => {
+        // Emplacement du colis : point obligatoire sur le plan de l'atelier
+        const place = !!document.getElementById('reception-plan-x-' + rx.uid)?.value;
+        return `<button type="button" onclick="ouvrirPlanPoint('${rx.uid}')" style="width:100%;margin:2px 0 6px;padding:12px;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;${place
+          ? 'background:#e8f0e7;border:1.5px solid var(--vert);color:var(--vert)">✅ Colis placé sur le plan — modifier'
+          : 'background:#fff;border:2px dashed var(--vert);color:var(--vert)">🗺️ Placer le colis sur le plan'}</button>`;
+      })()}
+      <input type="text" id="rx-lieu" value="${esc(lieuDefaut).replace(/"/g, '&quot;')}" placeholder="Précision (facultatif) : quai, rack B…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;margin:0 0 8px" />`;
     if (rx.mode === 'choix') {
       html += `<div style="font-size:12px;color:#555;margin-bottom:8px">${lignes.length} ligne(s) attendue(s). Tout est-il présent et en bon état ?</div>
         <div style="display:flex;gap:8px">
@@ -12361,7 +12367,11 @@
     const form = document.getElementById('reception-form-' + uid);
     if (!form) { alert('Formulaire de réception introuvable : rechargez la fiche.'); return; }
     const lieu = (document.getElementById('rx-lieu')?.value || '').trim();
-    if (!lieu) { alert('Indiquez l\'emplacement du colis.'); document.getElementById('rx-lieu')?.focus(); return; }
+    if (!document.getElementById('reception-plan-x-' + uid)?.value) {
+      alert('Placez d\'abord le colis sur le plan de l\'atelier.');
+      ouvrirPlanPoint(uid);
+      return;
+    }
     const lignes = _commandesLignesCache[r.id] || [];
     const ecarts = avecEcarts ? rx.ecarts : {};
     // Contrôles : la quantité conforme doit rester inférieure à ce qui est attendu
@@ -19621,6 +19631,8 @@ function fermerPlanPoint(confirmer){
   if(hx)hx.value=_ppX.toFixed(4);if(hy)hy.value=_ppY.toFixed(4);
   const lbl=document.getElementById('plan-point-label-'+_ppUid);if(lbl)lbl.textContent='\u2705 Point plac\u00E9 sur le plan';
   const btn=document.getElementById('btn-plan-point-'+_ppUid);if(btn){btn.style.background='#e8f0e7';btn.style.borderColor='#4a7c3f';btn.style.color='#4a7c3f';}
+  // Réception express : le panneau affiche « Colis placé sur le plan »
+  if(typeof _recExpress!=='undefined'&&_recExpress&&_recExpress.uid===_ppUid&&typeof renderRecExpress==='function')renderRecExpress();
   _ppUid=null;
 }
 
