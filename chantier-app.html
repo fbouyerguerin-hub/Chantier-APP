@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V34';
+  const APP_VERSION = 'V35';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11461,7 +11461,7 @@
           </td>` : '';
         return `<tr${estManquante ? ' style="background:#fdf3e0"' : ''}>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
-          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}${badgeEtat}${badgeStockLigne(l, statutCommande)}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
@@ -13117,7 +13117,7 @@
         ${l.surplus ? '' : `<button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>`}
         <input type="number" id="retour-qte-${i}" min="0" step="any" value="" placeholder="0" inputmode="decimal" onchange="majQteRetour(${i}, this.value)" style="width:70px;padding:7px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-weight:700;text-align:right" />
       </div>`).join('') + (nbMasques ? `<div style="font-size:11px;color:#999;padding:4px 0">${nbMasques} autre(s) article(s) masqué(s) par le mot-clé.</div>` : '')
-      || '<div class="feuille-empty">Aucun matériel sorti du stock vers ce chantier.<br>Tapez un mot-clé ou scannez les articles qui reviennent (surplus).</div>';
+      || '<div class="feuille-empty">Aucun matériel sorti du stock vers ce chantier.<br>Les articles commandés pour ce chantier sont listés ci-dessous.</div>';
     _retourLignes.forEach((l, i) => { const inp = document.getElementById('retour-qte-' + i); if (inp && l.qte) inp.value = String(l.qte); });
     el.insertAdjacentHTML('beforeend', renderMaterielCommandeChantier(chantier));
     majBoutonRetour();
@@ -13135,10 +13135,19 @@
       if (!estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], '')) && !estCommandePartielle(r)) return;
       (_commandesLignesCache[r.id] || []).forEach(l => {
         if (estLigneFrais(l) || !(parseFloat(l['Quantite']) > 0)) return;
-        res.push({ r, l });
+        const revenu = qteRevenueLigne(l.id);
+        const max = Math.round((qteRecueAtelier(l) - revenu) * 1000) / 1000;
+        if (max > 0) res.push({ r, l, revenu, max });
       });
     });
     return res;
+  }
+  // Quantité d'une ligne de commande déjà revenue en stock (retours enregistrés)
+  function qteRevenueLigne(ligneId) {
+    return (_mouvementsCache || []).reduce((t, m) => {
+      const type = m['Type']?.value || m['Type'] || '';
+      return t + (type === 'Retour' && Number(m['Ligne commande']) === ligneId ? (Number(m['Quantite']) || 0) : 0);
+    }, 0);
   }
   function renderMaterielCommandeChantier(chantier) {
     const deja = new Set(_retourLignes.map(l => l.cle).filter(Boolean));
@@ -13146,11 +13155,11 @@
       && correspondMotCle(`${l['Description'] || ''} ${codeArticleLigne(l)} ${l['Reference fournisseur'] || ''} ${r['Numero commande'] || ''} ${r['Fournisseur'] || ''}`));
     if (!items.length) return '';
     return `<div style="margin-top:12px;font-size:12px;font-weight:800;color:var(--gris)">📦 Matériel commandé pour ce chantier</div>
-      <div style="font-size:11px;color:#999;margin-bottom:4px">Touchez « Remettre en stock » pour le surplus rapporté à l'atelier.</div>` +
-      items.slice(0, 80).map(({ r, l }) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eee;font-size:12px">
+      <div style="font-size:11px;color:#999;margin-bottom:4px">Le surplus rapporté à l'atelier vient en déduction de la commande du chantier.</div>` +
+      items.slice(0, 80).map(({ r, l, revenu, max }) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eee;font-size:12px">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l['Description'] || '?')}</div>
-          <div style="color:#999;font-size:11px">${echapperHtmlNote(r['Numero commande'] || '')}${codeArticleLigne(l) ? ' · ' + echapperHtmlNote(codeArticleLigne(l)) : ''} · commandé : ${fmtQte(l['Quantite'])} ${echapperHtmlNote(l['Unite'] || '')}</div>
+          <div style="color:#999;font-size:11px">${echapperHtmlNote(r['Numero commande'] || '')}${codeArticleLigne(l) ? ' · ' + echapperHtmlNote(codeArticleLigne(l)) : ''} · commandé : ${fmtQte(l['Quantite'])} ${echapperHtmlNote(l['Unite'] || '')}${revenu > 0 ? ` · déjà revenu : ${fmtQte(revenu)}` : ''} · <b>max ${fmtQte(max)}</b></div>
         </div>
         <button onclick="ajouterSurplusLigneCommande(${l.id})" style="background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">↩️ Remettre en stock</button>
       </div>`).join('');
@@ -13162,7 +13171,7 @@
   }
   function ajouterSurplus(obj) {
     reinitMotCleRetour();
-    let i = _retourLignes.findIndex(l => (obj.articleId && l.articleId === obj.articleId) || (obj.cle && l.cle === obj.cle));
+    let i = _retourLignes.findIndex(l => obj.cle && l.cle === obj.cle);
     if (i < 0) {
       _retourLignes.push({ solde: 0, qteSortie: 0, valSortie: 0, valConnue: false, surplus: true, qte: 0, ...obj });
       i = _retourLignes.length - 1;
@@ -13177,13 +13186,13 @@
   function ajouterSurplusLigneCommande(ligneId) {
     const item = lignesCommandeesChantier(document.getElementById('retour-chantier').value).find(({ l }) => l.id === ligneId);
     if (!item) return;
-    const { r, l } = item;
+    const { r, l, max } = item;
     const mt = Number(l['Montant HT']), q = Number(l['Quantite']);
     const pu = mt > 0 && q > 0 ? mt / q : undefined;
     const code = codeArticleLigne(l);
     const a = trouverArticlePourLigne(l);
-    const base = { cle: 'lig:' + l.id, ligneId: l.id, commande: r['Numero commande'] || '', prixUnitaire: pu,
-                   origine: 'surplus commande ' + (r['Numero commande'] || '') };
+    const base = { cle: 'lig:' + l.id, ligneId: l.id, commande: r['Numero commande'] || '', prixUnitaire: pu, max,
+                   origine: 'commande ' + (r['Numero commande'] || '') + ' · max ' + fmtQte(max) };
     if (a) return ajouterSurplus({ ...base, articleId: a.id, article: a });
     ajouterSurplus({ ...base, articleId: null, article: { 'Designation': l['Description'] || code || 'Article', 'Code EBP': code || '', 'Unite': l['Unite'] || '' },
       aCreer: { 'Designation': (l['Description'] || code || 'Article').slice(0, 250), 'Code EBP': code || '', 'Reference fournisseur': l['Reference fournisseur'] || '',
@@ -13201,36 +13210,73 @@
     const l = _retourLignes[i]; if (!l) return;
     let q = parseFloat(String(v).replace(',', '.')) || 0;
     if (q < 0) q = 0;
+    // Plafond : ce qui est parti du stock vers ce chantier, ou ce qui a été reçu
+    // sur la commande du chantier (moins ce qui est déjà revenu)
+    const limite = l.surplus ? (l.max ?? 0) : l.solde;
+    if (q > limite + 0.0005) {
+      q = limite;
+      msgRetour(`⚠️ ${l.article['Designation'] || 'Article'} : ${fmtQte(limite)} au maximum pour ce chantier`, true);
+    }
     l.qte = q;
     const inp = document.getElementById('retour-qte-' + i);
-    if (inp) { inp.value = q ? String(q) : ''; inp.style.borderColor = !l.surplus && q > l.solde + 0.0005 ? '#c62828' : '#ddd'; }
+    if (inp) { inp.value = q ? String(q) : ''; inp.style.borderColor = '#ddd'; }
     majBoutonRetour();
   }
-  function remplirRetourChantier(tout) { _retourLignes.forEach((l, i) => { if (!l.surplus) majQteRetour(i, tout ? l.solde : 0); else if (!tout) majQteRetour(i, 0); }); }
+  function remplirRetourChantier(tout) { _retourLignes.forEach((l, i) => majQteRetour(i, tout ? (l.surplus ? l.max : l.solde) : 0)); }
   function majBoutonRetour() {
     const n = _retourLignes.filter(l => l.qte > 0).length;
     const b = document.getElementById('retour-valider');
     b.disabled = !n; b.style.opacity = n ? '1' : '.5';
     b.textContent = n ? `✅ Valider le retour (${n} article${n > 1 ? 's' : ''})` : '✅ Valider le retour';
   }
+  // Articles autorisés pour ce chantier : sortis du stock vers lui (solde > 0)
+  // ou commandés pour lui (reçus, pas encore revenus). Tout autre article vient
+  // forcément d'un autre chantier : refusé.
+  function candidatsRetour() {
+    const chantier = document.getElementById('retour-chantier').value;
+    const sorties = _retourLignes.map((l, i) => ({ l, i })).filter(({ l }) => !l.surplus)
+      .map(({ l, i }) => ({ type: 'sortie', i, articleId: l.articleId, designation: l.article['Designation'] || '', code: l.article['Code EBP'] || '', ref: l.article['Reference fournisseur'] || '' }));
+    const commandes = chantier ? lignesCommandeesChantier(chantier).map(({ r, l }) => {
+      const a = trouverArticlePourLigne(l);
+      return { type: 'commande', ligneId: l.id, articleId: a ? a.id : null, designation: l['Description'] || '', code: codeArticleLigne(l), ref: l['Reference fournisseur'] || '', commande: r['Numero commande'] || '' };
+    }) : [];
+    return [...sorties, ...commandes];
+  }
+  function ajouterCandidatRetour(c) {
+    if (c.type === 'sortie') {
+      reinitMotCleRetour(); suggestionsRetour('');
+      majQteRetour(c.i, (_retourLignes[c.i].qte || 0) + 1);
+      bipScan(true);
+      msgRetour(`✅ ${c.designation || 'Article'} +1`, false);
+      document.getElementById('retour-qte-' + c.i)?.scrollIntoView({ block: 'nearest' });
+    } else ajouterSurplusLigneCommande(c.ligneId);
+  }
   function scanRetourChantier(brut) {
     const code = resoudreCodeScanne(brut); if (!code) return;
     if (!document.getElementById('retour-chantier').value) { bipScan(false); msgRetour('⚠️ Choisissez d\'abord le chantier.', true); return; }
+    const cands = candidatsRetour();
     const a = trouverArticleParCode(code);
-    if (!a) {
-      // Pas au stock : recherche par désignation, puis dans le catalogue EBP
-      const res = rechercherArticlesRetour(code);
-      if (res.length === 1) { ajouterArticleRetour(res[0].id); return; }
-      if (res.length) { bipScan(false); suggestionsRetour(code); return; }
-      lireCatalogueParCodes([code]).then(idx => {
-        const x = idx[normRef(code)];
-        if (x) ajouterSurplusCatalogue(x);
-        else { bipScan(false); suggestionsRetour(code); msgRetour(`🔎 « ${code} » : choisissez dans les résultats ci-dessous, ou dans le matériel commandé`, true); }
-      });
+    const n = normRef(code);
+    // 1) code d'article : sorti vers ce chantier en priorité, sinon commandé pour lui
+    let c = cands.find(x => x.type === 'sortie' && a && x.articleId === a.id)
+         || cands.find(x => x.type === 'commande' && ((a && x.articleId === a.id) || (n && (normRef(x.code) === n || normRef(x.ref) === n))));
+    // 2) sinon mot-clé sur la désignation
+    if (!c) {
+      const res = rechercherCandidatsRetour(code);
+      if (res.length === 1) c = res[0];
+      else if (res.length > 1) { bipScan(false); suggestionsRetour(code); return; }
+    }
+    if (!c) {
+      bipScan(false);
+      msgRetour(`❌ « ${a ? a['Designation'] : code} » n'a été ni sorti du stock ni commandé pour ce chantier : il vient d'un autre chantier.`, true);
       return;
     }
-    ajouterArticleRetour(a.id);
-    msgRetour(`✅ ${a['Designation'] || code} +1`, false);
+    ajouterCandidatRetour(c);
+  }
+  function rechercherCandidatsRetour(q) {
+    const mots = normTexte(q || '').split(/\s+/).filter(Boolean);
+    if (!mots.length || normTexte(q).length < 2) return [];
+    return candidatsRetour().filter(c => { const h = normTexte(`${c.designation} ${c.code} ${c.ref} ${c.commande || ''}`); return mots.every(m => h.includes(m)); });
   }
   function msgRetour(texte, erreur) {
     const el = document.getElementById('retour-msg'); if (!el) return;
@@ -13292,19 +13338,10 @@
     document.getElementById('modal-retour-chantier').style.display = 'none';
   }
   function ajouterArticleRetour(articleId) {
-    reinitMotCleRetour();
-    let i = _retourLignes.findIndex(l => l.articleId === articleId);
-    if (i < 0) {
-      // Surplus : article revenu du chantier sans être sorti du stock par l'appli
-      _retourLignes.push({ articleId, solde: 0, qteSortie: 0, valSortie: 0, valConnue: false, surplus: true,
-                           article: _articlesCache.find(x => x.id === articleId) || {}, qte: 0 });
-      i = _retourLignes.length - 1;
-      renderRetourChantier();
-    }
-    suggestionsRetour('');
-    majQteRetour(i, (_retourLignes[i].qte || 0) + 1);
-    bipScan(true);
-    document.getElementById('retour-qte-' + i)?.scrollIntoView({ block: 'nearest' });
+    const c = candidatsRetour().find(x => x.articleId === articleId);
+    if (c) return ajouterCandidatRetour(c);
+    bipScan(false);
+    msgRetour('❌ Cet article n\'a été ni sorti du stock ni commandé pour ce chantier.', true);
   }
   function rechercherArticlesRetour(q) {
     const t = normTexte(q || '');
@@ -13315,33 +13352,20 @@
       return mots.every(m => h.includes(m));
     }).slice(0, 8);
   }
-  let _retourCatTimer = null, _retourCatRes = [];
+  let _retourSuggestions = [];
   function suggestionsRetour(q) {
     const el = document.getElementById('retour-sugg'); if (!el) return;
-    clearTimeout(_retourCatTimer);
-    _retourCatRes = [];
-    // Catalogue EBP (articles jamais passés par le stock), après une courte pause de frappe
-    if ((q || '').trim().length >= 2) _retourCatTimer = setTimeout(async () => {
-      try {
-        const r = await fetch(`${EBP_WORKER}/articles/search?q=${encodeURIComponent(q.trim())}&limit=8`, { headers: headersWorker(), cache: 'no-store' });
-        if (!r.ok) return;
-        const enStock = new Set((_articlesCache || []).map(a => normRef(a['Code EBP'])));
-        _retourCatRes = ((await r.json()).results || []).filter(x => !enStock.has(normRef(x.code))).slice(0, 6);
-        if (document.getElementById('retour-scan').value.trim() !== q.trim()) return;
-        el.insertAdjacentHTML('beforeend', _retourCatRes.map((x, i) => `<div onclick="ajouterSurplusCatalogue(_retourCatRes[${i}]); document.getElementById('retour-scan').value=''" style="cursor:pointer;padding:6px 8px;border:1px dashed #c5d9c3;border-radius:6px;margin-bottom:3px;font-size:12px;background:#fff">
-          <b>${echapperHtmlNote(x.designation || '?')}</b> <span style="color:#999">· ${echapperHtmlNote(x.code)} · catalogue EBP</span></div>`).join(''));
-      } catch (e) {}
-    }, 350);
-    const res = (q || '').trim().length >= 2 ? rechercherArticlesRetour(q) : [];
-    el.innerHTML = res.map(a => `<div onclick="ajouterArticleRetour(${a.id}); document.getElementById('retour-scan').value=''" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:3px;font-size:12px;background:#fafafa">
-        <b>${echapperHtmlNote(a['Designation'] || '?')}</b> <span style="color:#999">· ${echapperHtmlNote(codeBarreArticle(a))}</span></div>`).join('');
+    _retourSuggestions = (q || '').trim().length >= 2 ? rechercherCandidatsRetour(q).slice(0, 10) : [];
+    el.innerHTML = _retourSuggestions.map((c, i) => `<div onclick="ajouterCandidatRetour(_retourSuggestions[${i}]); document.getElementById('retour-scan').value=''" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:3px;font-size:12px;background:#fafafa">
+        <b>${echapperHtmlNote(c.designation || '?')}</b> <span style="color:#999">· ${c.type === 'sortie' ? 'sorti du stock' : 'commande ' + echapperHtmlNote(c.commande)}${c.code ? ' · ' + echapperHtmlNote(c.code) : ''}</span></div>`).join('')
+      + ((q || '').trim().length >= 2 && !_retourSuggestions.length ? '<div style="font-size:11px;color:#c0392b;padding:4px 2px">Aucun article de ce chantier ne correspond.</div>' : '');
   }
   async function validerRetourChantier() {
     const chantier = document.getElementById('retour-chantier').value;
     const lignes = _retourLignes.filter(l => l.qte > 0);
     if (!chantier || !lignes.length) return;
-    const trop = lignes.filter(l => !l.surplus && l.qte > l.solde + 0.0005);
-    if (trop.length && !confirm(`${trop.length} article(s) : quantité retournée supérieure à la quantité sortie. Valider quand même ?`)) return;
+    const trop = lignes.filter(l => l.qte > (l.surplus ? (l.max ?? 0) : l.solde) + 0.0005);
+    if (trop.length) { alert(`${trop.length} article(s) dépassent la quantité affectée à ce chantier : corrigez avant de valider.`); return; }
     const b = document.getElementById('retour-valider');
     b.disabled = true; b.textContent = '⏳ Enregistrement…';
     try {
@@ -18126,7 +18150,9 @@
           }
           (stockParChantier[nom] = stockParChantier[nom] || []).push({
             date, type, article: a['Designation'] || (m['Article'] || [])[0]?.value || '?', unite: a['Unite'] || '',
-            qte: -qte, cout: valeur === null ? null : round2Ch(-Number(valeur)), estime
+            qte: -qte, cout: valeur === null ? null : round2Ch(-Number(valeur)), estime,
+            // Retour du surplus d'une commande du chantier : déduit des commandes
+            surCommande: type === 'Retour' && !!(m['Commande'] || m['Ligne commande']), commande: m['Commande'] || ''
           });
         });
       } catch (e) { console.error('Rentabilité : sorties de stock', e); }
@@ -18372,8 +18398,12 @@
     return Object.values(parChantier).map(c => {
       const horsAnalyse = !estChantierAnalyse(c.nom);
       const cmds = d.commandesParChantier[c.nom] || [];
-      const commandes = cmds.reduce((s, x) => s + x.montant, 0);
-      const sorties = (d.stockParChantier || {})[c.nom] || [];
+      let commandes = cmds.reduce((s, x) => s + x.montant, 0);
+      const mvtsStock = (d.stockParChantier || {})[c.nom] || [];
+      const sorties = mvtsStock.filter(x => !x.surCommande);
+      const retoursCmd = mvtsStock.filter(x => x.surCommande);
+      const retourCommandes = retoursCmd.reduce((s, x) => s + (x.cout || 0), 0); // négatif
+      commandes += retourCommandes;
       const stock = sorties.reduce((s, x) => s + (x.cout || 0), 0);
       const stockEstime = sorties.some(x => x.estime && x.cout !== null);
       const mo = c.heures * taux;
@@ -18382,7 +18412,7 @@
       const prix = (!horsAnalyse && typeof pv === 'number' && !isNaN(pv)) ? pv : null;
       const renta = prix !== null ? prix - cout : null;
       const marge = prix ? renta / prix : null;
-      return { ...c, horsAnalyse, cmds, commandes, sorties, stock, stockEstime, mo, cout, prix, renta, marge, cmdClients: d.commandesClientsParChantier[c.nom] || [] };
+      return { ...c, horsAnalyse, cmds, commandes, retoursCmd, retourCommandes, sorties, stock, stockEstime, mo, cout, prix, renta, marge, cmdClients: d.commandesClientsParChantier[c.nom] || [] };
     });
   }
 
@@ -18499,6 +18529,8 @@
           <div style="color:var(--gris-moyen);margin-top:4px">👷 ${escRenta([...c.collabs].sort().join(', '))}</div>
           ${c.cmds.length ? `<div style="font-weight:700;margin:8px 0 4px">📦 Commandes fournisseurs (${c.cmds.length})</div>
             ${c.cmds.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.fournisseur)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
+          ${c.retoursCmd.length ? `<div style="font-weight:700;margin:8px 0 4px">↩️ Surplus des commandes remis en stock (${eurRenta(c.retourCommandes)})</div>
+            ${c.retoursCmd.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(-x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(x.unite)}${x.commande ? ' · ' + escRenta(x.commande) : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.sorties.length ? `<div style="font-weight:700;margin:8px 0 4px">🗄️ Sorties du stock atelier (${c.sorties.length})</div>
             ${c.sorties.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(x.unite)}${x.type === 'Retour' ? ' (retour)' : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.cmdClients.length ? `<div style="font-weight:700;margin:8px 0 4px">🧾 Commandes clients EBP (${c.cmdClients.length})</div>
@@ -18512,7 +18544,7 @@
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:6px;margin-top:8px">
           ${chiffre('Heures', hRenta(c.heures))}
           ${chiffre('Main d\'œuvre', eurRenta(c.mo))}
-          ${chiffre('Commandes', eurRenta(c.commandes))}
+          ${chiffre(c.retoursCmd.length ? 'Commandes (net)' : 'Commandes', eurRenta(c.commandes))}
           ${c.sorties.length ? chiffre('Stock atelier', (c.stockEstime ? '~ ' : '') + eurRenta(c.stock)) : ''}
           ${chiffre('Coût revient', eurRenta(c.cout))}
           ${chiffre('Prix vente', c.horsAnalyse ? '—' : eurRenta(c.prix))}
