@@ -676,7 +676,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V15';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11767,7 +11767,7 @@
     await _scanner.start(
       { facingMode: 'environment' },
       { fps: 12, aspectRatio: 1.777778 }, // image large et basse ; lecture sur toute l'image
-      (texte) => traiterCodeScanne(texte),
+      (texte) => traiterCodeScanne(texte, 'camera'),
       () => {}
     );
     setMessageScan('📷 Visez une étiquette', 'var(--gris-moyen)');
@@ -11801,7 +11801,7 @@
     if (el) { el.textContent = txt; el.style.color = couleur || 'var(--gris-moyen)'; }
   }
 
-  function traiterCodeScanne(brut) {
+  function traiterCodeScanne(brut, source = '') {
     const code = resoudreCodeScanne(brut);
     if (!code) return;
     // Anti-rebond : la caméra relit le même code plusieurs fois par seconde
@@ -11809,7 +11809,7 @@
     if (code === _dernierScan.code && now - _dernierScan.t < 1500) return;
     _dernierScan = { code, t: now };
     // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
-    if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code)) { bipScan(true); return; }
+    if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
     if (/^LIG-\d+$/i.test(code)) {
       const r = trouverCommandeDeLigne(Number(code.split('-')[1]));
       if (!r) { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return; }
@@ -12233,8 +12233,12 @@
     const toutes = _commandesLignesCache[r.id] || [];
     return estCommandePartielle(r) ? toutes.filter(l => l['Non réceptionné']) : toutes;
   }
+  function qteAttendueLigne(r, l) {
+    const q = parseFloat(l['Quantite']);
+    return isNaN(q) ? 0 : Math.max(0, Math.round((q - qteDejaRecue(r, l)) * 1000) / 1000);
+  }
   function qteDejaRecue(r, l) { return estCommandePartielle(r) && l['Non réceptionné'] ? (lireQteRecue(l) || 0) : 0; }
-  function selectionLigneExpressParCode(code) {
+  function selectionLigneExpressParCode(code, source = '') {
     const rx = _recExpress; if (!rx) return false;
     const r = trouverCommandeParCode('CMD-' + rx.id); if (!r) return false;
     const lignes = lignesAttendues(r);
@@ -12246,16 +12250,24 @@
       l = lignes.find(x => normRef(codeArticleLigne(x)) === n || normRef(x['Reference fournisseur']) === n);
     }
     if (!l) return false;
-    selectionnerLigneExpress(l.id);
+    selectionnerLigneExpress(l.id, source);
     setMessageScan(`✅ Ligne : ${(l['Description'] || '').slice(0, 60)}`, 'var(--vert)');
     return true;
   }
-  function selectionnerLigneExpress(ligneId) {
+  function selectionnerLigneExpress(ligneId, source = '') {
     const rx = _recExpress; if (!rx) return;
-    if (!rx.ecarts[ligneId]) rx.ecarts[ligneId] = { aujourdhui: 0, motif: 'Manquant', detail: '', photo: null };
+    const r = trouverCommandeParCode('CMD-' + rx.id);
+    const l = (_commandesLignesCache[rx.id] || []).find(x => x.id === ligneId);
+    const max = r && l ? qteAttendueLigne(r, l) : Infinity;
+    const e = rx.ecarts[ligneId];
+    if (!e) rx.ecarts[ligneId] = { manquant: Math.min(1, max || 1), motif: 'Manquant', detail: '', photo: null };
+    // Douchette : rescanner la ligne = +1 pièce. Caméra : pas d'ajout automatique
+    // (le QR resté dans le champ serait relu en boucle) → saisir le nombre.
+    else if (source !== 'camera') e.manquant = Math.min(max, (e.manquant || 0) + 1);
+    else setMessageScan('ℹ️ Ligne déjà signalée : ajustez le nombre de pièces manquantes', '#a35a00');
     rx.selection = ligneId;
     renderRecExpress();
-    setTimeout(() => document.getElementById('rx-ligne-' + ligneId)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 50);
+    setTimeout(() => document.getElementById('rx-ligne-' + ligneId)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
   }
   function retirerEcartExpress(ligneId) {
     const rx = _recExpress; if (!rx) return;
@@ -12265,11 +12277,21 @@
   }
   function majEcartExpress(ligneId, champ, valeur) {
     const e = _recExpress?.ecarts[ligneId]; if (!e) return;
-    if (champ === 'aujourdhui') { const v = parseFloat(String(valeur).replace(',', '.')); e.aujourdhui = isNaN(v) || v < 0 ? 0 : v; }
+    if (champ === 'manquant') { const v = parseFloat(String(valeur).replace(',', '.')); e.manquant = isNaN(v) || v < 0 ? 0 : v; }
     else e[champ] = valeur;
     if (champ === 'motif') renderRecExpress();
   }
-  function modeRecExpress(mode) { if (_recExpress) { _recExpress.mode = mode; renderRecExpress(); } }
+  function modeRecExpress(mode) {
+    if (!_recExpress) return;
+    _recExpress.mode = mode;
+    renderRecExpress();
+    if (mode === 'nc' && localStorage.getItem('gb_scan_camera') !== 'off') {
+      relancerCameraScan().then(() => {
+        document.getElementById('scan-camera')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        setMessageScan('📷 Scannez les lignes manquantes ou non conformes sur la fiche A4', '#a35a00');
+      });
+    } else if (mode === 'choix') masquerCameraScan().catch(() => {});
+  }
   function scanSaisieExpress(ev, input) {
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
@@ -12300,7 +12322,7 @@
           <button onclick="modeRecExpress('nc')" style="flex:1;background:#fff3e0;color:#a35a00;border:1.5px solid #f0b46b;border-radius:10px;padding:14px;font-size:13px;font-weight:800;cursor:pointer">⚠️ Non conforme</button>
         </div>`;
     } else {
-      html += `<div style="font-size:12px;color:#a35a00;font-weight:700;margin-bottom:6px">⚠️ Scannez sur la fiche A4 les lignes manquantes ou non conformes (ou touchez-les). Les lignes non signalées sont réceptionnées en totalité.</div>
+      html += `<div style="font-size:12px;color:#a35a00;font-weight:700;margin-bottom:6px">⚠️ Scannez sur la fiche A4 chaque ligne manquante ou non conforme (ou touchez-la) : puis indiquez le nombre de pièces manquantes (à la douchette, chaque nouveau scan de la ligne ajoute 1). Les lignes non signalées sont réceptionnées en totalité.</div>
         <input type="text" placeholder="🔫 Scanner une ligne / un article…" autocomplete="off" onkeydown="scanSaisieExpress(event, this)" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px dashed #f0b46b;border-radius:8px;font-size:12px;margin-bottom:6px" />
         <div style="max-height:46vh;overflow-y:auto">` + lignes.map(l => {
           const e = rx.ecarts[l.id];
@@ -12314,8 +12336,10 @@
               <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(l['Description'] || '?')}</b><button onclick="retirerEcartExpress(${l.id})" title="Finalement conforme" style="background:none;border:none;color:#999;cursor:pointer;font-size:14px">✕</button></div>
               <div style="color:#999;margin-bottom:6px">${code ? esc(code) + ' · ' : ''}commandé : ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd)} ${esc(l['Unite'] || '')}${deja ? ` · déjà reçu : ${fmtQte(deja)}` : ''}</div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <span>Reçu conforme aujourd'hui :</span>
-                <input type="number" min="0" step="any" inputmode="decimal" value="${e.aujourdhui || ''}" placeholder="0" onchange="majEcartExpress(${l.id}, 'aujourdhui', this.value)" style="width:70px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:700;text-align:right" />
+                <span>Pièces manquantes / non conformes :</span>
+                <input type="number" min="0" step="any" inputmode="decimal" value="${e.manquant || ''}" placeholder="0" onchange="majEcartExpress(${l.id}, 'manquant', this.value)" style="width:64px;padding:6px;border:1.5px solid #e67e22;border-radius:6px;font-weight:800;text-align:right" />
+                <span style="color:#999">/ ${fmtQte(qteAttendueLigne(r, l))}</span>
+                <button onclick="majEcartExpress(${l.id}, 'manquant', ${qteAttendueLigne(r, l)}); renderRecExpress()" style="background:#fff3e0;border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;color:#a35a00;cursor:pointer">Toute la ligne</button>
                 <select onchange="majEcartExpress(${l.id}, 'motif', this.value)" style="padding:6px;border:1px solid #ccc;border-radius:6px">${MOTIFS_NC.map(m => `<option ${m === e.motif ? 'selected' : ''}>${m}</option>`).join('')}</select>
               </div>
               ${e.motif !== 'Manquant' ? `<textarea placeholder="Description de la non-conformité…" onchange="majEcartExpress(${l.id}, 'detail', this.value)" style="width:100%;box-sizing:border-box;margin-top:6px;padding:6px;border:1px solid #ccc;border-radius:6px;font-family:inherit;font-size:12px;min-height:38px">${esc(e.detail)}</textarea>
@@ -12343,9 +12367,10 @@
     // Contrôles : la quantité conforme doit rester inférieure à ce qui est attendu
     for (const [lid, e] of Object.entries(ecarts)) {
       const l = lignes.find(x => x.id === Number(lid)); if (!l) continue;
-      const qteCmd = parseFloat(l['Quantite']);
-      const cumul = qteDejaRecue(r, l) + e.aujourdhui;
-      if (!isNaN(qteCmd) && cumul >= qteCmd) { alert(`« ${l['Description'] || 'article'} » : la quantité conforme couvre toute la commande — retirez l'écart (✕) ou corrigez la quantité.`); return; }
+      const attendu = qteAttendueLigne(r, l);
+      if (!(e.manquant > 0)) { alert(`« ${l['Description'] || 'article'} » : indiquez le nombre de pièces manquantes, ou retirez l'écart (✕).`); return; }
+      if (e.manquant > attendu + 0.0005) { alert(`« ${l['Description'] || 'article'} » : ${fmtQte(e.manquant)} pièces manquantes pour ${fmtQte(attendu)} attendues — corrigez la quantité.`); return; }
+      e.aujourdhui = Math.round((attendu - e.manquant) * 1000) / 1000; // reçu conforme
     }
     // Pilote le formulaire standard, puis le valide (mêmes règles stock / statuts)
     form.dataset.type = 'atelier';
@@ -12361,7 +12386,7 @@
     });
     const resume = ids.map(lid => {
       const l = lignes.find(x => x.id === lid) || {}, e = ecarts[lid];
-      return `• ${l['Description'] || 'article'} : ${e.motif}${e.detail ? ' — ' + e.detail : ''} (reçu conforme ${fmtQte(e.aujourdhui)}/${fmtQte(parseFloat(l['Quantite']) || 0)})`;
+      return `• ${l['Description'] || 'article'} : ${e.motif} — ${fmtQte(e.manquant)} pièce(s) sur ${fmtQte(e.manquant + e.aujourdhui)}${e.detail ? ' — ' + e.detail : ''}`;
     }).join('\n');
     const note = document.getElementById('reception-note-' + uid);
     if (note) note.value = resume ? 'Réception non conforme :\n' + resume : '';
