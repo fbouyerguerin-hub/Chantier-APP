@@ -318,6 +318,25 @@
       max-width: calc(100vw - 32px);
     }
   }
+  /* ── Bandeau : ne déborde jamais de l'écran (logo + 🔄 + 📷 + nom) ── */
+  html, body { max-width: 100%; overflow-x: hidden; }
+  .header-top { gap: 8px; }
+  .header-logo { min-width: 0; flex-shrink: 1; max-width: 46%; object-fit: contain; object-position: left center; }
+  .header-btn { flex-shrink: 0; }
+  .header-droite { text-align: right; min-width: 0; flex-shrink: 1; overflow: hidden; }
+  .header-droite > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 600px) {
+    .header-top { padding: 8px 10px; gap: 6px; }
+    .header-logo { height: 52px; max-width: 48%; }
+    .header-btn { width: 42px !important; height: 42px !important; font-size: 19px !important; margin-right: 0 !important; }
+    .header-title { display: none; }                 /* le titre est déjà dans l'onglet */
+    .header-droite { max-width: 28%; }
+    #header-collab-name { font-size: 11px !important; }
+  }
+  @media (max-width: 380px) {
+    .header-logo { height: 44px; max-width: 44%; }
+    .header-btn { width: 38px !important; height: 38px !important; font-size: 17px !important; }
+  }
 </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
@@ -328,11 +347,11 @@
   <div class="header-top">
     <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
     <!-- Scan d'étiquette accessible depuis tous les écrans -->
-    <button id="header-refresh-btn" onclick="actualiserDepuisBaserow()" title="Actualiser les données" aria-label="Actualiser"
+    <button id="header-refresh-btn" class="header-btn" onclick="actualiserDepuisBaserow()" title="Actualiser les données" aria-label="Actualiser"
       style="display:none;margin-left:auto;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🔄</button>
-    <button id="header-scan-btn" onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande, ligne ou article)" aria-label="Scanner"
+    <button id="header-scan-btn" class="header-btn" onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande, ligne ou article)" aria-label="Scanner"
       style="display:none;margin-right:12px;background:var(--vert);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:22px;line-height:1;cursor:pointer;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);flex-shrink:0">📷</button>
-    <div style="text-align:right">
+    <div class="header-droite">
       <div class="header-title">Saisie de chantier</div>
       <div id="header-collab-name" onclick="ouvrirModalMotDePasse()" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600;cursor:pointer" title="Changer mon mot de passe"></div>
       <div id="app-version-tag" style="font-size:9px;color:var(--beige);opacity:.65;margin-top:2px"></div>
@@ -678,7 +697,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
