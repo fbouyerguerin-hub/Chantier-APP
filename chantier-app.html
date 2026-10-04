@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V32';
+  const APP_VERSION = 'V34';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12988,6 +12988,50 @@
   // (+1 par scan), puis un seul enregistrement groupé. Chaque retour est valorisé
   // au prix moyen des sorties vers ce chantier : il annule exactement le coût imputé.
   let _retourLignes = [], _retourChantierAffiche = null, _retourMotCle = '';
+  // ── Choix du chantier par mot-clé ──
+  let _retourChantiers = { tous: [], avecSolde: [] };
+  function remplirChantiersRetour(motCle) {
+    const sel = document.getElementById('retour-chantier');
+    const avant = sel.value;
+    const mots = normTexte(motCle || '').split(/\s+/).filter(Boolean);
+    const ok = n => mots.every(m => normTexte(n).includes(m));
+    const opt = n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}">${echapperHtmlNote(n)}</option>`;
+    sel.innerHTML = '<option value=""></option>' + _retourChantiers.tous.map(opt).join('');
+    if (_retourChantiers.tous.includes(avant)) sel.value = avant;
+    return _retourChantiers.tous.filter(ok);
+  }
+  function filtrerChantiersRetour(v, toutAfficher) {
+    const motCle = toutAfficher && document.getElementById('retour-chantier').value ? '' : v;
+    const mots = normTexte(motCle || '').split(/\s+/).filter(Boolean);
+    const liste = _retourChantiers.tous.filter(n => mots.every(m => normTexte(n).includes(m)));
+    const avecSolde = liste.filter(n => _retourChantiers.avecSolde.includes(n));
+    const autres = liste.filter(n => !avecSolde.includes(n));
+    const item = n => `<div onmousedown="event.preventDefault(); choisirChantierRetour(this.dataset.nom)" data-nom="${echapperHtmlNote(n).replace(/"/g, '&quot;')}" style="padding:9px 12px;border-bottom:1px solid #f2f2f2;cursor:pointer;font-size:13px">${echapperHtmlNote(n)}</div>`;
+    const titre = t => `<div style="padding:5px 12px;font-size:10px;font-weight:800;color:#999;background:#fafafa;text-transform:uppercase">${t}</div>`;
+    const el = document.getElementById('retour-chantier-liste');
+    el.innerHTML = !liste.length ? '<div style="padding:10px 12px;color:#999;font-size:12px">Aucun chantier ne correspond.</div>'
+      : (avecSolde.length ? titre('📦 Matériel sorti en attente de retour') + avecSolde.map(item).join('') : '')
+      + (autres.length ? titre('Autres chantiers') + autres.map(item).join('') : '');
+    el.style.display = 'block';
+    // Un seul chantier correspond à la frappe : sélectionné d'office
+    if (!toutAfficher && mots.length && liste.length === 1 && document.getElementById('retour-chantier').value !== liste[0]) choisirChantierRetour(liste[0], true);
+  }
+  function choisirChantierRetour(nom, garderListe) {
+    const sel = document.getElementById('retour-chantier');
+    sel.value = nom;
+    if (!garderListe) {
+      document.getElementById('retour-chantier-recherche').value = nom;
+      fermerListeChantiersRetour();
+    }
+    renderRetourChantier();
+  }
+  function fermerListeChantiersRetour() {
+    const el = document.getElementById('retour-chantier-liste'); if (el) el.style.display = 'none';
+    // Champ remis sur le chantier choisi s'il a été modifié sans choix
+    const v = document.getElementById('retour-chantier').value;
+    const inp = document.getElementById('retour-chantier-recherche');
+    if (inp && v && document.activeElement !== inp) inp.value = v;
+  }
   // Mot-clé : filtre les articles affichés (sortis vers le chantier, matériel
   // commandé) et propose les articles du stock et du catalogue EBP.
   function correspondMotCle(texte) {
@@ -12997,9 +13041,7 @@
     return mots.every(m => t.includes(m));
   }
   function filtrerRetour(v) {
-    _retourMotCle = (v || '').trim();
-    suggestionsRetour(v);
-    if (document.getElementById('retour-chantier').value) renderRetourChantier();
+    suggestionsRetour(v); // simples suggestions d'articles (la liste n'est plus filtrée)
   }
   function soldesChantierStock(chantier) {
     const cle = normTexte(chantier);
@@ -13044,14 +13086,12 @@
     });
     const tous = Object.values(noms).sort((a, b) => a.localeCompare(b));
     const avecSolde = tous.filter(n => soldesChantierStock(n).length);
-    const autres = tous.filter(n => !avecSolde.includes(n));
-    const opt = n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}">${echapperHtmlNote(n)}</option>`;
-    sel.innerHTML = '<option value="">— Choisir le chantier —</option>'
-      + (avecSolde.length ? `<optgroup label="📦 Matériel sorti en attente de retour">${avecSolde.map(opt).join('')}</optgroup>` : '')
-      + (autres.length ? `<optgroup label="Autres chantiers (retour de surplus)">${autres.map(opt).join('')}</optgroup>` : '');
+    _retourChantiers = { tous, avecSolde };
+    document.getElementById('retour-chantier-recherche').value = '';
+    remplirChantiersRetour('');
     const dernier = localStorage.getItem('gb_scan_chantier') || '';
     const trouve = tous.find(n => normTexte(n) === normTexte(dernier));
-    if (trouve) sel.value = trouve;
+    if (trouve) { sel.value = trouve; document.getElementById('retour-chantier-recherche').value = trouve; }
     if (!tous.length) document.getElementById('retour-liste').innerHTML = '<div class="feuille-empty">Aucun chantier disponible.</div>';
     renderRetourChantier();
   }
@@ -19996,7 +20036,13 @@
       <button onclick="fermerRetourChantier()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
     </div>
     <label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
-    <select id="retour-chantier" onchange="renderRetourChantier()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;margin:4px 0 8px;background:#fff"></select>
+    <div style="position:relative;margin:4px 0 8px">
+      <input type="text" id="retour-chantier-recherche" placeholder="Tapez un mot du chantier…" autocomplete="off"
+        oninput="filtrerChantiersRetour(this.value)" onfocus="this.select(); filtrerChantiersRetour(this.value, true)" onblur="setTimeout(fermerListeChantiersRetour, 200)"
+        style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;font-weight:700;color:var(--gris)" />
+      <div id="retour-chantier-liste" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:#fff;border:1px solid #ddd;border-radius:0 0 8px 8px;box-shadow:0 6px 16px rgba(0,0,0,.15);max-height:45vh;overflow-y:auto"></div>
+    </div>
+    <select id="retour-chantier" onchange="renderRetourChantier()" style="display:none"></select>
     <style>
       #retour-camera { position:relative; height:min(28vh,210px); display:none; border-radius:12px; overflow:hidden; background:#111; margin-bottom:6px; }
       #retour-camera video { width:100% !important; height:100% !important; object-fit:cover; display:block; }
@@ -20007,7 +20053,7 @@
     <div id="retour-camera"></div>
     <button id="retour-btn-camera" onclick="basculerCameraRetour()" style="width:100%;margin-bottom:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:800;cursor:pointer">📷 Scanner avec la caméra</button>
     <div id="retour-msg" style="display:none;font-size:12px;font-weight:700;border-radius:8px;padding:6px 10px;margin-bottom:6px"></div>
-    <input type="text" id="retour-scan" placeholder="🔎 Mot-clé (désignation, code, commande…) ou scan" autocomplete="off" oninput="filtrerRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';filtrerRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
+    <input type="text" id="retour-scan" placeholder="🔫 Scanner ou rechercher un article…" autocomplete="off" oninput="filtrerRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';filtrerRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
     <div id="retour-sugg" style="margin-bottom:6px"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px">
       <button onclick="remplirRetourChantier(true)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout retourner</button>
