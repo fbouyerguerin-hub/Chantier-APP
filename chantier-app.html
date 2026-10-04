@@ -345,7 +345,7 @@
 <!-- HEADER (toujours visible) -->
 <div class="header">
   <div class="header-top">
-    <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
+    <img class="header-logo" src="logo-guerin.jpg" alt="Guerin Bâtiments" />
     <!-- Scan d'étiquette accessible depuis tous les écrans -->
     <button id="header-refresh-btn" class="header-btn" onclick="actualiserDepuisBaserow()" title="Actualiser les données" aria-label="Actualiser"
       style="display:none;margin-left:auto;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🔄</button>
@@ -364,7 +364,7 @@
 <!-- PAGE LOGIN -->
 <div id="page-login" class="page active login-page">
   <div class="login-logo-wrap">
-    <img class="login-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
+    <img class="login-logo" src="logo-guerin.jpg" alt="Guerin Bâtiments" />
   </div>
   <div class="login-card">
     <div class="login-title">Bonjour 👋</div>
@@ -686,6 +686,9 @@
   // applique les droits du profil connecté (jeton de session obtenu à la
   // connexion, valable 24 h).
   const GB_WORKER = 'https://guerin-ebp-proxy.f-bouyer-guerin.workers.dev';
+  // Fichiers hébergés avec l'appli (Cloudflare Pages) — adresse complète pour les
+  // fenêtres d'impression, qui n'ont pas d'adresse de base.
+  const LOGO_URL = new URL('logo-guerin.jpg', location.href).href;
   const BASEROW_TOKEN = 'session'; // valeur factice : l'en-tête est remplacé par le jeton de session
   let _sessionApp = null;
   let _sessionExpireeSignalee = false;
@@ -697,7 +700,8 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V4';
+  // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
+  const APP_VERSION = 'V28';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12310,7 +12314,7 @@
       }).join('');
       const page = `<div class="pg">
         <div class="hd">
-          <div class="lg"><img src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guérin Bâtiments" onerror="this.outerHTML='<b style=&quot;font-size:13pt;line-height:1.1&quot;>GUÉRIN<br>BÂTIMENTS</b>'" /></div>
+          <div class="lg"><img src="${LOGO_URL}" alt="Guérin Bâtiments" onerror="this.outerHTML='<b style=&quot;font-size:13pt;line-height:1.1&quot;>GUÉRIN<br>BÂTIMENTS</b>'" /></div>
           <div class="tt">
             <div class="lo">Fiche de réception</div>
             <div class="nu">${esc(r['Numero commande'])}</div>
@@ -12695,8 +12699,14 @@
   }
   // Le QR contient un lien vers l'appli (…?scan=CODE) pour pouvoir être lu
   // par l'appareil photo de n'importe quel téléphone ; on en extrait le code.
+  // Adresse inscrite dans les QR imprimés (étiquettes, fiches A4) : FIXE, quelle
+  // que soit l'adresse où tourne l'appli (GitHub ou Cloudflare). Les étiquettes
+  // restent donc valables après un déménagement de l'appli. Dans l'appli
+  // (douchette, 📷), seul le code est lu ; l'adresse ne sert qu'au scan avec
+  // l'appareil photo natif du téléphone.
+  const ADRESSE_QR = 'https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/chantier-app';
   function urlScan(code) {
-    return location.origin + location.pathname + '?scan=' + encodeURIComponent(code);
+    return ADRESSE_QR + '?scan=' + encodeURIComponent(code);
   }
   function extraireCodeScan(brut) {
     const t = (brut || '').trim();
@@ -19977,7 +19987,7 @@
 let _ppScale=1,_ppOX=0,_ppOY=0,_pvScale=1,_pvOX=0,_pvOY=0;
 let _ppUid=null,_ppX=null,_ppY=null,_ppCtrl=null,_pvCtrl=null;
 
-const PLAN_URL = 'https://raw.githubusercontent.com/fbouyerguerin-hub/Chantier-APP/refs/heads/main/Plan%20Appli.bmp';
+const PLAN_URL = new URL('plan-atelier.png', location.href).href; // hébergé avec l'appli (Cloudflare Pages)
 function ppGetImg(){ return PLAN_URL; }
 function ppSaveImg(src){ /* image hébergée sur GitHub, pas de localStorage */ }
 
