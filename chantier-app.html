@@ -676,7 +676,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V4';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1034,7 +1034,12 @@
     if (_sessionApp) h.set('X-Session', _sessionApp);
     // cache: 'no-store' : sur mobile (Safari / Chrome Android, PWA installée) le navigateur
     // peut resservir une ancienne réponse HTTP de la passerelle → données non actualisées.
-    return _fetchNatifBrut(GB_WORKER + '/bw' + url.replace(/^https?:\/\/api\.baserow\.io/, ''), { cache: 'no-store', ...(init || {}), headers: h })
+    // + paramètre _ts unique sur les lectures : contourne aussi le cache du service
+    // worker (sw.js) et des proxys, qui pouvaient resservir une liste d'avant la saisie.
+    let cible = GB_WORKER + '/bw' + url.replace(/^https?:\/\/api\.baserow\.io/, '');
+    const methode = String((init && init.method) || 'GET').toUpperCase();
+    if (methode === 'GET') cible += (cible.includes('?') ? '&' : '?') + '_ts=' + Date.now();
+    return _fetchNatifBrut(cible, { cache: 'no-store', ...(init || {}), headers: h })
       .then(r => { if (r.status === 401 && r.headers.get('X-Session-Expiree')) sessionExpiree(); return r; });
   }
   async function _fetchNatif(input, init) {
