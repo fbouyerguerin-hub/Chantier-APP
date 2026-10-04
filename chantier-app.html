@@ -678,7 +678,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V7';
+  const APP_VERSION = 'V1';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4088,15 +4088,48 @@
   async function signalerDepartChantier(uid, commandeId) {
     const noteInput = document.getElementById('depart-note-' + uid);
     const note = noteInput ? noteInput.value.trim() : '';
-    const payload = { 'Statut': 'Envoyé sur chantier', 'Envoye par': connectedCollab || '', 'Date envoi chantier': dateYMD(new Date()) };
-    if (note) payload['Note statut'] = note;
+    const lignes = _commandesLignesCache[commandeId] || [];
+    const sel = _departSel[uid] || {};
+    const choisies = lignes.filter(l => (sel[l.id] || 0) > 0);
+    const aPartir = lignes.filter(l => qteResteAtelier(l) > 0);
+    // Commande sans lignes détaillées : départ global comme avant
+    if (aPartir.length && !choisies.length) { alert('Cochez (ou scannez) les articles qui partent sur le chantier.'); return; }
+    const complet = !aPartir.length || aPartir.every(l => (sel[l.id] || 0) >= qteResteAtelier(l) - 0.0005);
+    const r = trouverCommandeParCode('CMD-' + commandeId) || {};
+    const aujourdhui = dateYMD(new Date());
+    const detail = choisies.map(l => `${l['Description'] || 'article'} × ${fmtQte(sel[l.id])}`).join(' ; ');
+    const payload = { 'Envoye par': connectedCollab || '', 'Date envoi chantier': aujourdhui };
+    const historique = (r['Note statut'] || '').trim();
+    if (complet) {
+      payload['Statut'] = 'Envoyé sur chantier';
+      if (note || historique) payload['Note statut'] = [historique, note].filter(Boolean).join('\n');
+    } else {
+      const ligneHisto = `🚚 Départ partiel du ${aujourdhui.split('-').reverse().join('/')} par ${connectedCollab || '?'} : ${detail}${note ? ' — ' + note : ''}`;
+      payload['Note statut'] = [historique, ligneHisto].filter(Boolean).join('\n');
+    }
     try {
+      // Cumul des quantités parties, ligne par ligne
+      if (choisies.length) {
+        const items = choisies.map(l => ({ id: l.id, [CHAMP_QTE_ENVOYEE]: Math.round((qteEnvoyee(l) + sel[l.id]) * 1000) / 1000 }));
+        const rL = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/batch/?user_field_names=true`, {
+          method: 'PATCH', headers: HEADERS, body: JSON.stringify({ items })
+        });
+        if (!rL.ok) {
+          const txt = await rL.text();
+          if (!complet) throw new Error(/Quantite envoyee|field/i.test(txt)
+            ? 'Le champ « Quantite envoyee » (nombre, 3 décimales) manque dans la table Commandes fournisseurs – lignes : créez-le pour les départs partiels.'
+            : 'Baserow (' + rL.status + ') : ' + txt.slice(0, 200));
+          console.warn('Départ : quantités par ligne non enregistrées', txt); // départ complet : on continue
+        }
+      }
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${commandeId}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+      delete _departSel[uid];
       await rafraichirApresActionCommande();
       rafraichirFicheScan();
+      if (_scanMode === 'info') setMessageScan(complet ? '🚚 Départ enregistré : commande envoyée sur chantier' : '🚚 Départ partiel enregistré', 'var(--vert)');
     } catch (e) {
       console.error('Erreur signalement départ chantier', e);
       alert('Erreur lors de la mise à jour : ' + e.message);
@@ -11849,6 +11882,7 @@
     _dernierScan = { code, t: now };
     // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
     if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
+    if (_scanMode === 'info' && _departScanUid && selectionDepartParCode(code)) { bipScan(true); return; }
     if (/^LIG-\d+$/i.test(code)) {
       const r = trouverCommandeDeLigne(Number(code.split('-')[1]));
       if (!r) { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return; }
@@ -11862,6 +11896,9 @@
       const r = trouverCommandeParCode(code);
       if (!r) { bipScan(false); setMessageScan(`❌ Commande introuvable ou non accessible : ${code}`, '#c0392b'); return; }
       if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Étiquette de commande : utilisez 📷 sur la page Commandes', '#a5761f'); return; }
+      // Même commande déjà affichée pendant un départ : ne pas tout recharger
+      // (le QR de la commande reste souvent dans le champ de la caméra).
+      if (_departScanUid && _scanFiche && _scanFiche.type === 'commande' && _scanFiche.id === r.id) return;
       bipScan(true);
       setMessageScan(`✅ ${r['Numero commande'] || ''} · ${r['Fournisseur'] || ''}`, 'var(--vert)');
       afficherFicheScan({ type: 'commande', id: r.id });
@@ -12235,7 +12272,11 @@
   }
   function afficherFicheScan(fiche) {
     _scanFiche = fiche;
-    if (_scanMode === 'info' && !fiche.sansFormulaire) masquerCameraScan().catch(() => {});
+    // Caméra masquée pour laisser la place à la fiche — sauf départ sur chantier,
+    // où l'on scanne ensuite les lignes qui partent.
+    const rDep = fiche.type === 'commande' ? trouverCommandeParCode('CMD-' + fiche.id) : null;
+    const departAuScan = rDep && !estCommandePartielle(rDep) && !estCommandeStockAtelier(rDep) && extraireValeurChamp(rDep['Statut'], '') === 'Réceptionné en atelier' && !fiche.sansFormulaire;
+    if (_scanMode === 'info' && !fiche.sansFormulaire && !departAuScan) masquerCameraScan().catch(() => {});
     const el = document.getElementById('scan-panier');
     if (fiche.type === 'commande') {
       const r = trouverCommandeParCode('CMD-' + fiche.id);
@@ -12246,6 +12287,17 @@
       _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', ecarts: {}, selection: null } : null;
       el.innerHTML = r ? `<div id="rx-panel"></div>${renderCarteCommande(r, _peutVoirPrixActuel, 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
       if (receptionPossible) renderRecExpress();
+      _departScanUid = null;
+      if (r && statut === 'Réceptionné en atelier' && !estCommandeStockAtelier(r) && !fiche.sansFormulaire) {
+        const uid = r.id + '-scan';
+        _departScanUid = uid;
+        _departSel[uid] = {};
+        setTimeout(() => {
+          toggleDepartForm(uid, true);
+          document.getElementById('depart-form-' + uid)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }, 60);
+        setMessageScan('🚚 Départ sur chantier : cochez ou scannez les articles qui partent', 'var(--vert)');
+      }
       if (r && statut === 'En attente AR') {
         setMessageScan('⚠️ AR pas encore validé pour cette commande', '#a5761f');
       }
@@ -12759,7 +12811,7 @@
   async function ouvrirRetourChantier() {
     if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
     document.getElementById('modal-retour-chantier').style.display = 'flex';
-    _retourLignes = []; _retourChantierAffiche = null; suggestionsRetour('');
+    _retourLignes = []; _retourChantierAffiche = null; suggestionsRetour(''); msgRetour('');
     const sel = document.getElementById('retour-chantier');
     sel.innerHTML = '<option value="">⏳ Chargement…</option>';
     document.getElementById('retour-liste').innerHTML = '';
@@ -12829,17 +12881,77 @@
   }
   function scanRetourChantier(brut) {
     const code = resoudreCodeScanne(brut); if (!code) return;
-    if (!document.getElementById('retour-chantier').value) { bipScan(false); alert('Choisissez d\'abord le chantier.'); return; }
+    if (!document.getElementById('retour-chantier').value) { bipScan(false); msgRetour('⚠️ Choisissez d\'abord le chantier.', true); return; }
     const a = trouverArticleParCode(code);
     if (!a) {
       // Pas un code : recherche par désignation, ajout direct si un seul résultat
       const res = rechercherArticlesRetour(code);
       if (res.length === 1) { ajouterArticleRetour(res[0].id); return; }
       bipScan(false);
-      if (res.length) suggestionsRetour(code); else alert(`Article inconnu : ${code}\n(seuls les articles déjà référencés au stock peuvent être retournés)`);
+      if (res.length) suggestionsRetour(code); else msgRetour(`❌ Article inconnu : ${code} (seuls les articles référencés au stock peuvent être retournés)`, true);
       return;
     }
     ajouterArticleRetour(a.id);
+    msgRetour(`✅ ${a['Designation'] || code} +1`, false);
+  }
+  function msgRetour(texte, erreur) {
+    const el = document.getElementById('retour-msg'); if (!el) return;
+    if (!texte) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.style.background = erreur ? '#fdecea' : '#e8f0e7';
+    el.style.color = erreur ? '#c0392b' : 'var(--vert)';
+    el.textContent = texte;
+  }
+  // ── Caméra du retour chantier (scanner propre à cette fenêtre) ──
+  // Un même code reste « vu » tant qu'il ne quitte pas l'image 2 s : tenir
+  // l'étiquette devant l'objectif compte 1, la retirer puis la représenter +1.
+  let _scannerRetour = null, _retourDernierScan = { code: '', t: 0 };
+  async function demarrerCameraRetour() {
+    const zone = document.getElementById('retour-camera');
+    const btn = document.getElementById('retour-btn-camera');
+    zone.style.display = 'block';
+    btn.textContent = '⏳ Démarrage de la caméra…';
+    try {
+      await chargerLibScan('scanner');
+      if (!window.Html5Qrcode) throw new Error('module scanner absent');
+      const F = window.Html5QrcodeSupportedFormats || {};
+      const formats = [F.QR_CODE, F.CODE_128, F.CODE_39, F.EAN_13, F.EAN_8, F.DATA_MATRIX].filter(v => v !== undefined);
+      _scannerRetour = new Html5Qrcode('retour-camera', { formatsToSupport: formats, verbose: false,
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true } });
+      const surLecture = (texte) => {
+        const now = Date.now();
+        if (texte === _retourDernierScan.code && now - _retourDernierScan.t < 2000) { _retourDernierScan.t = now; return; }
+        _retourDernierScan = { code: texte, t: now };
+        scanRetourChantier(texte);
+      };
+      try {
+        await _scannerRetour.start({ facingMode: 'environment' },
+          { fps: 15, videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 }, advanced: [{ focusMode: 'continuous' }] } },
+          surLecture, () => {});
+      } catch (e) {
+        await _scannerRetour.start({ facingMode: 'environment' }, { fps: 12 }, surLecture, () => {});
+      }
+      btn.textContent = '⏹ Arrêter la caméra';
+      btn.style.background = '#7f8c8d';
+      msgRetour('📷 Visez l\'étiquette de l\'article : chaque passage ajoute 1', false);
+    } catch (e) {
+      zone.style.display = 'none';
+      _scannerRetour = null;
+      btn.textContent = '📷 Scanner avec la caméra';
+      msgRetour('📷 Caméra indisponible (' + (e.message || e) + ')', true);
+    }
+  }
+  async function arreterCameraRetour() {
+    if (_scannerRetour) { try { await _scannerRetour.stop(); } catch (e) {} try { _scannerRetour.clear(); } catch (e) {} _scannerRetour = null; }
+    const zone = document.getElementById('retour-camera'); if (zone) zone.style.display = 'none';
+    const btn = document.getElementById('retour-btn-camera');
+    if (btn) { btn.textContent = '📷 Scanner avec la caméra'; btn.style.background = 'var(--vert)'; }
+  }
+  function basculerCameraRetour() { return _scannerRetour ? arreterCameraRetour() : demarrerCameraRetour(); }
+  async function fermerRetourChantier() {
+    await arreterCameraRetour();
+    msgRetour('');
+    document.getElementById('modal-retour-chantier').style.display = 'none';
   }
   function ajouterArticleRetour(articleId) {
     let i = _retourLignes.findIndex(l => l.articleId === articleId);
@@ -13712,10 +13824,12 @@
       }
       if (statut === 'Réceptionné en atelier') {
         extras += `
+          ${resumeDepartPartiel(r)}
           <button onclick="toggleDepartForm('${uid}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">🚚 Départ sur chantier</button>
-          <div id="depart-form-${uid}" style="display:none;margin-top:8px">
+          <div id="depart-form-${uid}" style="display:none;margin-top:8px" data-commande="${r.id}">
+            <div id="depart-lignes-${uid}"></div>
             <textarea id="depart-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
-            <button onclick="signalerDepartChantier('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Confirmer le départ</button>
+            <button id="depart-valider-${uid}" onclick="signalerDepartChantier('${uid}', ${r.id})" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">✅ Confirmer le départ</button>
           </div>`;
       }
       actionsHTML = extras;
@@ -13908,9 +14022,109 @@
     }
   }
 
-  function toggleDepartForm(uid) {
+  function toggleDepartForm(uid, ouvrir) {
     const div = document.getElementById('depart-form-' + uid);
-    if (div) div.style.display = (div.style.display === 'none') ? 'block' : 'none';
+    if (!div) return;
+    const visible = ouvrir === undefined ? div.style.display === 'none' : ouvrir;
+    div.style.display = visible ? 'block' : 'none';
+    if (visible) { _departSel[uid] = _departSel[uid] || {}; renderDepartLignes(uid); }
+  }
+
+  // ============================================================
+  // DÉPART SUR CHANTIER — choix des articles qui partent
+  // Chaque ligne indique ce qui est reçu à l'atelier et pas encore parti.
+  // On coche (ou on scanne : QR de ligne sur la fiche A4, ou étiquette article)
+  // les articles chargés, avec leur quantité. Départ complet → statut
+  // « Envoyé sur chantier » ; départ partiel → la commande reste à l'atelier
+  // avec le reliquat, et l'historique est noté sur la commande.
+  // Champ Baserow requis (Commandes fournisseurs – lignes) :
+  //   Quantite envoyee (nombre, 3 décimales) — cumul des quantités parties.
+  // ============================================================
+  const CHAMP_QTE_ENVOYEE = 'Quantite envoyee';
+  let _departSel = {};          // uid → { ligneId: quantité qui part }
+  let _departScanUid = null;    // fiche ouverte par scan : les scans cochent les lignes
+  function qteRecueAtelier(l) {
+    const q = parseFloat(l['Quantite']) || 0;
+    return l['Non réceptionné'] ? (lireQteRecue(l) || 0) : q;
+  }
+  function qteEnvoyee(l) { return Number(l[CHAMP_QTE_ENVOYEE]) || 0; }
+  function qteResteAtelier(l) { return Math.max(0, Math.round((qteRecueAtelier(l) - qteEnvoyee(l)) * 1000) / 1000); }
+  function resumeDepartPartiel(r) {
+    const lignes = _commandesLignesCache[r.id] || [];
+    const parties = lignes.filter(l => qteEnvoyee(l) > 0).length;
+    if (!parties) return '';
+    const restantes = lignes.filter(l => qteResteAtelier(l) > 0).length;
+    return `<div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:11px;font-weight:700">🚚 Départ partiel : ${parties} ligne(s) déjà partie(s) · ${restantes} encore à l'atelier</div>`;
+  }
+  function renderDepartLignes(uid) {
+    const el = document.getElementById('depart-lignes-' + uid);
+    const form = document.getElementById('depart-form-' + uid);
+    if (!el || !form) return;
+    const id = Number(form.dataset.commande);
+    const lignes = _commandesLignesCache[id] || [];
+    const sel = _departSel[uid] || (_departSel[uid] = {});
+    const esc = echapperHtmlNote;
+    const aPartir = lignes.filter(l => qteResteAtelier(l) > 0);
+    const nbSel = Object.values(sel).filter(q => q > 0).length;
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:800;color:var(--gris)">Articles qui partent (${nbSel}/${aPartir.length})</span>
+        <span>
+          <button onclick="departToutCocher('${uid}', true)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>
+          <button onclick="departToutCocher('${uid}', false)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Aucun</button>
+        </span>
+      </div>
+      ${uid === _departScanUid ? `<div style="font-size:11px;color:#a35a00;margin-bottom:6px">📷 Scannez le QR des lignes sur la fiche A4 (ou l'étiquette article) pour les cocher.</div>` : ''}
+      <div style="max-height:44vh;overflow-y:auto;margin-bottom:6px">` + lignes.map(l => {
+        const reste = qteResteAtelier(l), q = sel[l.id] || 0, code = codeArticleLigne(l);
+        if (reste <= 0) return `<div style="padding:5px 4px;border-bottom:1px solid #f2f2f2;font-size:11px;color:#aaa">✓ ${esc(l['Description'] || '?')} — ${qteEnvoyee(l) > 0 ? 'déjà parti' : 'non reçu à l\'atelier'}</div>`;
+        return `<div id="depart-ligne-${uid}-${l.id}" style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #f2f2f2;${q > 0 ? 'background:#e8f0e7;' : ''}">
+          <input type="checkbox" ${q > 0 ? 'checked' : ''} onchange="departCocher('${uid}', ${l.id}, this.checked ? ${reste} : 0)" style="width:20px;height:20px;accent-color:var(--vert);flex-shrink:0" />
+          <div style="flex:1;min-width:0;font-size:12px">
+            <div style="font-weight:700;color:var(--gris)">${esc(l['Description'] || '?')}</div>
+            <div style="color:#999;font-size:11px">${code ? esc(code) + ' · ' : ''}à l'atelier : <b>${fmtQte(reste)}</b> ${esc(l['Unite'] || '')}${qteEnvoyee(l) > 0 ? ` · déjà parti : ${fmtQte(qteEnvoyee(l))}` : ''}</div>
+          </div>
+          <input type="number" min="0" step="any" inputmode="decimal" value="${q || ''}" placeholder="0" onchange="departCocher('${uid}', ${l.id}, this.value)" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:800;text-align:right" />
+        </div>`;
+      }).join('') + `</div>`;
+    const b = document.getElementById('depart-valider-' + uid);
+    if (b) {
+      const complet = aPartir.length > 0 && aPartir.every(l => (sel[l.id] || 0) >= qteResteAtelier(l) - 0.0005);
+      b.textContent = !nbSel ? '✅ Confirmer le départ' : complet ? `✅ Confirmer le départ (tout part)` : `✅ Confirmer le départ partiel (${nbSel} ligne${nbSel > 1 ? 's' : ''})`;
+      b.style.opacity = nbSel ? '1' : '.5';
+    }
+  }
+  function departCocher(uid, ligneId, valeur) {
+    const sel = _departSel[uid] || (_departSel[uid] = {});
+    let q = parseFloat(String(valeur).replace(',', '.'));
+    if (isNaN(q) || q < 0) q = 0;
+    const form = document.getElementById('depart-form-' + uid);
+    const l = (_commandesLignesCache[Number(form?.dataset.commande)] || []).find(x => x.id === ligneId);
+    if (l && q > qteResteAtelier(l)) q = qteResteAtelier(l);
+    if (q > 0) sel[ligneId] = q; else delete sel[ligneId];
+    renderDepartLignes(uid);
+  }
+  function departToutCocher(uid, tout) {
+    const form = document.getElementById('depart-form-' + uid);
+    const lignes = _commandesLignesCache[Number(form?.dataset.commande)] || [];
+    _departSel[uid] = {};
+    if (tout) lignes.forEach(l => { const r = qteResteAtelier(l); if (r > 0) _departSel[uid][l.id] = r; });
+    renderDepartLignes(uid);
+  }
+  // Scan pendant un départ : QR de ligne (LIG-…) ou code article → ligne cochée (reste complet)
+  function selectionDepartParCode(code) {
+    const uid = _departScanUid; if (!uid) return false;
+    const form = document.getElementById('depart-form-' + uid);
+    if (!form || form.style.display === 'none') return false;
+    const lignes = (_commandesLignesCache[Number(form.dataset.commande)] || []).filter(l => qteResteAtelier(l) > 0);
+    const m = code.match(/^LIG-(\d+)$/i);
+    const n = normRef(code);
+    const l = m ? lignes.find(x => x.id === Number(m[1]))
+                : lignes.find(x => normRef(codeArticleLigne(x)) === n || normRef(x['Reference fournisseur']) === n);
+    if (!l) return false;
+    departCocher(uid, l.id, qteResteAtelier(l));
+    setMessageScan(`✅ Part : ${(l['Description'] || '').slice(0, 60)}`, 'var(--vert)');
+    setTimeout(() => document.getElementById(`depart-ligne-${uid}-${l.id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 50);
+    return true;
   }
 
   function toggleReceptionForm(uid, type) {
@@ -19422,14 +19636,24 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
-<div id="modal-retour-chantier" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+<div id="modal-retour-chantier" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerRetourChantier()">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:92vh;display:flex;flex-direction:column;padding:16px;box-sizing:border-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-size:15px;font-weight:800;color:var(--gris)">↩️ Retour chantier</div>
-      <button onclick="document.getElementById('modal-retour-chantier').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+      <button onclick="fermerRetourChantier()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
     </div>
     <label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
     <select id="retour-chantier" onchange="renderRetourChantier()" style="width:100%;box-sizing:border-box;padding:9px 10px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;margin:4px 0 8px;background:#fff"></select>
+    <style>
+      #retour-camera { position:relative; height:min(28vh,210px); display:none; border-radius:12px; overflow:hidden; background:#111; margin-bottom:6px; }
+      #retour-camera video { width:100% !important; height:100% !important; object-fit:cover; display:block; }
+      #retour-camera #qr-shaded-region, #retour-camera canvas { display:none !important; }
+      #retour-camera::after { content:''; position:absolute; left:50%; top:50%; width:min(48%,140px); aspect-ratio:1; transform:translate(-50%,-50%);
+        border:2px solid rgba(255,255,255,.85); border-radius:10px; box-shadow:0 0 0 9999px rgba(0,0,0,.25); pointer-events:none; }
+    </style>
+    <div id="retour-camera"></div>
+    <button id="retour-btn-camera" onclick="basculerCameraRetour()" style="width:100%;margin-bottom:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:800;cursor:pointer">📷 Scanner avec la caméra</button>
+    <div id="retour-msg" style="display:none;font-size:12px;font-weight:700;border-radius:8px;padding:6px 10px;margin-bottom:6px"></div>
     <input type="text" id="retour-scan" placeholder="🔫 Scanner ou rechercher un article…" autocomplete="off" oninput="suggestionsRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';suggestionsRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
     <div id="retour-sugg" style="margin-bottom:6px"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px">
