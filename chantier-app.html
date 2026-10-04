@@ -328,8 +328,10 @@
   <div class="header-top">
     <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
     <!-- Scan d'étiquette accessible depuis tous les écrans -->
+    <button id="header-refresh-btn" onclick="actualiserDepuisBaserow()" title="Actualiser les données" aria-label="Actualiser"
+      style="display:none;margin-left:auto;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🔄</button>
     <button id="header-scan-btn" onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande, ligne ou article)" aria-label="Scanner"
-      style="display:none;margin-left:auto;margin-right:12px;background:var(--vert);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:22px;line-height:1;cursor:pointer;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);flex-shrink:0">📷</button>
+      style="display:none;margin-right:12px;background:var(--vert);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:22px;line-height:1;cursor:pointer;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);flex-shrink:0">📷</button>
     <div style="text-align:right">
       <div class="header-title">Saisie de chantier</div>
       <div id="header-collab-name" onclick="ouvrirModalMotDePasse()" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600;cursor:pointer" title="Changer mon mot de passe"></div>
@@ -676,7 +678,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V6';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -948,6 +950,8 @@
     if (navCommandes) navCommandes.style.display = 'flex'; // Visible pour tous : réception atelier/chantier
     const btnScanHeader = document.getElementById('header-scan-btn');
     if (btnScanHeader) btnScanHeader.style.display = 'block';
+    const btnRefreshHeader = document.getElementById('header-refresh-btn');
+    if (btnRefreshHeader) btnRefreshHeader.style.display = 'block';
     const navCommandesClients = document.getElementById('nav-commandes-clients');
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navRepertoire = document.getElementById('nav-repertoire');
@@ -989,8 +993,23 @@
       if (typeof viderCacheBaserow === 'function') viderCacheBaserow();
       if (document.getElementById('modal-validation-heures')?.style.display === 'flex') rafraichirValidationHeures();
       else if (typeof majWidgetValidationHeures === 'function') majWidgetValidationHeures();
+      // Écrans de consultation : relus automatiquement (pas les formulaires en cours)
+      if (['feuille', 'planning', 'collectif', 'rtt', 'messages', 'charge'].includes(currentNav) && !modaleOuverte()) switchPage(currentNav);
     }
   });
+  function modaleOuverte() {
+    return [...document.querySelectorAll('[id^="modal-"]')].some(m => m.style.display === 'flex' || m.style.display === 'block');
+  }
+  // Bouton 🔄 du bandeau : tout relire depuis Baserow (listes de référence comprises)
+  async function actualiserDepuisBaserow() {
+    const b = document.getElementById('header-refresh-btn');
+    if (b) { b.disabled = true; b.style.opacity = '.5'; }
+    try {
+      viderCacheBaserow();
+      await Promise.all(Object.keys(TABLES).map(k => loadTable(k).catch(() => {})));
+      switchPage(currentNav || 'saisie');
+    } finally { if (b) { b.disabled = false; b.style.opacity = '1'; } }
+  }
 
   const TABLES = {
     Collaborateur: { id: '1014431', field: 'Nom Complet',     label: 'Collaborateur' },
@@ -1007,8 +1026,10 @@
   // sur une semaine déjà vue est instantané. Toute écriture (POST/PATCH/DELETE, synchro EBP…) vide
   // le cache : on ne voit donc jamais ses propres modifications en retard. Les modifications faites
   // depuis un AUTRE appareil apparaissent au plus tard après la durée ci-dessous.
-  const CACHE_BASEROW_TTL_DEFAUT = 30 * 1000;
-  const CACHE_BASEROW_TTL_REFERENCE = 2 * 60 * 1000; // tables qui changent peu
+  // V20 : délais raccourcis — le cache sert surtout à ne pas relire 5 fois la même
+  // table dans le même écran ; il est en plus vidé à chaque changement d'onglet.
+  const CACHE_BASEROW_TTL_DEFAUT = 5 * 1000;
+  const CACHE_BASEROW_TTL_REFERENCE = 30 * 1000; // tables qui changent peu
   const CACHE_BASEROW_TABLES_REFERENCE = new Set([
     TABLES.Collaborateur.id, TABLES.Chantiers.id, TABLES.Vehicules.id, TABLES.TypeTaches.id,
     TABLES.SousTaches.id, TABLES.Zones.id, '1022869' /* congés */
@@ -1591,6 +1612,7 @@
   let currentNav = 'saisie';
 
   function switchPage(nav) {
+    if (typeof viderCacheBaserow === 'function') viderCacheBaserow(); // chaque onglet relit Baserow
     currentNav = nav;
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const navBtn = document.getElementById('nav-' + nav);
