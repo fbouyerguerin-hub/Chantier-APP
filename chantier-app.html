@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V31';
+  const APP_VERSION = 'V32';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12982,12 +12982,25 @@
     } catch (e) { alert('Erreur : ' + e.message); }
   }
 
-  // ── Retour chantier en masse ──
+  // ── Retour chantier ──
   // Chantier choisi → liste des articles qui y sont partis (sorties − retours),
   // quantité à retourner par article, « Tout retourner », scan à la douchette
   // (+1 par scan), puis un seul enregistrement groupé. Chaque retour est valorisé
   // au prix moyen des sorties vers ce chantier : il annule exactement le coût imputé.
-  let _retourLignes = [], _retourChantierAffiche = null;
+  let _retourLignes = [], _retourChantierAffiche = null, _retourMotCle = '';
+  // Mot-clé : filtre les articles affichés (sortis vers le chantier, matériel
+  // commandé) et propose les articles du stock et du catalogue EBP.
+  function correspondMotCle(texte) {
+    const mots = normTexte(_retourMotCle).split(/\s+/).filter(Boolean);
+    if (!mots.length) return true;
+    const t = normTexte(texte);
+    return mots.every(m => t.includes(m));
+  }
+  function filtrerRetour(v) {
+    _retourMotCle = (v || '').trim();
+    suggestionsRetour(v);
+    if (document.getElementById('retour-chantier').value) renderRetourChantier();
+  }
   function soldesChantierStock(chantier) {
     const cle = normTexte(chantier);
     const parArt = {};
@@ -13010,7 +13023,8 @@
   async function ouvrirRetourChantier() {
     if (!stockTablesConfigurees()) { alert('Module stock non configuré.'); return; }
     document.getElementById('modal-retour-chantier').style.display = 'flex';
-    _retourLignes = []; _retourChantierAffiche = null; suggestionsRetour(''); msgRetour('');
+    _retourLignes = []; _retourChantierAffiche = null; _retourMotCle = ''; suggestionsRetour(''); msgRetour('');
+    { const rs = document.getElementById('retour-scan'); if (rs) rs.value = ''; }
     const sel = document.getElementById('retour-chantier');
     sel.innerHTML = '<option value="">⏳ Chargement…</option>';
     document.getElementById('retour-liste').innerHTML = '';
@@ -13053,14 +13067,17 @@
     }
     // Focus du champ scan (douchette) sauf sur téléphone, pour ne pas ouvrir le clavier
     if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => document.getElementById('retour-scan')?.focus({ preventScroll: true }), 50);
-    el.innerHTML = _retourLignes.map((l, i) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f2f2f2">
+    const visible = l => l.qte > 0 || correspondMotCle(`${l.article['Designation'] || ''} ${l.article['Code EBP'] || ''} ${l.article['Reference fournisseur'] || ''} ${l.commande || ''}`);
+    const nbMasques = _retourLignes.filter(l => !visible(l)).length;
+    el.innerHTML = _retourLignes.map((l, i) => !visible(l) ? '' : `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f2f2f2">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l.article['Designation'] || '?')}</div>
           <div style="color:#999;font-size:11px">${echapperHtmlNote(l.article['Code EBP'] || (l.articleId ? codeBarreArticle(l.article) : 'sans code EBP'))} · ${l.surplus ? `<b style="color:#a35a00">${l.origine || 'surplus (non sorti du stock)'}</b>${l.aCreer ? ' · <span style="color:#2e7d32">nouvel article au stock</span>' : ''}` : `sorti : <b>${fmtQte(l.solde)}</b>`} ${echapperHtmlNote(l.article['Unite'] || '')}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
         </div>
         ${l.surplus ? '' : `<button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>`}
         <input type="number" id="retour-qte-${i}" min="0" step="any" value="" placeholder="0" inputmode="decimal" onchange="majQteRetour(${i}, this.value)" style="width:70px;padding:7px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-weight:700;text-align:right" />
-      </div>`).join('') || '<div class="feuille-empty">Aucun matériel sorti du stock vers ce chantier.<br>Scannez ou recherchez les articles qui reviennent (surplus).</div>';
+      </div>`).join('') + (nbMasques ? `<div style="font-size:11px;color:#999;padding:4px 0">${nbMasques} autre(s) article(s) masqué(s) par le mot-clé.</div>` : '')
+      || '<div class="feuille-empty">Aucun matériel sorti du stock vers ce chantier.<br>Tapez un mot-clé ou scannez les articles qui reviennent (surplus).</div>';
     _retourLignes.forEach((l, i) => { const inp = document.getElementById('retour-qte-' + i); if (inp && l.qte) inp.value = String(l.qte); });
     el.insertAdjacentHTML('beforeend', renderMaterielCommandeChantier(chantier));
     majBoutonRetour();
@@ -13085,7 +13102,8 @@
   }
   function renderMaterielCommandeChantier(chantier) {
     const deja = new Set(_retourLignes.map(l => l.cle).filter(Boolean));
-    const items = lignesCommandeesChantier(chantier).filter(({ l }) => !deja.has('lig:' + l.id));
+    const items = lignesCommandeesChantier(chantier).filter(({ r, l }) => !deja.has('lig:' + l.id)
+      && correspondMotCle(`${l['Description'] || ''} ${codeArticleLigne(l)} ${l['Reference fournisseur'] || ''} ${r['Numero commande'] || ''} ${r['Fournisseur'] || ''}`));
     if (!items.length) return '';
     return `<div style="margin-top:12px;font-size:12px;font-weight:800;color:var(--gris)">📦 Matériel commandé pour ce chantier</div>
       <div style="font-size:11px;color:#999;margin-bottom:4px">Touchez « Remettre en stock » pour le surplus rapporté à l'atelier.</div>` +
@@ -13098,7 +13116,12 @@
       </div>`).join('');
   }
   // Ajoute une ligne « surplus » (article existant au stock, ou à créer à la validation)
+  function reinitMotCleRetour() {
+    _retourMotCle = '';
+    const rs = document.getElementById('retour-scan'); if (rs) rs.value = '';
+  }
   function ajouterSurplus(obj) {
+    reinitMotCleRetour();
     let i = _retourLignes.findIndex(l => (obj.articleId && l.articleId === obj.articleId) || (obj.cle && l.cle === obj.cle));
     if (i < 0) {
       _retourLignes.push({ solde: 0, qteSortie: 0, valSortie: 0, valConnue: false, surplus: true, qte: 0, ...obj });
@@ -13229,6 +13252,7 @@
     document.getElementById('modal-retour-chantier').style.display = 'none';
   }
   function ajouterArticleRetour(articleId) {
+    reinitMotCleRetour();
     let i = _retourLignes.findIndex(l => l.articleId === articleId);
     if (i < 0) {
       // Surplus : article revenu du chantier sans être sorti du stock par l'appli
@@ -13257,7 +13281,7 @@
     clearTimeout(_retourCatTimer);
     _retourCatRes = [];
     // Catalogue EBP (articles jamais passés par le stock), après une courte pause de frappe
-    if ((q || '').trim().length >= 3) _retourCatTimer = setTimeout(async () => {
+    if ((q || '').trim().length >= 2) _retourCatTimer = setTimeout(async () => {
       try {
         const r = await fetch(`${EBP_WORKER}/articles/search?q=${encodeURIComponent(q.trim())}&limit=8`, { headers: headersWorker(), cache: 'no-store' });
         if (!r.ok) return;
@@ -13268,7 +13292,7 @@
           <b>${echapperHtmlNote(x.designation || '?')}</b> <span style="color:#999">· ${echapperHtmlNote(x.code)} · catalogue EBP</span></div>`).join(''));
       } catch (e) {}
     }, 350);
-    const res = (q || '').trim().length >= 3 ? rechercherArticlesRetour(q) : [];
+    const res = (q || '').trim().length >= 2 ? rechercherArticlesRetour(q) : [];
     el.innerHTML = res.map(a => `<div onclick="ajouterArticleRetour(${a.id}); document.getElementById('retour-scan').value=''" style="cursor:pointer;padding:6px 8px;border:1px solid #eee;border-radius:6px;margin-bottom:3px;font-size:12px;background:#fafafa">
         <b>${echapperHtmlNote(a['Designation'] || '?')}</b> <span style="color:#999">· ${echapperHtmlNote(codeBarreArticle(a))}</span></div>`).join('');
   }
@@ -13293,7 +13317,7 @@
       }
       await creerMouvementsStock(lignes.filter(l => l.articleId).map(l => ({
         articleId: l.articleId, type: 'Retour', quantite: l.qte, chantier,
-        note: l.commande ? `Surplus de la commande ${l.commande}` : 'Retour chantier groupé',
+        note: l.commande ? `Surplus de la commande ${l.commande}` : 'Retour chantier',
         commande: l.commande || '', ligneId: l.ligneId || null,
         libelle: `Retour — ${l.article['Designation'] || ''}`.slice(0, 250),
         // prix moyen des sorties vers ce chantier, sinon prix de la ligne de commande,
@@ -19683,7 +19707,7 @@
     <div style="padding:10px 16px 0">
       <div id="stock-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <button onclick="ouvrirScanSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:8px">📷 Sortie rapide par scan</button>
-      <button onclick="ouvrirRetourChantier()" style="width:100%;background:#fff;color:var(--vert);border:1.5px solid var(--vert);border-radius:10px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px">↩️ Retour chantier en masse</button>
+      <button onclick="ouvrirRetourChantier()" style="width:100%;background:#fff;color:var(--vert);border:1.5px solid var(--vert);border-radius:10px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px">↩️ Retour chantier</button>
       <div id="stock-outils-gestion" style="display:none;gap:8px;margin-bottom:8px">
         <button id="btn-sync-articles" onclick="syncArticlesEBP()" style="flex:1;background:#e8f0e7;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🔄 Sync articles EBP</button>
         <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
@@ -19983,7 +20007,7 @@
     <div id="retour-camera"></div>
     <button id="retour-btn-camera" onclick="basculerCameraRetour()" style="width:100%;margin-bottom:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:800;cursor:pointer">📷 Scanner avec la caméra</button>
     <div id="retour-msg" style="display:none;font-size:12px;font-weight:700;border-radius:8px;padding:6px 10px;margin-bottom:6px"></div>
-    <input type="text" id="retour-scan" placeholder="🔫 Scanner ou rechercher un article…" autocomplete="off" oninput="suggestionsRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';suggestionsRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
+    <input type="text" id="retour-scan" placeholder="🔎 Mot-clé (désignation, code, commande…) ou scan" autocomplete="off" oninput="filtrerRetour(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();scanRetourChantier(this.value);this.value='';filtrerRetour('');}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px;margin-bottom:4px" />
     <div id="retour-sugg" style="margin-bottom:6px"></div>
     <div style="display:flex;gap:6px;margin-bottom:8px">
       <button onclick="remplirRetourChantier(true)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:7px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Tout retourner</button>
