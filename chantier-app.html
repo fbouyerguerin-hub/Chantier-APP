@@ -327,6 +327,9 @@
 <div class="header">
   <div class="header-top">
     <img class="header-logo" src="https://fbouyerguerin-hub.github.io/Chantier-APP/LOGO%20POUR%20ENVELOPPE.jpg" alt="Guerin Bâtiments" />
+    <!-- Scan d'étiquette accessible depuis tous les écrans -->
+    <button id="header-scan-btn" onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande, ligne ou article)" aria-label="Scanner"
+      style="display:none;margin-left:auto;margin-right:12px;background:var(--vert);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:22px;line-height:1;cursor:pointer;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);flex-shrink:0">📷</button>
     <div style="text-align:right">
       <div class="header-title">Saisie de chantier</div>
       <div id="header-collab-name" onclick="ouvrirModalMotDePasse()" style="display:none;font-size:11px;color:var(--beige);margin-top:2px;font-weight:600;cursor:pointer" title="Changer mon mot de passe"></div>
@@ -928,6 +931,8 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     const navCommandes = document.getElementById('nav-commandes');
     if (navCommandes) navCommandes.style.display = 'flex'; // Visible pour tous : réception atelier/chantier
+    const btnScanHeader = document.getElementById('header-scan-btn');
+    if (btnScanHeader) btnScanHeader.style.display = 'block';
     const navCommandesClients = document.getElementById('nav-commandes-clients');
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navRepertoire = document.getElementById('nav-repertoire');
