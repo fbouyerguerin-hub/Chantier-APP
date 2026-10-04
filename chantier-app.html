@@ -678,7 +678,7 @@
   }
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11999,13 +11999,13 @@
     }
   }
 
-  // ── Impression des étiquettes (planche A4 21 étiquettes 63,5 × 38,1 mm) ──
+  // ── Impression des étiquettes rayonnage (planche A4 de 8 étiquettes 99,1 × 67,7 mm, Avery L7165) ──
   async function imprimerEtiquettesArticles(ids) {
     return imprimerEtiquettesArticlesObjets(ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean));
   }
   async function imprimerEtiquettesArticlesObjets(articles) {
     if (!articles.length) { alert('Aucun article à imprimer : filtrez ou recherchez d\'abord la liste voulue.'); return; }
-    if (articles.length > 21 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 21)} planche(s) A4). Continuer ?`)) return;
+    if (articles.length > 8 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 8)} planche(s) A4 de 8). Continuer ?`)) return;
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
     fen.document.write('<p style="font-family:sans-serif">⏳ Génération des étiquettes…</p>');
@@ -12032,16 +12032,17 @@
         </div></div>`).join('');
       fen.document.open();
       fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquettes stock</title><style>
-        @page { size: A4; margin: 15.1mm 7.2mm; }
+        /* Avery L7165 : 2 × 4 étiquettes 99,1 × 67,7 mm — marges 13,1 mm (haut) / 4,65 mm (côtés) */
+        @page { size: A4; margin: 13.1mm 4.65mm; }
         body { margin: 0; font-family: Arial, sans-serif; }
-        .pl { display: grid; grid-template-columns: repeat(3, 63.5mm); grid-auto-rows: 38.1mm; column-gap: 2.5mm; }
-        .et { box-sizing: border-box; padding: 2.5mm; display: flex; gap: 2mm; align-items: center; overflow: hidden; break-inside: avoid; }
-        .et img { width: 31mm; height: 31mm; flex-shrink: 0; image-rendering: pixelated; }
-        .tx { min-width: 0; display: flex; flex-direction: column; gap: 1mm; }
-        .de { font-size: 8.5pt; font-weight: 700; line-height: 1.15; max-height: 3.5em; overflow: hidden; }
-        .co { font-size: 9pt; font-family: monospace; font-weight: 700; }
-        .em { font-size: 8pt; font-weight: 700; color: #a5761f; }
-        .lo { font-size: 5.5pt; color: #888; }
+        .pl { display: grid; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 67.7mm; column-gap: 2.5mm; }
+        .et { box-sizing: border-box; padding: 4mm; display: flex; gap: 4mm; align-items: center; overflow: hidden; break-inside: avoid; }
+        .et img { width: 52mm; height: 52mm; flex-shrink: 0; image-rendering: pixelated; }
+        .tx { min-width: 0; display: flex; flex-direction: column; gap: 2mm; }
+        .de { font-size: 12pt; font-weight: 700; line-height: 1.2; max-height: 6em; overflow: hidden; }
+        .co { font-size: 14pt; font-family: monospace; font-weight: 800; }
+        .em { font-size: 14pt; font-weight: 800; color: #a5761f; }
+        .lo { font-size: 7pt; color: #888; }
         @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
       </style></head><body><div class="pl">${cases}</div>
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
@@ -12112,11 +12113,11 @@
     document.getElementById('etiq-cmd-info').innerHTML = `<b>${echapperHtmlNote(r['Numero commande'] || '')}</b> · ${echapperHtmlNote(r['Fournisseur'] || '')}<br>🏗 ${echapperHtmlNote(chantier)}${r['Lieu de réception'] ? `<br>📍 ${echapperHtmlNote(r['Lieu de réception'])}` : ''}`;
     document.getElementById('etiq-cmd-nb').value = localStorage.getItem('gb_etiq_cmd_nb_' + id) || '1';
     document.getElementById('etiq-cmd-pos').value = localStorage.getItem('gb_etiq_cmd_pos') || '1';
-    // Commande de stock : étiquettes rayonnage des articles commandés (planche L7160)
+    // Commande de stock : étiquettes rayonnage des articles commandés (planche L7165, 8 par feuille)
     const btnRay = document.getElementById('etiq-cmd-rayonnage');
     const nbRay = estCommandeStockAtelier(r) ? articlesEtiquettesCommande(r).length : 0;
     btnRay.style.display = nbRay ? 'block' : 'none';
-    btnRay.textContent = `🗄️ Étiquettes rayonnage (${nbRay} article${nbRay > 1 ? 's' : ''}) — planche L7160`;
+    btnRay.textContent = `🗄️ Étiquettes rayonnage (${nbRay} article${nbRay > 1 ? 's' : ''}) — 8 par feuille`;
     document.getElementById('modal-etiquette-commande').style.display = 'flex';
   }
   function fermerEtiquetteCommande() {
