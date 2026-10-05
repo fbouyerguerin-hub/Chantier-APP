@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V48';
+  const APP_VERSION = 'V50';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11950,6 +11950,7 @@
         <div style="min-width:0">
           <div style="font-size:13px;font-weight:700;color:var(--gris)">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
           ${sousTitre ? `<div style="font-size:10px;color:#999;margin-top:2px">${sousTitre}</div>` : ''}
+          ${(() => { const p = estProfilPrix() ? prixArticle(a) : null; return p ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(p)} HT / ${echapperHtmlNote(a['Unite'] || 'u')}${qte > 0 ? ' · valeur stock ' + fmtEur(qte * p) : ''}</div>` : ''; })()}
           ${(() => { const re = reemploiDisponible(a); return re ? `<div style="display:inline-block;margin-top:4px;padding:2px 8px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:10px;font-weight:800">↩️ Réemploi : ${fmtQte(re.qte)} revenu(s) de ${echapperHtmlNote(re.chantiers.slice(0, 2).join(', '))}${re.chantiers.length > 2 ? '…' : ''}${re.derniere ? ' · ' + re.derniere.split('-').reverse().join('/') : ''}</div>` : ''; })()}
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -11963,6 +11964,7 @@
         ${aPoint ? `<button onclick="voirArticleSurPlan(${a.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
       </div>
       <div style="display:flex;gap:6px;margin-top:8px">
+        ${gestion ? btn('➕ Entrée', `ouvrirMouvementStock(${a.id},'Entrée')`, 'var(--vert)', '#e8f0e7') : ''}
         ${btn('➖ Sortie', `ouvrirMouvementStock(${a.id},'Sortie')`)}
         ${btn('↩️ Retour', `ouvrirMouvementStock(${a.id},'Retour')`)}
         ${gestion ? btn('📋 Inventaire', `ouvrirMouvementStock(${a.id},'Inventaire')`) : ''}
@@ -13186,17 +13188,19 @@
         <div style="min-width:0">
           <div style="font-size:13px;font-weight:700;color:var(--gris-moyen)">${echapperHtmlNote(x.designation || x.code)}</div>
           ${sous ? `<div style="font-size:10px;color:#999;margin-top:2px">${sous}</div>` : ''}
+          ${estProfilPrix() && Number(x.prix) > 0 ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(x.prix)} HT / ${echapperHtmlNote(x.unite || 'u')}</div>` : ''}
         </div>
         <span style="flex-shrink:0;font-size:9px;font-weight:700;background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 7px">Catalogue EBP · pas en stock</span>
       </div>
       ${peutGererStock() ? `<button onclick="creerArticleDepuisCatalogue('${codeJs}')" style="margin-top:8px;background:#e8f0e7;border:none;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700;color:var(--vert);cursor:pointer">📍 Définir l'emplacement / stock mini</button>` : ''}
+      ${peutGererStock() ? `<button onclick="creerArticleDepuisCatalogue('${codeJs}', 'entree')" style="margin-top:8px;margin-left:6px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer">➕ Entrée en stock</button>` : ''}
     </div>`;
   }
-  async function creerArticleDepuisCatalogue(code) {
+  async function creerArticleDepuisCatalogue(code, suite = 'edition') {
     const x = _catalogueResultats.items.find(i => i.code === code) || (await lireCatalogueParCodes([code]))[normRef(code)];
     if (!x) { alert('Article introuvable dans le catalogue.'); return; }
     const existant = _articlesCache.find(a => normRef(a['Code EBP']) === normRef(code));
-    if (existant) { ouvrirEditionArticle(existant.id); return; }
+    if (existant) { suite === 'entree' ? ouvrirMouvementStock(existant.id, 'Entrée') : ouvrirEditionArticle(existant.id); return; }
     try {
       const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`, {
         method: 'POST', headers: HEADERS, body: JSON.stringify({
@@ -13208,7 +13212,7 @@
       const row = await r.json();
       _articlesCache.push(row);
       renderStock();
-      ouvrirEditionArticle(row.id);
+      if (suite === 'entree') ouvrirMouvementStock(row.id, 'Entrée'); else ouvrirEditionArticle(row.id);
     } catch (e) { alert('Erreur : ' + e.message); }
   }
 
@@ -13736,12 +13740,13 @@
     if (!a) return;
     _mvtArticleId = id; _mvtType = type;
     const qte = _stockParArticle[id] || 0;
-    const titres = { 'Sortie': '➖ Sortie de stock', 'Retour': '↩️ Retour en stock', 'Inventaire': '📋 Inventaire' };
+    const titres = { 'Entrée': '➕ Entrée en stock (manuelle)', 'Sortie': '➖ Sortie de stock', 'Retour': '↩️ Retour en stock', 'Inventaire': '📋 Inventaire' };
     document.getElementById('mvt-stock-titre').textContent = titres[type] || type;
-    document.getElementById('mvt-stock-article').innerHTML = `<b>${echapperHtmlNote(a['Designation'] || '')}</b><br><span style="color:#999">Stock actuel : ${fmtQte(qte)} ${echapperHtmlNote(a['Unite'] || 'u')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span>`;
+    document.getElementById('mvt-stock-article').innerHTML = `<b>${echapperHtmlNote(a['Designation'] || '')}</b><br><span style="color:#999">Stock actuel : ${fmtQte(qte)} ${echapperHtmlNote(a['Unite'] || 'u')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span>${estProfilPrix() && prixArticle(a) ? `<br><span style="color:#2e7d32;font-weight:700">💶 PA ${fmtEur(prixArticle(a))} HT / ${echapperHtmlNote(a['Unite'] || 'u')}</span>` : ''}`;
     document.getElementById('mvt-stock-qte-label').textContent = type === 'Inventaire' ? 'Quantité comptée' : 'Quantité';
     document.getElementById('mvt-stock-qte').value = type === 'Inventaire' ? fmtQte(qte) : '';
-    document.getElementById('mvt-stock-chantier-bloc').style.display = type === 'Inventaire' ? 'none' : 'block';
+    document.getElementById('mvt-stock-chantier-bloc').style.display = (type === 'Inventaire' || type === 'Entrée') ? 'none' : 'block';
+    document.getElementById('mvt-stock-note').placeholder = type === 'Entrée' ? 'Provenance (achat comptoir, échantillon, reprise…)' : '';
     document.getElementById('mvt-stock-chantier').value = '';
     document.getElementById('mvt-stock-note').value = '';
     // Liste des chantiers en cours pour l'autocomplétion
@@ -13834,6 +13839,8 @@
       quantite = -saisie;
     } else if (_mvtType === 'Retour') {
       quantite = saisie;
+    } else if (_mvtType === 'Entrée') {
+      quantite = saisie; // valorisée au prix d'achat EBP de l'article (par le Worker)
     } else {
       quantite = Math.round((saisie - actuel) * 1000) / 1000;
       if (quantite === 0) { alert('Aucun écart : le stock est déjà juste.'); fermerMouvementStock(); return; }
@@ -13842,7 +13849,8 @@
     btn.disabled = true; btn.textContent = '⏳';
     try {
       await creerMouvementsStock([{
-        articleId: a.id, type: _mvtType, quantite, chantier, note,
+        articleId: a.id, type: _mvtType, quantite, chantier: _mvtType === 'Entrée' ? 'STOCK ATELIER' : chantier,
+        note: _mvtType === 'Entrée' ? ('Entrée manuelle' + (note ? ' — ' + note : '')) : note,
         libelle: `${_mvtType} — ${a['Designation'] || ''}`.slice(0, 250)
       }]);
       fermerMouvementStock();
