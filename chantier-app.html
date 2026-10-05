@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V47';
+  const APP_VERSION = 'V48';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2863,6 +2863,19 @@
     if (collabId != null) _absencesRttParCollab.set(collabId, congesCollab || []);
   }
   function estApprouvee(r) { return (r['Statut']?.value || 'En attente') === 'Approuvé'; }
+  // Saisie d'heures « formation » (chantier, tâche ou sous-tâche contenant « formation »)
+  function estSaisieFormation(sx) {
+    const champs = [...(sx['Chantiers'] || []), ...(sx['Type de taches'] || []), ...(sx['Sous Taches'] || [])];
+    return champs.some(c => normTexteRtt(c?.value).includes('formation'));
+  }
+  function normTexteRtt(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  // Jours couverts par une demande de formation approuvée : la formation y compte
+  // déjà 7h/jour → une saisie « formation » ces jours-là ne s'ajoute pas (doublon).
+  function joursFormationApprouves(absences) {
+    const set = new Set();
+    (absences || []).filter(r => estApprouvee(r) && r['Type de demande']?.value === 'Formation').forEach(r => joursOuvresDemande(r).forEach(j => set.add(j)));
+    return set;
+  }
   function joursOuvresDemande(r) {
     const deb = r['Date de début'] ? String(r['Date de début']).split('T')[0] : null;
     const fin = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : deb;
@@ -2897,11 +2910,13 @@
     const jours = [];
     for (let k = 0; k < 5; k++) { const d = new Date(lundiStr + 'T12:00:00'); d.setDate(d.getDate() + k); jours.push(dateYMD(d)); }
     let justifie = 0;
+    const joursFormCollab = joursFormationApprouves(_absencesRttParCollab.get(collabId));
     (saisies || []).forEach(sx => {
       if ((sx['Collaborateur'] || [])[0]?.id !== collabId) return;
       const ds = sx['Date'] ? String(sx['Date']).split('T')[0] : '';
       if (!jours.includes(ds)) return;
       if ((sx['Chantiers'] || []).some(ch => ch.value === 'ABSENCE')) return; // ligne d'absence, pas du travail
+      if (estSaisieFormation(sx) && joursFormCollab.has(ds)) return;        // déjà comptée par la demande de formation
       justifie += parseFloat(sx['Heures Normales']) || 0;
     });
     const autres = (_absencesRttParCollab.get(collabId) || []).filter(r => estApprouvee(r) && r['Type de demande']?.value !== 'RTT');
@@ -3107,6 +3122,7 @@
     const majorationRtt = POSTES_RTT_MAJOREE_25.includes(poste) ? 1.25 : 1;
     const annee = new Date().getFullYear();
     const totauxSemaine = {};
+    const joursFormDemande = joursFormationApprouves(absencesApprouvees);
     saisies.forEach(r => {
       if (!r['Date']) return;
       if (collabId !== undefined) {
@@ -3122,6 +3138,7 @@
       const lundiStr = dateYMD(lundi);
       const heures = parseFloat(r['Heures Normales']) || 0;
       if (semaineRegularisable(lundiStr) && (r['Chantiers'] || []).some(ch => ch.value === 'ABSENCE')) return; // absence ≠ travail
+      if (estSaisieFormation(r) && joursFormDemande.has(dateStr)) return; // formation déjà comptée 7h/jour par la demande
       totauxSemaine[lundiStr] = (totauxSemaine[lundiStr] || 0) + heures;
     });
 
