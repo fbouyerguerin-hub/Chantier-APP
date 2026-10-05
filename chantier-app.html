@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V46';
+  const APP_VERSION = 'V47';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3246,6 +3246,19 @@
         }
         // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
         detail.push({ lundi: lundiStr, totalHeures, heuresFormation, heuresPayees: heuresSup, surplus, rttSemaine, rttPris: rttPrisSemaine, horsPeriode });
+      } else if (semaineRegularisable(lundiStr) && !avecRttApprouve && _absencesRttParCollab.has(collabId)) {
+        // Semaine terminée SANS RTT, sous 35h justifiées : le manque est pris dans
+        // le compteur (même calcul que la régularisation : heures saisies hors
+        // ABSENCE + formation, fériés, congés / arrêts approuvés à 7h par jour).
+        const deficit = rttReelSemaine(collabId, lundiStr, saisies);
+        if (deficit > 0) {
+          rttTotal -= deficit;
+          deficitTotal += deficit;
+          semainesRtt.set(lundiStr, -deficit);
+        }
+        if (deficit > 0 || inclureSemainesVides) {
+          detail.push({ lundi: lundiStr, totalHeures, heuresFormation, heuresPayees: 0, surplus: 0, rttSemaine: 0, rttPris: 0, deficit, justifie: HEURES_BASE_RTT - deficit, horsPeriode });
+        }
       } else if (inclureSemainesVides) {
         // Semaine sans saisie suffisante (aucune heure, ou en dessous de 35h) et non couverte par
         // une absence bloquante : affichée quand même avec des compteurs à 0, pour que l'admin
@@ -3294,7 +3307,11 @@
   // Repasser à null pour revenir au calcul depuis le 1er janvier de l'année.
   const DATE_DEBUT_SUIVI_RTT = '2026-08-30';
 
-  // RÉGULARISATION DES RTT (depuis le 01/09/2026, semaine du 31/08 incluse) :
+  // RÉGULARISATION À 35h (depuis le 01/09/2026, semaine du 31/08 incluse) :
+  // • semaine AVEC RTT validé : le RTT réel remplace le déclaré (voir ci-dessous) ;
+  // • semaine SANS RTT : s'il manque des heures pour 35h justifiées, le manque est
+  //   pris dans le compteur (congés, arrêts, formation, fériés : 7h par jour).
+  // RÉGULARISATION DES RTT :
   // une demande de RTT approuvée n'est pas figée à sa valeur déclarée. Une fois
   // la semaine terminée, le RTT réellement pris = ce qui manque pour atteindre
   // 35h justifiées. Moins de 35h → la demande augmente (pris dans le compteur) ;
@@ -3704,7 +3721,7 @@
             <table class="rtt-table"><tbody>
               <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquisAvantAjust)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
               <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-              ${rttEtSup.deficitTotal > 0 ? `<tr><th>Semaines sous 35h</th><td class="valeur" style="color:#c0392b">−${formatJoursRtt(rttEtSup.deficitTotal)} h<span class="rtt-sub">heures manquantes prises dans le compteur depuis le 01/09/2026 (incluses dans l'acquis)</span></td></tr>` : ''}${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+              ${rttEtSup.deficitTotal > 0 ? `<tr><th>Semaines sous 35h sans RTT</th><td class="valeur" style="color:#c0392b">−${formatJoursRtt(rttEtSup.deficitTotal)} h<span class="rtt-sub">heures manquantes prises dans le compteur depuis le 01/09/2026 (incluses dans l'acquis)</span></td></tr>` : ''}${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
               <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquisAvantAjust)} h acquis${totalAjustRtt ? (totalAjustRtt < 0 ? ' − ' : ' + ') + formatJoursRtt(Math.abs(totalAjustRtt)) + ' h ajustement' : ''} − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
               ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
             </tbody></table>
@@ -3960,7 +3977,7 @@
         <div class="rtt-table-wrap"><table class="rtt-table"><tbody>
           <tr><th>Acquis</th><td class="valeur">${formatJoursRtt(acquisAvantAjust)} h${(heuresSup > 0 || rttSoldeInitial > 0) ? `<span class="rtt-sub">(${[heuresSup > 0 ? '+' + formatJoursRtt(heuresSup) + 'h sup' : '', rttSoldeInitial > 0 ? '+' + formatJoursRtt(rttSoldeInitial) + 'h solde initial' : ''].filter(Boolean).join(', ')})</span>` : ''}</td></tr>
           <tr><th>Pris</th><td class="valeur">${formatJoursRtt(prisHeures)} h <span class="rtt-sub">(${formatJoursRtt(pris)} j)</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">dont ${formatJoursRtt(prisHeuresPassees)}h passées + ${formatJoursRtt(prisHeuresAVenir)}h à venir</span>` : ''}</td></tr>
-          ${rttEtSup.deficitTotal > 0 ? `<tr><th>Semaines sous 35h</th><td class="valeur" style="color:#c0392b">−${formatJoursRtt(rttEtSup.deficitTotal)} h<span class="rtt-sub">heures manquantes prises dans le compteur depuis le 01/09/2026 (incluses dans l'acquis)</span></td></tr>` : ''}${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
+          ${rttEtSup.deficitTotal > 0 ? `<tr><th>Semaines sous 35h sans RTT</th><td class="valeur" style="color:#c0392b">−${formatJoursRtt(rttEtSup.deficitTotal)} h<span class="rtt-sub">heures manquantes prises dans le compteur depuis le 01/09/2026 (incluses dans l'acquis)</span></td></tr>` : ''}${ligneAjustementRttHtml(totalAjustRtt)}<tr><th>Solde de base <span class="rtt-sub">(base de calcul)</span></th><td class="valeur">${formatJoursRtt(rttSoldeInitial)} h<span class="rtt-sub">RTT solde initial, inclus dans l'acquis</span></td></tr>
               <tr><th>Solde actuel brut</th><td class="valeur" style="${(acquis - prisHeuresPassees - soldeDeBasePrevisionnel) < 0 ? 'color:#c0392b' : 'color:var(--vert)'}">${formatJoursRtt(acquis - prisHeuresPassees - soldeDeBasePrevisionnel)} h<span class="rtt-sub">= ${formatJoursRtt(acquisAvantAjust)} h acquis${totalAjustRtt ? (totalAjustRtt < 0 ? ' − ' : ' + ') + formatJoursRtt(Math.abs(totalAjustRtt)) + ' h ajustement' : ''} − ${formatJoursRtt(prisHeuresPassees)} h pris${soldeDeBasePrevisionnel > 0 ? ' − ' + formatJoursRtt(soldeDeBasePrevisionnel) + ' h solde de base prévisionnel' : ''}</span>${prisHeuresAVenir > 0 ? `<span class="rtt-sub">(${formatJoursRtt(prisHeuresAVenir)}h validées à venir, non déduites)</span>` : ''}</td></tr>
           ${enAttente > 0 ? `<tr><th>En attente</th><td class="valeur" style="color:#856404">${formatJoursRtt(enAttente)} j <span class="rtt-sub">(${formatJoursRtt(enAttenteHeures)} h)</span></td></tr>` : ''}
         </tbody></table></div>
