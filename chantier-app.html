@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V36';
+  const APP_VERSION = 'V37';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12074,7 +12074,8 @@
     }
   }
 
-  // ── Impression des étiquettes rayonnage (planche A4 de 8 étiquettes 99,1 × 67,7 mm, Avery L7165) ──
+  // ── Impression des étiquettes rayonnage (planche A4 de 14 étiquettes 99,1 × 38,1 mm, Avery L7163) ──
+  const ETIQ_PAR_PLANCHE = 14;
   async function imprimerEtiquettesArticles(ids) {
     return imprimerEtiquettesArticlesObjets(ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean));
   }
@@ -12089,7 +12090,7 @@
       return;
     }
     if (sansCode.length && !confirm(`${sansCode.length} article(s) sans code EBP ne seront pas étiquetés. Imprimer les ${articles.length} autre(s) ?`)) return;
-    if (articles.length > 8 && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / 8)} planche(s) A4 de 8). Continuer ?`)) return;
+    if (articles.length > ETIQ_PAR_PLANCHE && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / ETIQ_PAR_PLANCHE)} planche(s) A4 de ${ETIQ_PAR_PLANCHE}). Continuer ?`)) return;
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
     fen.document.write('<p style="font-family:sans-serif">⏳ Génération des étiquettes…</p>');
@@ -12116,17 +12117,17 @@
         </div></div>`).join('');
       fen.document.open();
       fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquettes stock</title><style>
-        /* Avery L7165 : 2 × 4 étiquettes 99,1 × 67,7 mm — marges 13,1 mm (haut) / 4,65 mm (côtés) */
-        @page { size: A4; margin: 13.1mm 4.65mm; }
+        /* Avery L7163 : 2 × 7 étiquettes 99,1 × 38,1 mm — marges 15,15 mm (haut) / 4,65 mm (côtés) */
+        @page { size: A4; margin: 15.15mm 4.65mm; }
         body { margin: 0; font-family: Arial, sans-serif; }
-        .pl { display: grid; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 67.7mm; column-gap: 2.5mm; }
-        .et { box-sizing: border-box; padding: 4mm; display: flex; gap: 4mm; align-items: center; overflow: hidden; break-inside: avoid; }
-        .et img { width: 52mm; height: 52mm; flex-shrink: 0; image-rendering: pixelated; }
-        .tx { min-width: 0; display: flex; flex-direction: column; gap: 2mm; }
-        .de { font-size: 12pt; font-weight: 700; line-height: 1.2; max-height: 6em; overflow: hidden; }
-        .co { font-size: 14pt; font-family: monospace; font-weight: 800; }
-        .em { font-size: 14pt; font-weight: 800; color: #a5761f; }
-        .lo { font-size: 7pt; color: #888; }
+        .pl { display: grid; grid-template-columns: repeat(2, 99.1mm); grid-auto-rows: 38.1mm; column-gap: 2.5mm; }
+        .et { box-sizing: border-box; padding: 2mm 3mm; display: flex; gap: 3mm; align-items: center; overflow: hidden; break-inside: avoid; }
+        .et img { width: 33mm; height: 33mm; flex-shrink: 0; image-rendering: pixelated; }
+        .tx { min-width: 0; display: flex; flex-direction: column; gap: 1mm; }
+        .de { font-size: 10pt; font-weight: 700; line-height: 1.15; max-height: 3.5em; overflow: hidden; }
+        .co { font-size: 12pt; font-family: monospace; font-weight: 800; }
+        .em { font-size: 11pt; font-weight: 800; color: #a5761f; }
+        .lo { font-size: 6pt; color: #888; }
         @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
       </style></head><body><div class="pl">${cases}</div>
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
@@ -12140,7 +12141,7 @@
   // Le catalogue (sans prix) est lu sur le Worker. Les articles déjà en stock
   // gardent leur emplacement sur l'étiquette. Impression par lots de 50
   // planches (400 étiquettes) pour rester fluide dans le navigateur.
-  const EC_LOT = 400;
+  const EC_LOT = 420; // 30 planches de 14
   let _ecCatalogue = [], _ecSelection = [];
   const _ecPanier = new Map(); // code → article à imprimer (sélection manuelle)
   const EC_AFFICHES = 150;     // résultats cochables affichés
@@ -12189,7 +12190,7 @@
     _ecSelection = liste.map(x => stockParCode.get(normRef(x.code)) || { 'Designation': x.designation, 'Code EBP': x.code });
     const n = _ecSelection.length;
     document.getElementById('ec-resume').innerHTML = n
-      ? `${n} étiquette(s) · <b>${Math.ceil(n / 8)} planche(s)</b> de 8 (format L7165)`
+      ? `${n} étiquette(s) · <b>${Math.ceil(n / ETIQ_PAR_PLANCHE)} planche(s)</b> de ${ETIQ_PAR_PLANCHE} (format L7163)`
       : 'Aucun article ne correspond.';
     const lots = [];
     for (let i = 0; i < n; i += EC_LOT) lots.push([i, Math.min(n, i + EC_LOT)]);
@@ -12208,7 +12209,7 @@
       }).join('') + (n > EC_AFFICHES ? `<div style="font-size:11px;color:#999;padding:6px 4px">… ${n - EC_AFFICHES} autres résultats : affinez la recherche pour les voir.</div>` : '') : '';
     const htmlTous = lots.map(([a, b], k) => `
       <button onclick="imprimerLotCatalogue(${a}, ${b}, this)" style="width:100%;margin-bottom:6px;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer;text-align:left">
-        🖨️ ${lots.length > 1 ? `Lot ${k + 1}/${lots.length} — ` : ''}étiquettes ${a + 1} à ${b} <span style="font-weight:400;opacity:.85">(${Math.ceil((b - a) / 8)} planches)</span>
+        🖨️ ${lots.length > 1 ? `Lot ${k + 1}/${lots.length} — ` : ''}étiquettes ${a + 1} à ${b} <span style="font-weight:400;opacity:.85">(${Math.ceil((b - a) / ETIQ_PAR_PLANCHE)} planches)</span>
       </button>`).join('') + (lots.length > 1 ? '<div style="font-size:11px;color:#999">Imprimez les lots l\'un après l\'autre : chaque lot ouvre sa propre fenêtre d\'impression. Le bouton passe en gris une fois imprimé.</div>' : '');
     document.getElementById('ec-lots').innerHTML = htmlListe + (n ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;font-weight:700;color:var(--gris)">🖨️ Imprimer tous les résultats de la recherche (${n})</summary><div style="margin-top:6px">${htmlTous}</div></details>` : '');
     renderPanierCatalogue();
@@ -12229,7 +12230,7 @@
     el.style.display = n ? 'block' : 'none';
     if (!n) return;
     el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span style="flex:1;font-size:12px;font-weight:800;color:var(--vert)">🧺 Sélection : ${n} étiquette(s) · ${Math.ceil(n / 8)} planche(s)</span>
+        <span style="flex:1;font-size:12px;font-weight:800;color:var(--vert)">🧺 Sélection : ${n} étiquette(s) · ${Math.ceil(n / ETIQ_PAR_PLANCHE)} planche(s)</span>
         <button onclick="imprimerPanierCatalogue()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la sélection</button>
         <button onclick="_ecPanier.clear(); majEtiquettesCatalogue()" style="background:#fff;border:1px solid #c5d9c3;border-radius:8px;padding:8px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">Vider</button>
       </div>`;
@@ -12305,11 +12306,11 @@
     document.getElementById('etiq-cmd-info').innerHTML = `<b>${echapperHtmlNote(r['Numero commande'] || '')}</b> · ${echapperHtmlNote(r['Fournisseur'] || '')}<br>🏗 ${echapperHtmlNote(chantier)}${r['Lieu de réception'] ? `<br>📍 ${echapperHtmlNote(r['Lieu de réception'])}` : ''}`;
     document.getElementById('etiq-cmd-nb').value = localStorage.getItem('gb_etiq_cmd_nb_' + id) || '1';
     document.getElementById('etiq-cmd-pos').value = localStorage.getItem('gb_etiq_cmd_pos') || '1';
-    // Commande de stock : étiquettes rayonnage des articles commandés (planche L7165, 8 par feuille)
+    // Commande de stock : étiquettes rayonnage des articles commandés (planche L7163, 14 par feuille)
     const btnRay = document.getElementById('etiq-cmd-rayonnage');
     const nbRay = estCommandeStockAtelier(r) ? articlesEtiquettesCommande(r).length : 0;
     btnRay.style.display = nbRay ? 'block' : 'none';
-    btnRay.textContent = `🗄️ Étiquettes rayonnage (${nbRay} article${nbRay > 1 ? 's' : ''}) — 8 par feuille`;
+    btnRay.textContent = `🗄️ Étiquettes rayonnage (${nbRay} article${nbRay > 1 ? 's' : ''}) — 14 par feuille`;
     document.getElementById('modal-etiquette-commande').style.display = 'flex';
   }
   function fermerEtiquetteCommande() {
