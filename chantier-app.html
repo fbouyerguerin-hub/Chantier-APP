@@ -719,7 +719,23 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V76';
+  const APP_VERSION = 'V1';
+
+  // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
+  // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
+  // d'une recherche, d'une saisie de quantité…) sont ignorées pour les champs de
+  // texte : le clavier n'apparaît plus tout seul. Un appui sur le champ l'ouvre
+  // normalement. Ordinateur et tablette avec clavier : comportement inchangé.
+  (function () {
+    const tactile = () => window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    const SANS_CLAVIER = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'image', 'hidden']);
+    const ouvreClavier = el => el.tagName === 'TEXTAREA' || el.isContentEditable || (el.tagName === 'INPUT' && !SANS_CLAVIER.has((el.type || 'text').toLowerCase()));
+    const focusOrigine = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function (opts) {
+      if (tactile() && ouvreClavier(this) && !this.dataset.focusForce) return; // pas de clavier non demandé
+      return focusOrigine.call(this, opts);
+    };
+  })();
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -19332,8 +19348,6 @@
       page++;
     }
 
-    if (!allRows.length) return null;
-
     // Construire les données pour le classeur Excel (équivalent direct de guerin_analyse_chantier.py)
     const dataAnalyse = allRows.map(r => {
       const date = (r['Date'] || '').split('T')[0];
@@ -19357,6 +19371,16 @@
     const chantiersConcernes = new Set(dataAnalyse.map(r => r.chantier));
     const toutesCommandesExport = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200');
     const commandesParChantier = {};
+    // Chantier sans heure sur la période mais avec des commandes : inclus aussi
+    // (sinon un chantier en cours d'approvisionnement n'apparaît pas en rentabilité)
+    toutesCommandesExport.forEach(r => {
+      const chantierNom = (r['Chantier'] || [])[0]?.value;
+      if (!chantierNom || normTexte(chantierNom).includes('stock atelier')) return;
+      const dc = (r['Date commande'] || '').split('T')[0];
+      if (dateDebut && dc && dc < dateDebut) return;
+      if (dateFin && dc && dc > dateFin) return;
+      chantiersConcernes.add(chantierNom);
+    });
     toutesCommandesExport.forEach(r => {
       const chantierNom = (r['Chantier'] || [])[0]?.value;
       if (!chantierNom || !chantiersConcernes.has(chantierNom)) return;
@@ -19433,8 +19457,9 @@
           const type = m['Type']?.value || m['Type'] || '';
           if (type !== 'Sortie' && type !== 'Retour') return;
           if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
-          const nom = nomParCle.get(normTexte(m['Chantier'] || ''));
-          if (!nom) return;
+          let nom = nomParCle.get(normTexte(m['Chantier'] || ''));
+          // sortie vers un chantier sans heure ni commande sur la période : inclus aussi
+          if (!nom) { nom = String(m['Chantier'] || '').trim(); if (!nom || normTexte(nom).includes('stock atelier')) return; }
           const date = (m['Date'] || '').split('T')[0];
           if (dateDebut && date && date < dateDebut) return;
           if (dateFin && date && date > dateFin) return;
@@ -19455,6 +19480,7 @@
       } catch (e) { console.error('Rentabilité : sorties de stock', e); }
     }
 
+    if (!dataAnalyse.length && !Object.keys(commandesParChantier).length && !Object.keys(stockParChantier).length) return null;
     return { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp, stockParChantier };
   }
 
@@ -19509,7 +19535,7 @@
       }
 
       const donnees = await chargerDonneesAnalyseChantier(dateDebut, dateFin);
-      if (!donnees) { alert('Aucune saisie pour cette période.'); return; }
+      if (!donnees || !donnees.dataAnalyse.length) { alert('Aucune saisie pour cette période.'); return; }
       const { dataAnalyse, commandesParChantier, prixVenteParChantier, commandesClientsParChantier, peutVoirPrixExport, chantiersConcernes, diagEbp, stockParChantier } = donnees;
 
       const wb = await genererClasseurAnalyseChantier(dataAnalyse, commandesAvecStock(commandesParChantier, stockParChantier), peutVoirPrixExport, prixVenteParChantier, commandesClientsParChantier);
@@ -19691,6 +19717,10 @@
       c.heures += r.heures; c.nbSaisies++;
       c.taches[r.tache] = (c.taches[r.tache] || 0) + r.heures;
       if (r.collaborateur) c.collabs.add(r.collaborateur);
+    });
+    // Chantiers sans heure sur la période mais avec commandes ou sorties de stock
+    [...Object.keys(d.commandesParChantier || {}), ...Object.keys(d.stockParChantier || {})].forEach(nom => {
+      if (!parChantier[nom]) parChantier[nom] = { nom, heures: 0, nbSaisies: 0, taches: {}, collabs: new Set() };
     });
     return Object.values(parChantier).map(c => {
       const horsAnalyse = !estChantierAnalyse(c.nom);
