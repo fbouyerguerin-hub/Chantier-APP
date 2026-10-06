@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V53';
+  const APP_VERSION = 'V54';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11799,6 +11799,7 @@
   }
 
   async function ouvrirVueStock() {
+    chargerCatalogueLocal().catch(() => {}); // préchargé en arrière-plan pour la recherche
     const listeEl = document.getElementById('stock-liste');
     const outils = document.getElementById('stock-outils-gestion');
     { const be = document.getElementById('btn-etiq-catalogue'); if (be) be.style.display = peutGererStock() ? 'block' : 'none'; }
@@ -13210,28 +13211,77 @@
   let _catalogueResultats = { q: '', items: [] };
   let _timerCatalogue = null;
   function headersWorker() { return { 'X-Session': _sessionApp || '' }; }
+  // ── Catalogue EBP en local : chargé une fois (≈ 3 300 articles), puis la
+  // recherche se fait sur le téléphone, instantanément, sans appel réseau.
+  // Rechargé toutes les 12 h. Conservé sur l'appareil (localStorage) seulement
+  // pour les profils sans prix ; avec prix (gestionnaires) : en mémoire uniquement.
+  const CLE_CATALOGUE_LOCAL = 'gb_catalogue_ebp_v1';
+  const DUREE_CATALOGUE_LOCAL = 12 * 3600 * 1000;
+  let _catLocal = null, _catLocalPromesse = null;
+  function normCatLocal(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
+  function indexerCatalogueLocal(c) {
+    c.items.forEach(x => { x._t = normCatLocal(`${x.code} ${x.designation} ${x.ref} ${x.fournisseur} ${x.famille}`); x._c = normCatLocal(x.code).replace(/\s/g, ''); x._d = normCatLocal(x.designation); });
+    c.parCode = new Map(c.items.map(x => [normRef(x.code), x]));
+    return c;
+  }
+  function chargerCatalogueLocal(force = false) {
+    const avecPrix = estProfilPrix();
+    if (!force && _catLocal && _catLocal.prix === avecPrix && Date.now() - _catLocal.t < DUREE_CATALOGUE_LOCAL) return Promise.resolve(_catLocal);
+    if (!force && !_catLocal && !avecPrix) {
+      try {
+        const c = JSON.parse(localStorage.getItem(CLE_CATALOGUE_LOCAL) || 'null');
+        if (c && Array.isArray(c.items) && Date.now() - c.t < DUREE_CATALOGUE_LOCAL) { _catLocal = indexerCatalogueLocal({ ...c, prix: false }); return Promise.resolve(_catLocal); }
+      } catch (e) {}
+    }
+    if (_catLocalPromesse) return _catLocalPromesse;
+    _catLocalPromesse = (async () => {
+      const r = await fetch(`${EBP_WORKER}/articles/all`, { headers: headersWorker(), cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const brut = { t: Date.now(), prix: avecPrix, items: (d.results || []).map(x => ({ code: x.code, designation: x.designation, ref: x.ref, fournisseur: x.fournisseur, famille: x.famille, unite: x.unite, ...(avecPrix ? { prix: x.prix } : {}) })) };
+      if (!avecPrix) { try { localStorage.setItem(CLE_CATALOGUE_LOCAL, JSON.stringify(brut)); } catch (e) {} }
+      _catLocal = indexerCatalogueLocal(brut);
+      return _catLocal;
+    })().finally(() => { _catLocalPromesse = null; });
+    return _catLocalPromesse;
+  }
+  function rechercherCatalogueLocal(q, limite = 30) {
+    if (!_catLocal) return [];
+    const mots = normCatLocal(q).split(' ').filter(Boolean);
+    if (!mots.length) return [];
+    const qn = normCatLocal(q).replace(/\s/g, '');
+    const res = [];
+    for (const x of _catLocal.items) if (mots.every(m => x._t.includes(m))) res.push(x);
+    res.sort((a, b) => (b._c === qn) - (a._c === qn) || b._d.startsWith(mots[0]) - a._d.startsWith(mots[0]) || String(a.designation).localeCompare(String(b.designation), 'fr'));
+    return res.slice(0, limite);
+  }
   function programmerRechercheCatalogue() {
     clearTimeout(_timerCatalogue);
     const q = (document.getElementById('stock-recherche')?.value || '').trim();
     if (q.length < 2) { _catalogueResultats = { q: '', items: [] }; return; }
     _timerCatalogue = setTimeout(async () => {
       try {
-        const r = await fetch(`${EBP_WORKER}/articles/search?q=${encodeURIComponent(q)}&limit=30`, { headers: headersWorker(), cache: 'no-store' });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
+        if (!_catLocal) await chargerCatalogueLocal();
         if ((document.getElementById('stock-recherche')?.value || '').trim() !== q) return; // recherche déjà changée
-        _catalogueResultats = { q, items: d.results || [] };
+        _catalogueResultats = { q, items: rechercherCatalogueLocal(q, 30) };
         renderStock();
       } catch (e) {
         console.warn('Recherche catalogue EBP', e);
         _catalogueResultats = { q, items: [], erreur: true };
         renderStock();
       }
-    }, 300);
+    }, _catLocal ? 80 : 250);
   }
   async function lireCatalogueParCodes(codes) {
     const liste = [...new Set(codes.filter(Boolean))];
     if (!liste.length) return {};
+    // Catalogue local d'abord (instantané)
+    try {
+      await chargerCatalogueLocal();
+      const idx = {};
+      liste.forEach(c => { const x = _catLocal.parCode.get(normRef(c)); if (x) idx[normRef(c)] = x; });
+      if (Object.keys(idx).length === liste.length) return idx;
+    } catch (e) {}
     try {
       const r = await fetch(`${EBP_WORKER}/articles/get?codes=${encodeURIComponent(liste.join(','))}`, { headers: headersWorker(), cache: 'no-store' });
       if (!r.ok) return {};
