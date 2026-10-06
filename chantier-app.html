@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V58';
+  const APP_VERSION = 'V59';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11701,7 +11701,7 @@
           </td>` : '';
         return `<tr${estManquante ? ' style="background:#fdf3e0"' : ''}>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
-          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${l['Description'] || ''}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${lienFicheArticleLigne(l)}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
@@ -11849,6 +11849,17 @@
 
   function libelleEmplacement(a) {
     return [a['Zone'], a['Rayon']].map(s => (s || '').trim()).filter(Boolean).join(' · ');
+  }
+
+  // Désignation d'une ligne de commande cliquable → fiche article (si l'article
+  // est identifiable : code EBP de la ligne ou article suivi au stock)
+  function lienFicheArticleLigne(l) {
+    const desc = echapperHtmlNote(l['Description'] || '');
+    const a = (typeof trouverArticlePourLigne === 'function') ? trouverArticlePourLigne(l) : null;
+    const code = codeArticleLigne(l);
+    if (!a && !code) return desc;
+    const action = a ? `ouvrirFicheArticleModal(${a.id})` : `ouvrirFicheArticleModal(null, '${String(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`;
+    return `<a href="#" onclick="event.preventDefault(); event.stopPropagation(); ${action}" title="Ouvrir la fiche article" style="color:var(--vert);font-weight:600;text-decoration:underline;text-underline-offset:2px">${desc || echapperHtmlNote(code)}</a>`;
   }
 
   // ── Matériel revenu des chantiers (réemploi) ──
