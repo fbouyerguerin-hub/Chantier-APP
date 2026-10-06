@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V66';
+  const APP_VERSION = 'V67';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -8796,7 +8796,7 @@
         const tr = document.createElement('tr');
         // Cellule nom
         const tdNom = document.createElement('td');
-        tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:1;vertical-align:middle;min-width:80px';
+        tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:2;vertical-align:middle;min-width:80px';
         const chData = dataChantiers.results.find(r => r.id === chantier.id);
         const fichiers = chData?.['Fichiers'] || [];
         const nomDiv = document.createElement('div');
@@ -8976,7 +8976,7 @@
             btnDup.innerHTML = '⧉';
             btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
             btnDup.className = 'btn-dup-equipe';
-            btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;z-index:2;font-weight:700';
+            btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;font-weight:700';
             btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
             td.appendChild(btnDup);
           }
@@ -8986,7 +8986,7 @@
             btnClearAll.innerHTML = '🗑';
             btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
             btnClearAll.className = 'btn-clear-all-collab';
-            btnClearAll.style.cssText = 'position:absolute;top:2px;right:' + (showDup ? '22px' : '2px') + ';background:#fdecea;border:1px solid #e6b3ac;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:#c0392b;line-height:1.4;z-index:2;font-weight:700';
+            btnClearAll.style.cssText = 'position:absolute;top:2px;right:' + (showDup ? '22px' : '2px') + ';background:#fdecea;border:1px solid #e6b3ac;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:#c0392b;line-height:1.4;font-weight:700';
             btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
             td.appendChild(btnClearAll);
           }
