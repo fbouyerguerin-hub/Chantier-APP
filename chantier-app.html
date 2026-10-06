@@ -267,7 +267,7 @@
     .modal-message-card { background: #fff; border-radius: 20px; padding: 28px 24px; max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
     .modal-message-icon { font-size: 36px; text-align: center; margin-bottom: 12px; }
     .modal-message-title { font-size: 16px; font-weight: 800; color: var(--gris); margin-bottom: 12px; text-align: center; }
-    .modal-message-body { font-size: 14px; color: var(--gris-moyen); line-height: 1.6; margin-bottom: 20px; text-align: center; }
+    .modal-message-body { font-size: 14px; color: var(--gris-moyen); line-height: 1.6; margin-bottom: 20px; text-align: center; white-space: pre-wrap; }
     .modal-message-btn { width: 100%; background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; }
 
     .btn-export { background: #fff; border: 1.5px solid #ddd5c5; border-radius: 12px; padding: 14px 16px; font-size: 14px; font-weight: 600; color: var(--gris); cursor: pointer; text-align: left; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
@@ -281,7 +281,7 @@
     .planning-admin-table td.col-collab-cell { padding: 6px 8px; background: #fafafa; border-right: 1px solid #e0e0e0; }
     .collab-initiales { font-size: 11px; font-weight: 800; color: var(--vert); }
     .collab-name { font-size: 10px; color: #666; line-height: 1.3; }
-    .btn-note-collab { background: none; border: none; cursor: pointer; font-size: 12px; padding: 1px 2px; opacity: 0.35; vertical-align: middle; line-height: 1; }
+    .btn-note-collab { background: none; border: none; cursor: pointer; font-size: 18px; padding: 3px 4px; min-width: 28px; min-height: 28px; opacity: 0.45; vertical-align: middle; line-height: 1; touch-action: manipulation; }
     .btn-note-collab.has-note { opacity: 1; }
     .aff-tag { background: var(--vert-clair); border-left: 2px solid var(--vert); border-radius: 4px; padding: 3px 5px 3px 5px; margin-bottom: 3px; font-size: 10px; color: var(--vert); font-weight: 600; position: relative; word-break: break-word; max-width: 100%; box-sizing: border-box; }
     .aff-tag .btn-del-aff { position: absolute; right: 2px; top: 2px; background: none; border: none; font-size: 10px; cursor: pointer; color: #c0392b; padding: 0; line-height: 1; }
@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V67';
+  const APP_VERSION = 'V70';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -2479,7 +2479,7 @@
       if (!res.ok) { const err = await res.json(); throw new Error(JSON.stringify(err)); }
 
       // Avertir les administrateurs de la nouvelle demande d'absence
-      notifierAdminsNouvelleDemande(payload['Type de demande'], payload['Date de début'], payload['Date de fin journée (inclus)'], feuilleCollab ? feuilleCollab.value : connectedCollab);
+      notifierAdminsNouvelleDemande(payload['Type de demande'], payload['Date de début'], payload['Date de fin journée (inclus)'], feuilleCollab ? feuilleCollab.value : connectedCollab, feuilleCollab ? feuilleCollab.id : null);
 
       // Reset formulaire
       typeCongesSelected = null;
@@ -2503,16 +2503,59 @@
     }
   }
 
+  // ── CONFLITS ABSENCE / PLANNING COLLECTIF ──
+  // Une demande d'absence est « en conflit » quand le collaborateur est déjà affecté
+  // à un chantier dans le planning collectif sur au moins un jour de la période.
+  async function chargerAffectationsPlanning(dateDebut, dateFin) {
+    return fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN
+      + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut
+      + '&filter__Date__date_before_or_equal=' + dateFin);
+  }
+
+  function conflitsDansAffectations(rows, collabId, debut, fin) {
+    const parDate = new Map();
+    (rows || []).forEach(r => {
+      const d = String(r['Date'] || '').split('T')[0];
+      if (!d || d < debut || d > fin) return;
+      const collabs = r['Collaborateurs'] || r['Collaborateur'] || [];
+      if (!collabs.some(c => String(c.id) === String(collabId))) return;
+      const chs = (r['Chantier'] || r['Chantiers'] || []).map(c => c.value).filter(Boolean);
+      if (!parDate.has(d)) parDate.set(d, new Set());
+      (chs.length ? chs : ['chantier non précisé']).forEach(c => parDate.get(d).add(c));
+    });
+    return [...parDate.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, set]) => ({ date, chantiers: [...set] }));
+  }
+
+  async function conflitsPlanningAbsence(collabId, debut, fin) {
+    if (!collabId || !debut) return [];
+    fin = fin || debut;
+    try {
+      const rows = await chargerAffectationsPlanning(debut, fin);
+      return conflitsDansAffectations(rows, collabId, debut, fin);
+    } catch (e) { console.error('Contrôle conflits planning :', e); return []; }
+  }
+
+  function libelleConflits(conflits, separateur, max) {
+    const lignes = conflits.map(c => new Date(c.date + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: '2-digit', month: '2-digit' })
+      + ' : ' + c.chantiers.join(', '));
+    const m = max || 8;
+    return lignes.slice(0, m).join(separateur) + (lignes.length > m ? separateur + '… (+' + (lignes.length - m) + ' jour(s))' : '');
+  }
+
   // Envoie un message d'avertissement à tous les administrateurs actifs
   // lorsqu'un collaborateur soumet une nouvelle demande d'absence.
-  async function notifierAdminsNouvelleDemande(typeDemande, debut, fin, collabNom) {
+  async function notifierAdminsNouvelleDemande(typeDemande, debut, fin, collabNom, collabId) {
     try {
       const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
       if (!res.ok) return;
       const data = await res.json();
+      // Conflit avec le planning collectif : Administrateurs ET Gestionnaires sont avertis
+      const conflits = await conflitsPlanningAbsence(collabId, debut, fin);
+      const droitsCibles = conflits.length ? ['Administrateur', 'Gestionnaire'] : ['Administrateur'];
       const admins = (data.results || []).filter(u => {
         const droit = u['Droit']?.value || u['Droit'] || '';
-        return droit === 'Administrateur'
+        return droitsCibles.includes(droit)
           && u['Actif'] !== false
           && u['Vue ID']
           && String(u['Vue ID']).trim() !== String(connectedViewId || '').trim();
@@ -2521,7 +2564,8 @@
 
       const fmtDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
       const periode = (fin && fin !== debut) ? `du ${fmtDate(debut)} au ${fmtDate(fin)}` : `le ${fmtDate(debut)}`;
-      const texte = `⚠️ Nouvelle demande d'absence de ${collabNom || 'un collaborateur'} : ${typeDemande} ${periode}. À valider dans Gestion > Demandes de congés.`;
+      const texte = `⚠️ Nouvelle demande d'absence de ${collabNom || 'un collaborateur'} : ${typeDemande} ${periode}. À valider dans Gestion > Demandes de congés.`
+        + (conflits.length ? `\n\n🚧 CONFLIT PLANNING COLLECTIF : ${collabNom || 'ce collaborateur'} est déjà affecté sur ${conflits.length} jour(s) de cette période :\n• ${libelleConflits(conflits, '\n• ')}\nPensez à réorganiser l'équipe avant de valider.` : '');
 
       await Promise.all(admins.map(a =>
         fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
@@ -5114,7 +5158,7 @@
               ${envoi ? '📤 ' + envoi : ''}${!groupe && lecture ? '<br>👁️ ' + lecture : ''}
             </div>
           </div>
-          <div style="font-size:13px;color:var(--gris);line-height:1.5;margin-top:6px">${m['Messages'] || ''}</div>
+          <div style="font-size:13px;color:var(--gris);line-height:1.5;margin-top:6px;white-space:pre-wrap">${m['Messages'] || ''}</div>
         </div>`;
       }).join('');
     } catch(e) {
@@ -8894,10 +8938,12 @@
           // Ligne véhicule (sans collaborateur)
           const ligneVeh = affs.find(p => !(p['Collaborateurs']||p['Collaborateur']||[]).length);
           const vehActuels = ligneVeh ? (ligneVeh['Véhicule'] || []) : [];
+          let vehBlocEl = null;
           if (isGestAdmin && !isPasseCollectif) {
             const vehBloc = document.createElement('div');
+            vehBlocEl = vehBloc;
             vehBloc.className = 'veh-bloc';
-            vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700;max-width:calc(100% - 48px);box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+            vehBloc.style.cssText = 'margin-bottom:4px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (vehActuels.length ? 'rgba(11,60,30,0.08)' : 'rgba(0,0,0,0.03)') + ';border:1px dashed ' + (vehActuels.length ? 'var(--vert)' : '#ccc') + ';font-size:9px;color:' + (vehActuels.length ? 'var(--vert)' : '#aaa') + ';font-weight:700;max-width:100%;min-height:30px;line-height:24px;box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
             vehBloc.innerHTML = vehActuels.length ? '🚐 ' + vehActuels.map(v => v.value).join(' · ') : '🚐 <span style="font-weight:400">+ véhicule</span>';
             vehBloc.title = vehActuels.length ? vehActuels.map(v => v.value).join(' · ') : '';
             vehBloc.onclick = e => { e.stopPropagation(); ouvrirModalVehiculeCase(chantier, dateStr, ligneVeh); };
@@ -8969,14 +9015,20 @@
           const affCollabSupprimables = affCollab.filter(a => a.isSaisie !== true);
           const showClearAll = isGestAdmin && !isPasseCollectif && affCollabSupprimables.length > 0;
 
-          if (showDup || showClearAll) td.style.position = 'relative';
+          if (showDup || showClearAll) {
+            td.style.position = 'relative';
+            // Boutons alignés sur la ligne véhicule : on réduit la largeur du bloc véhicule
+            const nbBtns = (showDup ? 1 : 0) + (showClearAll ? 1 : 0);
+            if (vehBlocEl) vehBlocEl.style.maxWidth = 'calc(100% - ' + (nbBtns * 34 + 2) + 'px)';
+            else td.style.paddingTop = '38px';
+          }
 
           if (showDup) {
             const btnDup = document.createElement('button');
             btnDup.innerHTML = '⧉';
             btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
             btnDup.className = 'btn-dup-equipe';
-            btnDup.style.cssText = 'position:absolute;top:2px;right:2px;background:var(--beige-clair);border:1px solid var(--beige);border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:var(--gris);line-height:1.4;font-weight:700';
+            btnDup.style.cssText = 'position:absolute;top:4px;right:3px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:var(--beige-clair);border:1px solid var(--beige);border-radius:6px;font-size:16px;padding:0;cursor:pointer;color:var(--gris);line-height:1;font-weight:700;touch-action:manipulation';
             btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
             td.appendChild(btnDup);
           }
@@ -8986,7 +9038,7 @@
             btnClearAll.innerHTML = '🗑';
             btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
             btnClearAll.className = 'btn-clear-all-collab';
-            btnClearAll.style.cssText = 'position:absolute;top:2px;right:' + (showDup ? '22px' : '2px') + ';background:#fdecea;border:1px solid #e6b3ac;border-radius:4px;font-size:10px;padding:1px 4px;cursor:pointer;color:#c0392b;line-height:1.4;font-weight:700';
+            btnClearAll.style.cssText = 'position:absolute;top:4px;right:' + (showDup ? '37px' : '3px') + ';width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:#fdecea;border:1px solid #e6b3ac;border-radius:6px;font-size:15px;padding:0;cursor:pointer;color:#c0392b;line-height:1;font-weight:700;touch-action:manipulation';
             btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
             td.appendChild(btnClearAll);
           }
@@ -17075,6 +17127,7 @@
   }
 
   let congesAdminListCache = [];
+  let congesAdminConflits = new Map(); // rowId demande en attente → conflits planning collectif
 
   async function loadCongesAdmin() {
     const container = document.getElementById('liste-conges-admin');
@@ -17086,7 +17139,35 @@
         return (order[a['Statut']?.value]||0) - (order[b['Statut']?.value]||0);
       });
       renderCongesAdminList();
+      calculerConflitsCongesAdmin();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
+  }
+
+  // Repère, pour les demandes en attente, les jours où le collaborateur est déjà affecté
+  // au planning collectif (une seule lecture du planning sur la période couverte).
+  async function calculerConflitsCongesAdmin() {
+    try {
+      const attente = congesAdminListCache.filter(r => (r['Statut']?.value || 'En attente') === 'En attente' && r['Date de début']);
+      const plage = r => {
+        const d = String(r['Date de début']).split('T')[0];
+        const f = r['Date de fin journée (inclus)'] ? String(r['Date de fin journée (inclus)']).split('T')[0] : d;
+        return [d, f < d ? d : f];
+      };
+      const map = new Map();
+      if (attente.length) {
+        const debuts = attente.map(r => plage(r)[0]).sort();
+        const fins = attente.map(r => plage(r)[1]).sort();
+        const rows = await chargerAffectationsPlanning(debuts[0], fins[fins.length - 1]);
+        attente.forEach(r => {
+          const collabId = (r['Collaborateurs'] || [])[0]?.id;
+          const [d, f] = plage(r);
+          const c = conflitsDansAffectations(rows, collabId, d, f);
+          if (c.length) map.set(r.id, c);
+        });
+      }
+      congesAdminConflits = map;
+      renderCongesAdminList();
+    } catch (e) { console.error('Conflits congés / planning :', e); }
   }
 
   function renderCongesAdminList() {
@@ -17111,12 +17192,17 @@
       const periodeLabel = heuresExplicites > 0 ? `Le ${debut} · ${formatJoursRtt(heuresExplicites)} h` : `Du ${debut} au ${fin}`;
       const isAttente = statut === 'En attente';
       const color = isAttente ? 'var(--beige)' : statut === 'Approuvé' ? 'var(--vert)' : '#c0392b';
-      return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${color}">
+      const conflits = isAttente ? (congesAdminConflits.get(r.id) || []) : [];
+      const blocConflit = conflits.length
+        ? `<div style="margin-top:8px;background:#fdecea;border:1px solid #e6b3ac;border-radius:8px;padding:8px 10px;font-size:11px;color:#c0392b;line-height:1.5"><b>🚧 Conflit planning collectif</b> — déjà affecté sur ${conflits.length} jour(s) :<br>${libelleConflits(conflits, '<br>')}</div>`
+        : '';
+      return `<div style="background:#fff;border-radius:12px;margin:0 16px 10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);border-left:3px solid ${conflits.length ? '#c0392b' : color}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--gris)">${collab}${conflits.length ? ' <span title="Conflit avec le planning collectif">🚧</span>' : ''}</div>
           <div style="font-size:11px;font-weight:700;color:${color}">${statut}</div>
         </div>
         <div style="font-size:12px;color:#aaa">${type} · ${periodeLabel}</div>
+        ${blocConflit}
         ${r['Notes'] ? '<div style="font-size:11px;color:#aaa;margin-top:4px;font-style:italic">📝 ' + r['Notes'] + '</div>' : ''}
         <div style="display:flex;gap:8px;margin-top:10px">
           ${isAttente ? `
@@ -17294,6 +17380,11 @@
       };
     }
     console.log('Payload congé:', JSON.stringify(payload));
+    if (statutVal !== 'Refusé') {
+      const conflits = await conflitsPlanningAbsence(collabIdInt, payload['Date de début'], payload['Date de fin journée (inclus)']);
+      if (conflits.length && !confirm('🚧 Ce collaborateur est déjà affecté au planning collectif :\n\n' + libelleConflits(conflits, '\n', 12)
+        + '\n\nEnregistrer quand même cette absence ?')) return;
+    }
     const btn = document.getElementById('btn-save-conge-admin');
     btn.disabled = true; btn.textContent = 'Enregistrement…';
     try {
@@ -17315,6 +17406,10 @@
   }
 
   async function validerConge(rowId, statut) {
+    const conflits = congesAdminConflits.get(rowId) || [];
+    if (statut === 'Approuvé' && conflits.length
+      && !confirm('🚧 Ce collaborateur est déjà affecté au planning collectif :\n\n' + libelleConflits(conflits, '\n', 12)
+        + '\n\nValider quand même l\'absence ? (pensez à le retirer des chantiers concernés)')) return;
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/' + rowId + '/?user_field_names=true',
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statut }) });
