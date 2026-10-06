@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V50';
+  const APP_VERSION = 'V52';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11945,7 +11945,7 @@
     const gestion = peutGererStock();
     const btn = (label, action, couleur = 'var(--gris)', fond = 'var(--beige-clair)') =>
       `<button onclick="${action}" style="flex:1;min-width:0;background:${fond};color:${couleur};border:none;border-radius:8px;padding:7px 4px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">${label}</button>`;
-    return `<div style="background:#fff;border:1px solid ${sousMini ? '#f5c6c0' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px">
+    return `<div id="art-carte-${a.id}" style="background:#fff;border:1px solid ${sousMini ? '#f5c6c0' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px;transition:box-shadow .3s">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
         <div style="min-width:0">
           <div style="font-size:13px;font-weight:700;color:var(--gris)">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
@@ -12167,6 +12167,34 @@
     catch (e) { setMessageScan('📷 Caméra indisponible (' + (e.message || e) + ')', '#c0392b'); }
   }
 
+  // Scan d'une étiquette article : onglet Stock atelier, filtré sur l'article,
+  // fiche mise en évidence (sortie, retour, inventaire, historique à portée).
+  async function ouvrirFicheArticle(articleId) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    try { await arreterCamera(); } catch (e) {}
+    const modal = document.getElementById('modal-scan-stock');
+    if (modal) modal.style.display = 'none';
+    _panierSortie = [];
+    if (currentNav !== 'commandes') switchPage('commandes');
+    _stockFiltre = 'tous';
+    const r = document.getElementById('stock-recherche');
+    if (r) r.value = a['Code EBP'] || a['Designation'] || '';
+    switchCommandesVue('stock');
+    setFiltreStock('tous');
+    // la vue se charge de façon asynchrone : on attend la carte puis on la met en évidence
+    for (let k = 0; k < 20; k++) {
+      await new Promise(res => setTimeout(res, 150));
+      const el = document.getElementById('art-carte-' + articleId);
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        el.style.boxShadow = '0 0 0 3px var(--vert)';
+        setTimeout(() => { el.style.boxShadow = ''; }, 2500);
+        break;
+      }
+    }
+  }
+
   async function fermerScanSortie() {
     if (_scanMode === 'sortie' && _panierSortie.length && !confirm('Le panier contient des articles non validés. Fermer quand même ?')) return;
     await arreterCamera();
@@ -12214,8 +12242,7 @@
     if (!a) { bipScan(false); setMessageScan(`❌ Code inconnu : ${code}`, '#c0392b'); return; }
     if (_scanMode === 'info') {
       bipScan(true);
-      setMessageScan(`✅ ${a['Designation'] || code}`, 'var(--vert)');
-      afficherFicheScan({ type: 'article', id: a.id });
+      ouvrirFicheArticle(a.id); // directement sur sa fiche dans Stock atelier
       return;
     }
     const ligne = _panierSortie.find(p => p.articleId === a.id);
@@ -12984,8 +13011,11 @@
   //   n'ont pas la même disposition clavier, "CMD-123" arrive sous la forme
   //   "C?D)&é"" : le code est retraduit automatiquement.
   // ============================================================
-  const QWERTY_SUR_AZERTY = { '&':'1','é':'2','"':'3',"'":'4','(':'5','§':'6','è':'7','!':'8','ç':'9','à':'0',
-    ')':'-','?':'M',',':'m','A':'Q','Q':'A','a':'q','q':'a','Z':'W','W':'Z','z':'w','w':'z',';':',',':':'.','°':'_','_':'8','-':'6' };
+  // Douchette en QWERTY sur tablette AZERTY : caractère reçu → caractère voulu.
+  // (rangée des chiffres sans Maj : & é " ' ( - è _ ç à = 1…0)
+  const QWERTY_SUR_AZERTY = { '&':'1','é':'2','"':'3',"'":'4','(':'5','-':'6','è':'7','_':'8','ç':'9','à':'0',
+    ')':'-','?':'M','M':':',',':'m','!':'/','§':'?',':':'.',';':',','°':'_',
+    'A':'Q','Q':'A','a':'q','q':'a','Z':'W','W':'Z','z':'w','w':'z' };
   function retraduireAzerty(code) {
     return [...code].map(c => QWERTY_SUR_AZERTY[c] ?? c).join('');
   }
@@ -13010,8 +13040,10 @@
     const c = extraireCodeScan(brut);
     const connu = x => /^LIG-\d+$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
     if (!c || connu(c)) return c;
-    const t = retraduireAzerty(c);
-    return (t !== c && connu(t)) ? t : c;
+    // Disposition clavier différente : on retraduit le texte BRUT (adresse comprise),
+    // puis on en extrait le code (…?scan=CODE).
+    const t = extraireCodeScan(retraduireAzerty(String(brut || '').trim()));
+    return (t && t !== c && (connu(t) || /^(CMD|LIG|ART)-\d+$/i.test(t))) ? t : c;
   }
 
   let _bufDouchette = '', _tDouchette = 0, _debutDouchette = 0;
