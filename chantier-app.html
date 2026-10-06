@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V9';
+  const APP_VERSION = 'V11';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12571,8 +12571,14 @@
     const m = code.match(/^ART-(\d+)$/i);
     if (m) return _articlesCache.find(a => a.id === Number(m[1])) || null;
     const n = normRef(code);
+    const viaCatalogue = () => {
+      const x = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(n) : null;
+      const r = x ? normRef(x.ref) : '';
+      return r ? (_articlesCache.find(a => normRef(a['Code EBP']) === r) || _articlesCache.find(a => normRef(a['Reference fournisseur']) === r)) : null;
+    };
     return _articlesCache.find(a => normRef(a['Code EBP']) === n)
         || _articlesCache.find(a => normRef(a['Reference fournisseur']) === n)
+        || viaCatalogue()
         || null;
   }
 
@@ -13046,14 +13052,22 @@
       });
     });
     lignesCmd.sort((p, q) => String(q.r['Date commande'] || '').localeCompare(String(p.r['Date commande'] || '')));
-    html += titreSection(`Commandes (${lignesCmd.length})`);
-    html += lignesCmd.length ? lignesCmd.slice(0, 10).map(({ r, l }) => {
+    // Commandes séparées : en cours (non réceptionnées) / déjà réceptionnées
+    const idsLignesEnCours = new Set(_lignesEnCours.map(x => x.l.id));
+    const ligneCmdHtml = ({ r, l }) => {
       const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
       return `<div onclick="fermerFicheArticle(); ouvrirScanInfo('CMD-${r.id}')" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:12px">
-          <span><b>${esc(r['Numero commande'] || '')}</b> <span style="color:#999">· ${esc(r['Fournisseur'] || '')} · ${esc((r['Chantier'] || [])[0]?.value || 'stock')}</span></span>
+          <span><b>${esc(r['Numero commande'] || '')}</b> <span style="color:#999">· ${esc(r['Fournisseur'] || '')} · ${esc((r['Chantier'] || [])[0]?.value || 'stock')}${r['Date commande'] ? ' · ' + new Date(String(r['Date commande']).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : ''}</span></span>
           <span style="white-space:nowrap;text-align:right">${fmtQte(l['Quantite'])} ${esc(l['Unite'] || '')}${prive && Number(l['Montant HT']) > 0 && Number(l['Quantite']) > 0 ? `<br><span style="font-size:10px;color:#2e7d32;font-weight:700">${fmtEur(Number(l['Montant HT']) / Number(l['Quantite']))} HT/u payé</span>` : ''}<br><span style="font-size:10px;color:${couleurStatutCommande(statut)}">${esc(statut)}</span></span>
         </div>`;
-    }).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune commande trouvée pour cet article.</div>';
+    };
+    const cmdEnCours = lignesCmd.filter(x => idsLignesEnCours.has(x.l.id));
+    const cmdRecues = lignesCmd.filter(x => !idsLignesEnCours.has(x.l.id));
+    html += titreSection(`Commandes en cours (${cmdEnCours.length})`);
+    html += cmdEnCours.length ? cmdEnCours.map(ligneCmdHtml).join('')
+      : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune commande en attente de réception.</div>';
+    if (cmdRecues.length) html += `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#999;text-transform:uppercase;letter-spacing:.4px">Commandes réceptionnées (${cmdRecues.length})</summary>
+      ${cmdRecues.slice(0, 10).map(ligneCmdHtml).join('')}${cmdRecues.length > 10 ? `<div style="font-size:11px;color:#aaa;padding:4px 0">… et ${cmdRecues.length - 10} plus ancienne(s)</div>` : ''}</details>`;
 
     // Ouvrage géré en kit : historique propre au kit (les mouvements sont portés
     // par ses composants, avec la note « Kit CODE »)
@@ -13418,6 +13432,8 @@
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
     fen.document.write('<p style="font-family:sans-serif">⏳ Génération des étiquettes…</p>');
     try {
+      await chargerCatalogueLocal().catch(() => {});
+      articles = articles.map(corrigerCodeEbpArticle);
       await chargerLibScan('qrcode');
       const tmp = document.createElement('div');
       tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
@@ -14257,7 +14273,33 @@
   function indexerCatalogueLocal(c) {
     c.items.forEach(x => { x._t = normCatLocal(`${x.code} ${x.designation} ${x.ref} ${x.fournisseur} ${x.famille}`); x._c = normCatLocal(x.code).replace(/\s/g, ''); x._d = normCatLocal(x.designation); });
     c.parCode = new Map(c.items.map(x => [normRef(x.code), x]));
+    c.parRef = new Map();
+    c.items.forEach(x => { const k = normRef(x.ref); if (k) (c.parRef.get(k) || c.parRef.set(k, []).get(k)).push(x); });
     return c;
+  }
+  // Article EBP dont la RÉFÉRENCE FOURNISSEUR vaut `ref` (seulement s'il n'y en a qu'un)
+  function catParRefUnique(ref) {
+    const k = normRef(ref);
+    if (!k || !_catLocal || !_catLocal.parRef) return null;
+    const l = _catLocal.parRef.get(k) || [];
+    return l.length === 1 ? l[0] : null;
+  }
+  // Étiquettes : le code imprimé doit être le code article EBP. Certains articles créés
+  // à la réception portaient la référence fournisseur à la place : on la remplace par le
+  // vrai code EBP (et on corrige la fiche article au passage, la réf. fournisseur étant
+  // conservée dans son champ — les anciennes étiquettes restent donc reconnues au scan).
+  function corrigerCodeEbpArticle(a) {
+    const code = String(a['Code EBP'] || '').trim();
+    if (!code || !_catLocal || _catLocal.parCode.has(normRef(code))) return a;
+    const x = catParRefUnique(code);
+    if (!x || !x.code) return a;
+    const b = { ...a, 'Code EBP': x.code, 'Reference fournisseur': a['Reference fournisseur'] || code };
+    if (a.id && peutGererStock()) {
+      fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${a.id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Code EBP': x.code, 'Reference fournisseur': b['Reference fournisseur'] })
+      }).then(r => { if (r.ok) { const c = (_articlesCache || []).find(y => y.id === a.id); if (c) { c['Code EBP'] = x.code; c['Reference fournisseur'] = b['Reference fournisseur']; } } }).catch(() => {});
+    }
+    return b;
   }
   function chargerCatalogueLocal(force = false) {
     const avecPrix = estProfilPrix();
@@ -15161,8 +15203,9 @@
         if (!uniques.has(cle)) uniques.set(cle, e.ligne);
       });
       const catalogue = await lireCatalogueParCodes([...uniques.values()].map(codeArticleLigne));
+      await chargerCatalogueLocal().catch(() => {});
       const items = [...uniques.values()].map(l => {
-        const x = catalogue[normRef(codeArticleLigne(l))];
+        const x = catalogue[normRef(codeArticleLigne(l))] || (!l['Code article'] ? catParRefUnique(l['Reference fournisseur']) : null);
         if (x) return { // fiche reprise du catalogue EBP
           'Designation': (x.designation || x.code).slice(0, 250), 'Code EBP': x.code, 'Reference fournisseur': x.ref || '',
           'Fournisseur': x.fournisseur || commande['Fournisseur'] || '', 'Famille': x.famille || '', 'Unite': x.unite || l['Unite'] || '',
