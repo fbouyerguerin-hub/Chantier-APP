@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V65';
+  const APP_VERSION = 'V66';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -3261,7 +3261,7 @@
           heuresSupTotal += surplus;
         }
         // Chaque semaine travaillée (RTT acquise) est listée, même sans heures supplémentaires
-        detail.push({ lundi: lundiStr, totalHeures, heuresFormation, heuresPayees: heuresSup, surplus, rttSemaine, rttPris: rttPrisSemaine, horsPeriode });
+        detail.push({ lundi: lundiStr, totalHeures, heuresTravaillees: totalHeuresTravaillees, heuresFormation, heuresPayees: heuresSup, surplus, rttSemaine, rttPris: rttPrisSemaine, horsPeriode });
       } else if (semaineRegularisable(lundiStr) && !avecRttApprouve && _absencesRttParCollab.has(collabId)) {
         // Semaine terminée SANS RTT, sous 35h justifiées : le manque est pris dans
         // le compteur (même calcul que la régularisation : heures saisies hors
@@ -3273,13 +3273,13 @@
           semainesRtt.set(lundiStr, -deficit);
         }
         if (deficit > 0 || inclureSemainesVides) {
-          detail.push({ lundi: lundiStr, totalHeures, heuresFormation, heuresPayees: 0, surplus: 0, rttSemaine: 0, rttPris: 0, deficit, justifie: HEURES_BASE_RTT - deficit, horsPeriode });
+          detail.push({ lundi: lundiStr, totalHeures, heuresTravaillees: totalHeuresTravaillees, heuresFormation, heuresPayees: 0, surplus: 0, rttSemaine: 0, rttPris: 0, deficit, justifie: HEURES_BASE_RTT - deficit, horsPeriode });
         }
       } else if (inclureSemainesVides) {
         // Semaine sans saisie suffisante (aucune heure, ou en dessous de 35h) et non couverte par
         // une absence bloquante : affichée quand même avec des compteurs à 0, pour que l'admin
         // repère les semaines sans saisie dans le détail du récapitulatif.
-        detail.push({ lundi: lundiStr, totalHeures, heuresFormation, heuresPayees: 0, surplus: 0, rttSemaine: 0, rttPris: rttPrisSemaine, sansSaisie: !semaineBloquee && totalHeures === 0 && rttPrisSemaine === 0, horsPeriode });
+        detail.push({ lundi: lundiStr, totalHeures, heuresTravaillees: totalHeuresTravaillees, heuresFormation, heuresPayees: 0, surplus: 0, rttSemaine: 0, rttPris: rttPrisSemaine, sansSaisie: !semaineBloquee && totalHeures === 0 && rttPrisSemaine === 0, horsPeriode });
       }
       lundi.setDate(lundi.getDate() + 7);
     }
@@ -3634,16 +3634,16 @@
                 const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
                 const rttPrisTd = `<td class="valeur" style="color:#c26bb0">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h<span class="rtt-sub" style="color:#c26bb0">absence réelle pour atteindre 35h</span>' : '—'}</td>`;
                 if (d.horsPeriode) {
-                  return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td><td class="valeur">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h' : '—'}</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                  return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td><td class="valeur">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h' : '—'}</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
                 }
-                if (d.deficit === 0 && d.justifie > d.totalHeures && d.totalHeures < HEURES_BASE_RTT) return `<tr style="background:#f4f8f3"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT ou férié)</span></td><td class="valeur" colspan="4" style="color:var(--vert)">Sous 35h travaillées mais justifié : rien n'est pris dans le compteur</td></tr>`;
-                if (d.deficit > 0) return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">${formatJoursRtt(d.totalHeures)} h${d.justifie > d.totalHeures ? `<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT, fériés)</span>` : ''}</td><td class="valeur" style="color:#c0392b" colspan="4">Sous 35h : −${formatJoursRtt(d.deficit)} h pris dans le compteur</td></tr>`;
+                if (d.deficit === 0 && d.justifie > d.totalHeures && d.totalHeures < HEURES_BASE_RTT) return `<tr style="background:#f4f8f3"><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT ou férié)</span></td><td class="valeur" colspan="4" style="color:var(--vert)">Sous 35h travaillées mais justifié : rien n'est pris dans le compteur</td></tr>`;
+                if (d.deficit > 0) return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.justifie > d.totalHeures ? `<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT, fériés)</span>` : ''}</td><td class="valeur" style="color:#c0392b" colspan="4">Sous 35h : −${formatJoursRtt(d.deficit)} h pris dans le compteur</td></tr>`;
                 if (d.sansSaisie) {
                   return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="4">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF)} h</td></tr>`;
                 }
                 return POSTES_RTT_MAJOREE_25.includes(posteCollabConnecte)
-                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
-                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
+                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
               }).join('')}
             </tbody>
           </table>
@@ -3963,16 +3963,16 @@
             const hRtt = d.rttSemaine; const hSup = d.heuresPayees; const hEnPlus = d.surplus;
             const rttPrisTd = `<td class="valeur" style="color:#c26bb0">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h<span class="rtt-sub" style="color:#c26bb0">absence réelle pour atteindre 35h</span>' : '—'}</td>`;
             if (d.horsPeriode) {
-              return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td><td class="valeur">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h' : '—'}</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+              return `<tr style="background:#f2f2f2;color:#999"><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td><td class="valeur">${d.rttPris > 0 ? formatJoursRtt(d.rttPris) + ' h' : '—'}</td><td class="valeur">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
             }
-            if (d.deficit === 0 && d.justifie > d.totalHeures && d.totalHeures < HEURES_BASE_RTT) return `<tr style="background:#f4f8f3"><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT ou férié)</span></td><td class="valeur" colspan="4" style="color:var(--vert)">Sous 35h travaillées mais justifié : rien n'est pris dans le compteur</td></tr>`;
-            if (d.deficit > 0) return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">${formatJoursRtt(d.totalHeures)} h${d.justifie > d.totalHeures ? `<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT, fériés)</span>` : ''}</td><td class="valeur" style="color:#c0392b" colspan="4">Sous 35h : −${formatJoursRtt(d.deficit)} h pris dans le compteur</td></tr>`;
+            if (d.deficit === 0 && d.justifie > d.totalHeures && d.totalHeures < HEURES_BASE_RTT) return `<tr style="background:#f4f8f3"><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT ou férié)</span></td><td class="valeur" colspan="4" style="color:var(--vert)">Sous 35h travaillées mais justifié : rien n'est pris dans le compteur</td></tr>`;
+            if (d.deficit > 0) return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.justifie > d.totalHeures ? `<span class="rtt-sub">${formatJoursRtt(d.justifie)} h justifiées (RTT, fériés)</span>` : ''}</td><td class="valeur" style="color:#c0392b" colspan="4">Sous 35h : −${formatJoursRtt(d.deficit)} h pris dans le compteur</td></tr>`;
             if (d.sansSaisie) {
               return `<tr style="background:#fdf3f2"><td>${label}</td><td class="valeur" style="color:#c0392b;font-weight:700">0 h — aucune saisie</td><td class="valeur" style="color:#c0392b" colspan="4">RTT non acquis : -${formatJoursRtt(HEURES_RTT_PAR_SEMAINE_EFF)} h</td></tr>`;
             }
                 return POSTES_RTT_MAJOREE_25.includes(posteCollabModal)
-                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
-                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
+                  ? `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" colspan="3" style="color:#8a5fc2">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT (majorée +25%)' : '—'}</td></tr>`
+                  : `<tr><td>${label}</td><td class="valeur">${formatJoursRtt(d.heuresTravaillees ?? d.totalHeures)} h${d.heuresFormation ? `<span class="rtt-sub">dont ${formatJoursRtt(d.heuresFormation)} h formation</span>` : ''}</td>${rttPrisTd}<td class="valeur" style="color:#2D8A4E">${hRtt > 0 ? '+' + formatJoursRtt(hRtt) + ' h RTT' : '—'}</td><td class="valeur" style="color:#d99a3d">${hSup > 0 ? '+' + formatJoursRtt(hSup) + ' h' : '—'}</td><td class="valeur" style="color:#1a4f8b">${hEnPlus > 0 ? '+' + formatJoursRtt(hEnPlus) + ' h' : '—'}</td></tr>`;
           }).join('')}</tbody>
         </table></div>` : '';
 
