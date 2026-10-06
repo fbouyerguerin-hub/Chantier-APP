@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V73';
+  const APP_VERSION = 'V74';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4665,19 +4665,30 @@
   function echapperHTMLAff(t) {
     return String(t == null ? '' : t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
+  // Lieu saisi « vide » (Sans, -, aucun…) = pas d'emplacement réel
+  function lieuCommandeReel(lieu) {
+    const l = String(lieu || '').trim();
+    return /^(sans|aucun|aucune|néant|neant|-+|\/|\.|n\/?a)$/i.test(l) ? '' : l;
+  }
   function renderCommandesAffectationPoseur(commandes) {
+    // L'état affiché suit le STATUT de la commande (source de vérité), l'emplacement
+    // (lieu / point sur le plan) n'est qu'un complément d'information.
     const infos = commandes.map(c => {
-      const statut = estCommandePartielle(c) ? 'Réception partielle' : extraireValeurChamp(c['Statut'], '');
-      const lieu = (c['Lieu de réception'] || '').trim();
+      const partielle = estCommandePartielle(c);
+      const statutBrut = extraireValeurChamp(c['Statut'], '');
+      const statut = partielle ? 'Réception partielle' : statutBrut;
+      const lieu = lieuCommandeReel(c['Lieu de réception']);
       const planX = parseFloat(c['Plan_X']);
       const planY = parseFloat(c['Plan_Y']);
       const aPlan = !isNaN(planX) && !isNaN(planY);
-      return { c, statut, lieu, planX, planY, aPlan, localisee: !!lieu || aPlan };
-    }).sort((a, b) => (b.localisee - a.localisee) || (b.c['Date commande'] || '').localeCompare(a.c['Date commande'] || ''));
+      const arrivee = partielle || STATUTS_COMMANDE_RECEPTIONNEE.includes(statutBrut);
+      return { c, statut, statutBrut, partielle, lieu, planX, planY, aPlan, arrivee, localisee: arrivee && (!!lieu || aPlan) };
+    }).sort((a, b) => (b.arrivee - a.arrivee) || (b.localisee - a.localisee) || (b.c['Date commande'] || '').localeCompare(a.c['Date commande'] || ''));
     _commandesAffectationCache = infos;
 
-    const nbLocalisees = infos.filter(i => i.localisee).length;
-    const resume = `<div style="font-size:12px;font-weight:700;color:${nbLocalisees ? '#4a7c3f' : '#a5761f'};margin-bottom:6px">${nbLocalisees ? `📍 ${nbLocalisees} commande${nbLocalisees > 1 ? 's' : ''} localisée${nbLocalisees > 1 ? 's' : ''}` : 'Aucune commande localisée pour le moment'}${infos.length - nbLocalisees ? ` · ${infos.length - nbLocalisees} pas encore arrivée${infos.length - nbLocalisees > 1 ? 's' : ''}` : ''}</div>`;
+    const nbArrivees = infos.filter(i => i.arrivee).length;
+    const nbAttente = infos.length - nbArrivees;
+    const resume = `<div style="font-size:12px;font-weight:700;color:${nbArrivees ? '#4a7c3f' : '#a5761f'};margin-bottom:6px">${nbArrivees ? `📦 ${nbArrivees} commande${nbArrivees > 1 ? 's' : ''} réceptionnée${nbArrivees > 1 ? 's' : ''}` : 'Aucune commande réceptionnée pour le moment'}${nbAttente ? ` · ${nbAttente} en attente` : ''}</div>`;
 
     return resume + infos.map((i, idx) => {
       const c = i.c;
@@ -4685,14 +4696,22 @@
       const refCmd = String(c['Reference complete'] || '').trim();
       const description = refCmd ? `<div style="margin-top:3px;font-size:13px;font-weight:700;color:#3a3530;word-break:break-word">📝 ${echapperHTMLAff(refCmd)}</div>` : '';
       let emplacement;
-      if (i.localisee) {
-        emplacement = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-          <div style="flex:1;min-width:0;padding:8px 12px;border-radius:10px;background:#e8f0e7;border:1.5px solid #c5d9c3;font-size:15px;font-weight:800;color:#2f5a27">📍 ${echapperHTMLAff(i.lieu || 'Point sur le plan')}</div>
-          ${i.aPlan ? `<button type="button" onclick="voirEmplacementCommandeAffectation(${idx})" style="background:var(--vert);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap">🗺️ Plan</button>` : ''}
-        </div>`;
-      } else {
+      if (!i.arrivee) {
         const prevue = c['Date reception prevue'] ? ' · prévue le ' + new Date(c['Date reception prevue'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
         emplacement = `<div style="margin-top:6px;font-size:12px;font-weight:600;color:#aaa">⏳ Pas encore réceptionnée${prevue}</div>`;
+      } else {
+        let ou, couleur = '#2f5a27', fond = '#e8f0e7', bord = '#c5d9c3';
+        if (i.statutBrut === 'Envoyé sur chantier') { ou = '🚚 Partie sur chantier'; couleur = '#7c5200'; fond = '#fdf3e1'; bord = '#ecd3a5'; }
+        else if (i.statutBrut === 'Réceptionné sur chantier' || i.statutBrut === 'Livrée') ou = '✅ Sur chantier';
+        else if (i.statutBrut === 'Facturée') ou = '✅ Réceptionnée';
+        else ou = '🏭 À l\'atelier';
+        if (i.partielle) { ou = '⚠️ Réception partielle'; couleur = '#a2560f'; fond = '#fdf0e3'; bord = '#f0cfa8'; }
+        const detailLieu = i.lieu ? ' · 📍 ' + echapperHTMLAff(i.lieu)
+          : (i.aPlan ? ' · 📍 point sur le plan' : (i.statutBrut === 'Réceptionné en atelier' || i.partielle ? ' · emplacement non précisé' : ''));
+        emplacement = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+          <div style="flex:1;min-width:0;padding:8px 12px;border-radius:10px;background:${fond};border:1.5px solid ${bord};font-size:14px;font-weight:800;color:${couleur}">${ou}<span style="font-weight:700">${detailLieu}</span></div>
+          ${i.aPlan ? `<button type="button" onclick="voirEmplacementCommandeAffectation(${idx})" style="background:var(--vert);color:#fff;border:none;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap">🗺️ Plan</button>` : ''}
+        </div>`;
       }
       return `<div style="${idx ? 'border-top:1px solid #eee;' : ''}padding:9px 0">${entete}${description}${emplacement}</div>`;
     }).join('');
