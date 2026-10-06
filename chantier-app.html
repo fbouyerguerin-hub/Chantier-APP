@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V3';
+  const APP_VERSION = 'V5';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -9010,7 +9010,7 @@
         const tr = document.createElement('tr');
         // Cellule nom
         const tdNom = document.createElement('td');
-        tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:2;vertical-align:middle;min-width:80px';
+        tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:2;vertical-align:middle;min-width:80px;padding-top:6px';
         const chData = dataChantiers.results.find(r => r.id === chantier.id);
         const fichiers = chData?.['Fichiers'] || [];
         const nomDiv = document.createElement('div');
@@ -9021,22 +9021,31 @@
           nomDiv.onclick = e => { e.stopPropagation(); ouvrirModalChangerChantier(chantier); };
         }
         tdNom.appendChild(nomDiv);
-        if (isGestAdmin && chantiersAvecCommandesCollectif.has(chantier.id)) {
-          const btnCommandes = document.createElement('span');
-          btnCommandes.textContent = '📦';
-          btnCommandes.title = 'Voir les commandes de ce chantier';
-          btnCommandes.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin:2px 0 0 2px;font-size:18px;line-height:1;background:#fff;border:1px solid #e0d6c4;border-radius:6px;cursor:pointer;vertical-align:middle;touch-action:manipulation';
-          btnCommandes.onclick = e => { e.stopPropagation(); ouvrirCommandesChantier(chantier.id, chantier.nom); };
-          tdNom.appendChild(btnCommandes);
-        }
+        // Ligne unique : statut + 📦 commandes + 📎 pièces jointes + ☑️ tâches
+        const barreIcones = document.createElement('div');
+        barreIcones.style.cssText = 'display:flex;align-items:center;gap:3px;margin-top:3px;flex-wrap:nowrap';
+        const icoBtn = (emoji, titre, style) => {
+          const bt = document.createElement('span');
+          bt.textContent = emoji; bt.title = titre;
+          bt.style.cssText = 'position:relative;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:28px;height:28px;font-size:16px;line-height:1;border-radius:6px;cursor:pointer;touch-action:manipulation;' + (style || 'background:#fff;border:1px solid #e0d6c4');
+          return bt;
+        };
+        const pastille = (bt, txt, fond) => {
+          const pa = document.createElement('span');
+          pa.textContent = txt;
+          pa.style.cssText = 'position:absolute;top:-5px;right:-5px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:' + fond + ';color:#fff;font-size:8px;font-weight:800;line-height:14px;text-align:center;box-sizing:border-box;pointer-events:none';
+          bt.appendChild(pa);
+        };
         // Badge statut + select inline
         const statutWrap = document.createElement('div');
-        statutWrap.style.cssText = 'margin-top:2px';
+        statutWrap.style.cssText = 'display:inline-flex;align-items:center;flex:0 0 auto';
         const statutColors = { 'En cours': { bg: '#e8f5e4', color: '#2d6a1f', label: '🟢' }, 'En pause': { bg: '#fff8e1', color: '#b45309', label: '🟡' }, 'Terminé': { bg: '#f0f0f0', color: '#666', label: '⚫' } };
         const sc = statutColors[chantier.statue] || { bg: '#eee', color: '#888', label: '⬜' };
         if (isGestAdmin) {
           const sel = document.createElement('select');
-          sel.style.cssText = 'font-size:8px;padding:2px 3px;border-radius:4px;border:1px solid ' + sc.color + ';background:' + sc.bg + ';color:' + sc.color + ';font-weight:700;cursor:pointer;max-width:72px;outline:none';
+          // Sélecteur réduit à la pastille de couleur (la liste complète s'affiche à l'ouverture)
+          sel.style.cssText = 'width:28px;height:28px;font-size:15px;padding:0 0 0 5px;text-align:left;-webkit-appearance:none;-moz-appearance:none;appearance:none;border-radius:6px;border:1px solid ' + sc.color + ';background:' + sc.bg + ';color:' + sc.color + ';cursor:pointer;outline:none;overflow:hidden;text-indent:0;touch-action:manipulation';
+          sel.title = 'Statut : ' + chantier.statue;
           [['En cours','🟢 En cours'],['En pause','🟡 Pause'],['Terminé','⚫ Terminé']].forEach(([v,l]) => {
             const opt = document.createElement('option');
             opt.value = v; opt.textContent = l;
@@ -9053,60 +9062,69 @@
               const cached = (dataChantiersCached?.results || []).find(r => r.id === chantier.id);
               if (cached) cached['Statue'] = { value: newStatut };
               const sc2 = statutColors[newStatut] || { bg: '#eee', color: '#888' };
-              sel.style.borderColor = sc2.color; sel.style.background = sc2.bg; sel.style.color = sc2.color;
+              sel.style.borderColor = sc2.color; sel.style.background = sc2.bg; sel.style.color = sc2.color; sel.title = 'Statut : ' + newStatut;
             } catch(err) { alert('Erreur mise à jour statut : ' + err.message); sel.value = chantier.statue; }
           };
           statutWrap.appendChild(sel);
         } else {
           const badge = document.createElement('span');
           badge.style.cssText = 'font-size:8px;padding:1px 4px;border-radius:4px;background:' + sc.bg + ';color:' + sc.color + ';font-weight:700';
-          badge.textContent = sc.label + ' ' + chantier.statue;
+          badge.textContent = sc.label;
+          badge.title = 'Statut : ' + chantier.statue;
+          badge.style.fontSize = '14px'; badge.style.padding = '2px 4px';
           statutWrap.appendChild(badge);
         }
-        tdNom.appendChild(statutWrap);
-        if (fichiers.length) {
+        barreIcones.appendChild(statutWrap);
+        if (isGestAdmin && chantiersAvecCommandesCollectif.has(chantier.id)) {
+          const btnCommandes = icoBtn('📦', 'Voir les commandes de ce chantier');
+          btnCommandes.onclick = e => { e.stopPropagation(); ouvrirCommandesChantier(chantier.id, chantier.nom); };
+          barreIcones.appendChild(btnCommandes);
+        }
+        let pjListe = null;
+        if (fichiers.length || isGestAdmin) {
           const pjId = 'pj-chantier-' + chantier.id;
-          const pjToggle = document.createElement('div');
-          pjToggle.style.cssText = 'margin-top:2px;cursor:pointer;font-size:8px;color:var(--vert);font-weight:700;background:rgba(11,60,30,0.08);border-radius:4px;padding:2px 4px;white-space:nowrap';
-          pjToggle.textContent = '📎 ' + fichiers.length + ' fichier' + (fichiers.length > 1 ? 's' : '') + ' ▾';
-          pjToggle.onclick = e => { e.stopPropagation(); toggleAbsents(pjId); };
-          tdNom.appendChild(pjToggle);
-          const pjListe = document.createElement('div');
-          pjListe.id = pjId;
-          pjListe.style.cssText = 'display:none;margin-top:2px';
-          fichiers.forEach(f => {
-            const a = document.createElement('a');
-            a.href = f.url; a.target = '_blank';
-            a.style.cssText = 'display:block;font-size:8px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:75px';
-            a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
-            a.onclick = e => e.stopPropagation();
-            pjListe.appendChild(a);
-          });
-          tdNom.appendChild(pjListe);
+          const btnPJ = icoBtn('📎', fichiers.length ? fichiers.length + ' fichier(s) — afficher' : 'Ajouter une pièce jointe',
+            fichiers.length ? 'background:rgba(11,60,30,0.08);border:1px solid var(--vert)' : 'background:#f0f7ef;border:1px dashed var(--vert)');
+          if (fichiers.length) pastille(btnPJ, String(fichiers.length), 'var(--vert)');
+          btnPJ.onclick = e => { e.stopPropagation(); if (fichiers.length) toggleAbsents(pjId); else ouvrirModalPJ(chantier); };
+          barreIcones.appendChild(btnPJ);
+          if (fichiers.length) {
+            pjListe = document.createElement('div');
+            pjListe.id = pjId;
+            pjListe.style.cssText = 'display:none;margin-top:3px';
+            fichiers.forEach(f => {
+              const a = document.createElement('a');
+              a.href = f.url; a.target = '_blank';
+              a.style.cssText = 'display:block;font-size:9px;color:var(--vert);text-decoration:underline;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px';
+              a.textContent = '📎 ' + (f.visible_name || f.name || 'Fichier');
+              a.onclick = e => e.stopPropagation();
+              pjListe.appendChild(a);
+            });
+            if (isGestAdmin) {
+              const ajout = document.createElement('a');
+              ajout.href = '#'; ajout.textContent = '+ Ajouter / gérer';
+              ajout.style.cssText = 'display:block;font-size:9px;color:var(--vert);font-weight:800;margin-top:3px';
+              ajout.onclick = e => { e.preventDefault(); e.stopPropagation(); ouvrirModalPJ(chantier); };
+              pjListe.appendChild(ajout);
+            }
+          }
         }
         {
           const tachesCh = parseTachesPlanning(chData?.[CHAMP_TACHES_CHANTIER]);
           if (isGestAdmin || tachesCh.length) {
             const toutFait = tachesCh.length && tachesCh.every(x => x.ok);
-            const btnTaches = document.createElement('button');
-            btnTaches.textContent = tachesCh.length ? '☑️ ' + resumeTaches(tachesCh) + ' tâche(s)' : '☑️ + tâches';
-            btnTaches.title = 'Tâches du chantier (visibles par les collaborateurs affectés)';
-            btnTaches.style.cssText = 'margin-top:4px;width:100%;font-size:9px;border-radius:4px;padding:4px 2px;cursor:pointer;font-weight:800;touch-action:manipulation;'
-              + (toutFait ? 'background:#e8f5e4;border:1px solid var(--vert);color:var(--vert)'
-                 : tachesCh.length ? 'background:#fff3e0;border:1px solid #e6a23c;color:#b45309'
-                 : 'background:#fafafa;border:1px dashed #ccc;color:#999');
+            const btnTaches = icoBtn('☑️', tachesCh.length ? 'Tâches du chantier : ' + resumeTaches(tachesCh) + ' faite(s)' : 'Ajouter des tâches au chantier',
+              toutFait ? 'background:#e8f5e4;border:1px solid var(--vert)'
+              : tachesCh.length ? 'background:#fff3e0;border:1px solid #e6a23c'
+              : 'background:#fafafa;border:1px dashed #ccc');
+            if (tachesCh.length) pastille(btnTaches, resumeTaches(tachesCh), toutFait ? 'var(--vert)' : '#e6a23c');
             btnTaches.onclick = e => { e.stopPropagation(); if (isGestAdmin) ouvrirTachesChantier(chantier); };
             if (!isGestAdmin) btnTaches.style.cursor = 'default';
-            tdNom.appendChild(btnTaches);
+            barreIcones.appendChild(btnTaches);
           }
         }
-        if (isGestAdmin) {
-          const btnPJ = document.createElement('button');
-          btnPJ.textContent = '+ 📎';
-          btnPJ.style.cssText = 'margin-top:4px;width:100%;font-size:8px;background:#f0f7ef;border:1px dashed var(--vert);border-radius:3px;color:var(--vert);padding:2px;cursor:pointer;font-weight:700';
-          btnPJ.onclick = e => { e.stopPropagation(); ouvrirModalPJ(chantier); };
-          tdNom.appendChild(btnPJ);
-        }
+        tdNom.appendChild(barreIcones);
+        if (pjListe) tdNom.appendChild(pjListe);
         tr.appendChild(tdNom);
 
         jours.forEach(j => {
