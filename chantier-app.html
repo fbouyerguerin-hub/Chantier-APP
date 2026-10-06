@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V64';
+  const APP_VERSION = 'V65';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12510,7 +12510,7 @@
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
         ${estOuvrage ? `<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
         ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
-        ${a ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
+        ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
       </div>`;
 
@@ -12593,8 +12593,47 @@
         </div>`;
     }).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune commande trouvée pour cet article.</div>';
 
-    // Mouvements et chantiers
-    if (a) {
+    // Ouvrage géré en kit : historique propre au kit (les mouvements sont portés
+    // par ses composants, avec la note « Kit CODE »)
+    if (estOuvrage) {
+      const prefixe = 'Kit ' + code;
+      const mvtsKit = (_mouvementsCache || []).filter(m => String(m['Note'] || '').startsWith(prefixe));
+      // Matériel actuellement sorti, par chantier (sorties − retours du kit)
+      const dehors = {};
+      mvtsKit.forEach(m => {
+        const t = m['Type']?.value || m['Type'] || '';
+        if ((t !== 'Sortie' && t !== 'Retour') || !m['Chantier']) return;
+        const aid = (m['Article'] || [])[0]?.id;
+        const d = dehors[m['Chantier']] || (dehors[m['Chantier']] = {});
+        d[aid] = (d[aid] || 0) - (Number(m['Quantite']) || 0);
+      });
+      const nomArt = id => { const y = (_articlesCache || []).find(z => z.id === id); return y ? (y['Designation'] || '?') : '?'; };
+      const chantiersDehors = Object.entries(dehors).map(([ch, d]) => [ch, Object.entries(d).filter(([, q]) => q > 0.0005)]).filter(([, l]) => l.length);
+      html += titreSection(`Matériel du kit actuellement sorti (${chantiersDehors.length} chantier${chantiersDehors.length > 1 ? 's' : ''})`);
+      html += chantiersDehors.length ? chantiersDehors.map(([ch, l]) => `<div style="background:#f6f3fb;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px">
+          <b>📍 ${esc(ch)}</b>
+          ${l.map(([id, q]) => `<div style="display:flex;justify-content:space-between;padding:2px 0"><span>${esc(nomArt(Number(id)))}</span><b>${fmtQte(q)}</b></div>`).join('')}
+        </div>`).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Tout le matériel du kit est à l\'atelier.</div>';
+      // Historique : une ligne par opération (même date, type, chantier, auteur)
+      const ops = {};
+      mvtsKit.forEach(m => {
+        const t = m['Type']?.value || m['Type'] || '';
+        const cle = [m['Date'] || '', t, m['Chantier'] || '', m['Par'] || ''].join('|');
+        const o = ops[cle] || (ops[cle] = { date: m['Date'] || '', type: t, chantier: m['Chantier'] || '', par: m['Par'] || '', lignes: [], maxId: 0 });
+        o.lignes.push({ nom: nomArt((m['Article'] || [])[0]?.id), q: Math.abs(Number(m['Quantite']) || 0) });
+        o.maxId = Math.max(o.maxId, m.id || 0);
+      });
+      const liste = Object.values(ops).sort((p1, p2) => String(p2.date).localeCompare(String(p1.date)) || p2.maxId - p1.maxId);
+      html += titreSection(`Historique du kit (${liste.length})`);
+      html += liste.length ? liste.slice(0, 20).map(o => `<details style="border-bottom:1px solid #f4f4f4;padding:5px 0;font-size:12px">
+          <summary style="cursor:pointer;display:flex;justify-content:space-between;gap:8px">
+            <span>${o.type === 'Sortie' ? '➖ Sortie' : o.type === 'Retour' ? '↩️ Retour' : esc(o.type)} <span style="color:#999">· ${esc(String(o.date).split('-').reverse().join('/'))} · ${esc(o.chantier)}${o.par ? ' · ' + esc(o.par) : ''}</span></span>
+            <b style="white-space:nowrap">${o.lignes.length} composant(s)</b></summary>
+          ${o.lignes.map(l => `<div style="display:flex;justify-content:space-between;padding:2px 0 2px 14px;color:#555"><span>${esc(l.nom)}</span><span>${o.type === 'Sortie' ? '−' : '+'}${fmtQte(l.q)}</span></div>`).join('')}
+        </details>`).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune sortie ni retour enregistré pour ce kit.</div>';
+    }
+    // Mouvements et chantiers (articles ; pas pour un ouvrage, qui n'a pas de stock propre)
+    if (a && !estOuvrage) {
       const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id)
         .sort((p, q) => String(q['Date'] || '').localeCompare(String(p['Date'] || '')) || q.id - p.id);
       const parChantier = {};
