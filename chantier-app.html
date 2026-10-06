@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V55';
+  const APP_VERSION = 'V56';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11878,6 +11878,7 @@
   }
 
   function renderStock() {
+    setTimeout(rafraichirFicheArticleOuverte, 0);
     const listeEl = document.getElementById('stock-liste');
     if (!listeEl) return;
     const recherche = normTexte(document.getElementById('stock-recherche')?.value || '');
@@ -11966,7 +11967,7 @@
     return `<div id="art-carte-${a.id}" style="background:#fff;border:1px solid ${sousMini ? '#f5c6c0' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px;transition:box-shadow .3s">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
         <div style="min-width:0">
-          <div style="font-size:13px;font-weight:700;color:var(--gris)">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
+          <div onclick="ouvrirFicheArticleModal(${a.id})" style="font-size:13px;font-weight:700;color:var(--gris);cursor:pointer;text-decoration:underline;text-decoration-color:#ddd;text-underline-offset:3px">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
           ${sousTitre ? `<div style="font-size:10px;color:#999;margin-top:2px">${sousTitre}</div>` : ''}
           ${(() => { const p = estProfilPrix() ? prixArticle(a) : null; return p ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(p)} HT / ${echapperHtmlNote(a['Unite'] || 'u')}${qte > 0 ? ' · valeur stock ' + fmtEur(qte * p) : ''}</div>` : ''; })()}
           ${(() => { const re = reemploiDisponible(a); return re ? `<div style="display:inline-block;margin-top:4px;padding:2px 8px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:10px;font-weight:800">↩️ Réemploi : ${fmtQte(re.qte)} revenu(s) de ${echapperHtmlNote(re.chantiers.slice(0, 2).join(', '))}${re.chantiers.length > 2 ? '…' : ''}${re.derniere ? ' · ' + re.derniere.split('-').reverse().join('/') : ''}</div>` : ''; })()}
@@ -12187,6 +12188,149 @@
 
   // Scan d'une étiquette article : onglet Stock atelier, filtré sur l'article,
   // fiche mise en évidence (sortie, retour, inventaire, historique à portée).
+  // ============================================================
+  // FICHE ARTICLE : toutes les informations d'un article réunies
+  // Infos EBP (catalogue, à jour de la synchro) + stock atelier (quantité,
+  // emplacement, mini, réemploi) + commandes en cours + derniers mouvements +
+  // chantiers consommateurs. Prix et valeurs : Administrateur / Gestionnaire.
+  // Fonctionne aussi pour un article du catalogue EBP pas encore suivi au stock.
+  // ============================================================
+  let _ficheArticle = null; // { id, code }
+  async function ouvrirFicheArticleModal(articleId, code) {
+    const a = articleId ? (_articlesCache || []).find(x => x.id === articleId) : null;
+    _ficheArticle = { id: a ? a.id : null, code: String((a && a['Code EBP']) || code || '').trim() };
+    document.getElementById('modal-fiche-article').style.display = 'flex';
+    renderFicheArticle();
+    // données complémentaires chargées en arrière-plan, puis fiche rafraîchie
+    const attentes = [chargerCatalogueLocal().catch(() => {})];
+    if (stockTablesConfigurees() && !_stockCharge) attentes.push(chargerStock().catch(() => {}));
+    if (!(_commandesCache || []).length) attentes.push(chargerCommandesPage().catch(() => {}));
+    await Promise.all(attentes);
+    if (_ficheArticle && !_ficheArticle.id && _ficheArticle.code) {
+      const trouve = (_articlesCache || []).find(x => normRef(x['Code EBP']) === normRef(_ficheArticle.code));
+      if (trouve) _ficheArticle.id = trouve.id;
+    }
+    renderFicheArticle();
+  }
+  function fermerFicheArticle() {
+    document.getElementById('modal-fiche-article').style.display = 'none';
+    _ficheArticle = null;
+  }
+  function rafraichirFicheArticleOuverte() {
+    if (_ficheArticle && document.getElementById('modal-fiche-article')?.style.display === 'flex') renderFicheArticle();
+  }
+  function renderFicheArticle() {
+    const el = document.getElementById('fiche-article-contenu');
+    if (!el || !_ficheArticle) return;
+    const esc = echapperHtmlNote;
+    const a = _ficheArticle.id ? (_articlesCache || []).find(x => x.id === _ficheArticle.id) : null;
+    const code = _ficheArticle.code;
+    const x = (_catLocal && code) ? _catLocal.parCode.get(normRef(code)) : null;
+    const prive = estProfilPrix();
+    const gestion = peutGererStock();
+    const designation = (x && x.designation) || (a && a['Designation']) || code || 'Article';
+    const champ = (lib, val) => val ? `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid #f4f4f4;font-size:12px"><span style="color:#999">${lib}</span><span style="font-weight:700;color:var(--gris);text-align:right">${val}</span></div>` : '';
+    const titreSection = t => `<div style="font-size:11px;font-weight:800;color:var(--vert);text-transform:uppercase;letter-spacing:.4px;margin:16px 0 6px">${t}</div>`;
+    const prix = (x && Number(x.prix) > 0) ? Number(x.prix) : (a ? prixArticle(a) : null);
+    const unite = (x && x.unite) || (a && a['Unite']) || 'u';
+    let html = `<div style="font-size:18px;font-weight:800;color:var(--gris);line-height:1.25">${esc(designation)}</div>
+      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+        ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
+        ${a ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
+        ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
+      </div>`;
+
+    // Informations EBP
+    html += titreSection('Informations EBP');
+    html += champ('Fournisseur', esc((x && x.fournisseur) || (a && a['Fournisseur']) || ''))
+      + champ('Référence fournisseur', esc((x && x.ref) || (a && a['Reference fournisseur']) || ''))
+      + champ('Famille', esc((x && x.famille) || (a && a['Famille']) || ''))
+      + champ('Unité', esc(unite))
+      + (prive && prix ? champ('Prix d\'achat HT', `<span style="color:#2e7d32">${fmtEur(prix)} / ${esc(unite)}</span>`) : '');
+    if (!x && code) html += `<div style="font-size:11px;color:#999;padding:4px 0">${_catLocal ? 'Article absent du catalogue EBP actif (inactif ou supprimé dans EBP ?).' : '⏳ Lecture du catalogue EBP…'}</div>`;
+    if (!code) html += '<div style="font-size:11px;color:#999;padding:4px 0">Article créé hors EBP : aucune information EBP disponible.</div>';
+
+    // Stock atelier
+    html += titreSection('Stock atelier');
+    if (a) {
+      const qte = _stockParArticle[a.id] || 0;
+      const mini = (a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined) ? Number(a['Stock mini']) : null;
+      const sousMini = mini !== null && qte <= mini;
+      const px = parseFloat(a['Plan_X']), py = parseFloat(a['Plan_Y']);
+      const re = reemploiDisponible(a);
+      html += `<div style="display:flex;gap:8px;margin-bottom:6px">
+          <div style="flex:1;background:${sousMini ? '#fdecea' : '#e8f0e7'};border-radius:10px;padding:10px;text-align:center">
+            <div style="font-size:24px;font-weight:800;color:${qte <= 0 ? '#999' : sousMini ? '#c0392b' : 'var(--vert)'}">${fmtQte(qte)}</div>
+            <div style="font-size:10px;color:#777">${esc(unite)} en stock${sousMini ? ' · ⚠️ sous le mini' : ''}</div></div>
+          ${prive && prix ? `<div style="flex:1;background:#f6f6f6;border-radius:10px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--gris)">${fmtEur(Math.max(0, qte) * prix)}</div><div style="font-size:10px;color:#777">valeur du stock</div></div>` : ''}
+        </div>`
+        + champ('Emplacement', libelleEmplacement(a) ? '📍 ' + esc(libelleEmplacement(a)) : '<span style="color:#c0392b">non renseigné</span>')
+        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(unite) : '—')
+        + (re ? champ('Réemploi', `<span style="color:#7c5200">↩️ ${fmtQte(re.qte)} revenu(s) de ${esc(re.chantiers.slice(0, 2).join(', '))}</span>`) : '')
+        + (!isNaN(px) && !isNaN(py) ? `<button onclick="voirArticleSurPlan(${a.id})" style="margin-top:6px;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🗺️ Voir sur le plan</button>` : '');
+      const b = (label, action, fond = 'var(--beige-clair)', coul = 'var(--gris)') => `<button onclick="${action}" style="flex:1 1 30%;background:${fond};color:${coul};border:none;border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer">${label}</button>`;
+      html += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          ${gestion ? b('➕ Entrée', `ouvrirMouvementStock(${a.id},'Entrée')`, '#e8f0e7', 'var(--vert)') : ''}
+          ${b('➖ Sortie', `ouvrirMouvementStock(${a.id},'Sortie')`)}
+          ${b('↩️ Retour', `ouvrirMouvementStock(${a.id},'Retour')`)}
+          ${gestion ? b('📋 Inventaire', `ouvrirMouvementStock(${a.id},'Inventaire')`) : ''}
+          ${gestion ? b('✏️ Modifier', `ouvrirEditionArticle(${a.id})`) : ''}
+          ${gestion && aCodeEbp(a) ? b('🏷️ Étiquette', `imprimerEtiquettesArticles([${a.id}])`) : ''}
+        </div>`;
+    } else {
+      html += `<div style="font-size:12px;color:#777;padding:4px 0 8px">Cet article n'est pas encore suivi au stock atelier.</div>`
+        + (gestion && code ? `<div style="display:flex;gap:6px">
+            <button onclick="fermerFicheArticle(); creerArticleDepuisCatalogue('${esc(code).replace(/'/g, "\\'")}', 'entree')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer">➕ Entrée en stock</button>
+            <button onclick="fermerFicheArticle(); creerArticleDepuisCatalogue('${esc(code).replace(/'/g, "\\'")}')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer">📍 Définir emplacement</button>
+          </div>` : '');
+    }
+
+    // Commandes en cours / récentes contenant l'article
+    const lignesCmd = [];
+    Object.keys(_commandesLignesCache || {}).forEach(cid => {
+      (_commandesLignesCache[cid] || []).forEach(l => {
+        const memeArticle = (code && normRef(codeArticleLigne(l)) === normRef(code)) || (a && trouverArticlePourLigne(l)?.id === a.id);
+        if (!memeArticle) return;
+        const r = trouverCommandeParCode('CMD-' + cid);
+        if (r) lignesCmd.push({ r, l });
+      });
+    });
+    lignesCmd.sort((p, q) => String(q.r['Date commande'] || '').localeCompare(String(p.r['Date commande'] || '')));
+    html += titreSection(`Commandes (${lignesCmd.length})`);
+    html += lignesCmd.length ? lignesCmd.slice(0, 10).map(({ r, l }) => {
+      const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
+      return `<div onclick="fermerFicheArticle(); ouvrirScanInfo('CMD-${r.id}')" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:12px">
+          <span><b>${esc(r['Numero commande'] || '')}</b> <span style="color:#999">· ${esc(r['Fournisseur'] || '')} · ${esc((r['Chantier'] || [])[0]?.value || 'stock')}</span></span>
+          <span style="white-space:nowrap;text-align:right">${fmtQte(l['Quantite'])} ${esc(l['Unite'] || '')}<br><span style="font-size:10px;color:${couleurStatutCommande(statut)}">${esc(statut)}</span></span>
+        </div>`;
+    }).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune commande trouvée pour cet article.</div>';
+
+    // Mouvements et chantiers
+    if (a) {
+      const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id)
+        .sort((p, q) => String(q['Date'] || '').localeCompare(String(p['Date'] || '')) || q.id - p.id);
+      const parChantier = {};
+      mvts.forEach(m => {
+        const t = m['Type']?.value || m['Type'] || '';
+        if ((t === 'Sortie' || t === 'Retour') && m['Chantier']) parChantier[m['Chantier']] = (parChantier[m['Chantier']] || 0) - (Number(m['Quantite']) || 0);
+      });
+      const chantiers = Object.entries(parChantier).filter(([, q]) => Math.abs(q) > 0.0005).sort((p, q) => q[1] - p[1]);
+      html += titreSection(`Chantiers consommateurs (${chantiers.length})`);
+      html += chantiers.length ? chantiers.slice(0, 10).map(([n, q]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f4f4f4;font-size:12px"><span>${esc(n)}</span><b>${fmtQte(q)} ${esc(unite)}</b></div>`).join('')
+        : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune sortie vers un chantier.</div>';
+      html += titreSection(`Derniers mouvements (${mvts.length})`);
+      const icone = { 'Entrée': '➕', 'Sortie': '➖', 'Retour': '↩️', 'Inventaire': '📋' };
+      html += mvts.length ? mvts.slice(0, 15).map(m => {
+        const t = m['Type']?.value || m['Type'] || '';
+        const q = Number(m['Quantite']) || 0;
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid #f4f4f4;font-size:12px">
+            <span>${icone[t] || '•'} ${esc(t)} <span style="color:#999">· ${esc(String(m['Date'] || '').split('-').reverse().join('/'))}${m['Chantier'] ? ' · ' + esc(m['Chantier']) : ''}${m['Par'] ? ' · ' + esc(m['Par']) : ''}</span></span>
+            <b style="color:${q < 0 ? '#c0392b' : 'var(--vert)'};white-space:nowrap">${q > 0 ? '+' : ''}${fmtQte(q)}</b></div>`;
+      }).join('') : '<div style="font-size:12px;color:#999;padding:4px 0">Aucun mouvement enregistré.</div>';
+    }
+    el.innerHTML = html;
+  }
+
   // Onglet Stock atelier avec une recherche (article pas encore au stock → carte catalogue EBP)
   async function ouvrirRechercheStock(texte) {
     try { await arreterCamera(); } catch (e) {}
@@ -12207,6 +12351,7 @@
     const modal = document.getElementById('modal-scan-stock');
     if (modal) modal.style.display = 'none';
     _panierSortie = [];
+    ouvrirFicheArticleModal(a.id);
     if (currentNav !== 'commandes') switchPage('commandes');
     _stockFiltre = 'tous';
     const r = document.getElementById('stock-recherche');
@@ -12261,7 +12406,9 @@
         code = codeBarreArticle(aStock); // traité ensuite comme un scan d'article (fiche, ou panier de sortie)
       } else if (_scanMode === 'info' && l && codeArticleLigne(l)) {
         bipScan(true);
-        ouvrirRechercheStock(codeArticleLigne(l)); // pas encore au stock : fiche catalogue EBP
+        try { arreterCamera(); } catch (e) {}
+        document.getElementById('modal-scan-stock').style.display = 'none';
+        ouvrirFicheArticleModal(null, codeArticleLigne(l)); // pas encore au stock : fiche à partir d'EBP
         return;
       } else if (_scanMode === 'info') {
         bipScan(true);
@@ -12289,7 +12436,7 @@
     if (!a) { bipScan(false); setMessageScan(`❌ Aucun article ni commande ne correspond au code « ${code} » (article pas encore suivi au stock ?)`, '#c0392b'); return; }
     if (_scanMode === 'info') {
       bipScan(true);
-      ouvrirFicheArticle(a.id); // directement sur sa fiche dans Stock atelier
+      ouvrirFicheArticle(a.id); // directement sur sa fiche article
       return;
     }
     const ligne = _panierSortie.find(p => p.articleId === a.id);
@@ -13314,7 +13461,7 @@
     return `<div style="background:#fafafa;border:1px dashed #ddd;border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
         <div style="min-width:0">
-          <div style="font-size:13px;font-weight:700;color:var(--gris-moyen)">${echapperHtmlNote(x.designation || x.code)}</div>
+          <div onclick="ouvrirFicheArticleModal(null, '${codeJs}')" style="font-size:13px;font-weight:700;color:var(--gris-moyen);cursor:pointer;text-decoration:underline;text-decoration-color:#ddd;text-underline-offset:3px">${echapperHtmlNote(x.designation || x.code)}</div>
           ${sous ? `<div style="font-size:10px;color:#999;margin-top:2px">${sous}</div>` : ''}
           ${estProfilPrix() && Number(x.prix) > 0 ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(x.prix)} HT / ${echapperHtmlNote(x.unite || 'u')}</div>` : ''}
         </div>
@@ -20412,6 +20559,16 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-fiche-article" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:455;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerFicheArticle()">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:640px;max-height:94vh;display:flex;flex-direction:column;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px;border-bottom:1px solid #f0f0f0">
+      <div style="font-size:12px;font-weight:800;color:#999;text-transform:uppercase;letter-spacing:.5px">📦 Fiche article</div>
+      <button onclick="fermerFicheArticle()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div id="fiche-article-contenu" style="overflow-y:auto;padding:12px 16px 18px"></div>
+  </div>
+</div>
+
 <div id="modal-etiq-catalogue" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:460;align-items:flex-end;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:620px;max-height:92vh;display:flex;flex-direction:column;padding:16px;box-sizing:border-box;gap:8px">
     <div style="display:flex;justify-content:space-between;align-items:center">
