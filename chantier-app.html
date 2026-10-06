@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V3';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -9025,7 +9025,7 @@
           const btnCommandes = document.createElement('span');
           btnCommandes.textContent = '📦';
           btnCommandes.title = 'Voir les commandes de ce chantier';
-          btnCommandes.style.cssText = 'cursor:pointer;margin-left:2px';
+          btnCommandes.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;margin:2px 0 0 2px;font-size:18px;line-height:1;background:#fff;border:1px solid #e0d6c4;border-radius:6px;cursor:pointer;vertical-align:middle;touch-action:manipulation';
           btnCommandes.onclick = e => { e.stopPropagation(); ouvrirCommandesChantier(chantier.id, chantier.nom); };
           tdNom.appendChild(btnCommandes);
         }
