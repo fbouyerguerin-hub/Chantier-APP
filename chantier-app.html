@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V54';
+  const APP_VERSION = 'V55';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11916,18 +11916,35 @@
     // Résultats du catalogue EBP complet (Worker) absents de la table Articles
     const qActuelle = (document.getElementById('stock-recherche')?.value || '').trim();
     let htmlCatalogue = '';
+    let catalogueVide = false; // recherche catalogue terminée, sans résultat nouveau
+    const qEsc = echapperHtmlNote(qActuelle);
+    const boite = (icone, titre, texte, couleur = '#666', fond = '#f6f6f6') =>
+      `<div style="background:${fond};border-radius:10px;padding:14px;margin:8px 0;text-align:center;color:${couleur}">
+         <div style="font-size:22px">${icone}</div>
+         <div style="font-size:13px;font-weight:800;margin:4px 0">${titre}</div>
+         <div style="font-size:11px;line-height:1.5">${texte}</div></div>`;
     if (mots.length && _stockFiltre === 'tous' && qActuelle.length >= 2) {
       if (_catalogueResultats.q === qActuelle) {
         const connus = new Set(_articlesCache.map(a => normRef(a['Code EBP'])).filter(Boolean));
         const autres = _catalogueResultats.items.filter(x => !connus.has(normRef(x.code)));
         if (autres.length) htmlCatalogue = `<div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;margin:12px 0 6px">Catalogue EBP (${autres.length}${autres.length >= 30 ? '+' : ''})</div>` + autres.map(renderCarteCatalogue).join('');
-        else if (_catalogueResultats.erreur) htmlCatalogue = '<div style="color:#c0392b;font-size:11px;text-align:center;padding:8px">Catalogue EBP indisponible pour le moment.</div>';
+        else if (_catalogueResultats.erreur) htmlCatalogue = boite('⚠️', 'Catalogue EBP indisponible',
+          `Seuls les articles du stock ont été cherchés (connexion ?).<br><button onclick="_catalogueResultats={q:'',items:[]}; chargerCatalogueLocal(true).catch(()=>{}).finally(()=>{ programmerRechercheCatalogue(); renderStock(); })" style="margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer">🔄 Réessayer</button>`, '#a35a00', '#fff3e0');
+        else catalogueVide = true;
       } else htmlCatalogue = '<div style="color:#aaa;font-size:11px;text-align:center;padding:8px">⏳ Recherche dans le catalogue EBP…</div>';
     }
     if (!affiches.length) {
-      listeEl.innerHTML = (htmlCatalogue ? '' : `<div style="color:#aaa;font-size:12px;text-align:center;padding:14px">${mots.length || _stockFiltre !== 'tous' ? 'Aucun article en stock trouvé.' : 'Aucun article en stock. Tapez un mot pour chercher dans tout le catalogue EBP.'}</div>`) + htmlCatalogue;
+      const libFiltre = { mini: 'Sous le mini', sansemp: 'Sans emplacement', stock: 'En stock', reemploi: 'Réemploi chantier' }[_stockFiltre];
+      let msg = '';
+      if (catalogueVide) msg = boite('🔍', `Aucun article trouvé pour « ${qEsc} »`,
+        'Ni dans le stock atelier, ni dans le catalogue EBP (articles actifs).<br>Vérifiez l\'orthographe, ou essayez le code EBP ou la référence fournisseur.');
+      else if (!htmlCatalogue && libFiltre) msg = boite('📭', `Aucun article « ${libFiltre} »`, mots.length ? `Aucun article de ce filtre ne correspond à « ${qEsc} ».` : 'Aucun article ne correspond à ce filtre pour le moment.');
+      else if (!htmlCatalogue && mots.length) msg = boite('🔍', `Aucun article en stock pour « ${qEsc} »`, 'Tapez au moins 2 caractères pour chercher aussi dans le catalogue EBP.');
+      else if (!htmlCatalogue) msg = boite('📦', 'Aucun article en stock', 'Tapez un mot (désignation, code EBP, référence) pour chercher dans tout le catalogue EBP.');
+      listeEl.innerHTML = msg + htmlCatalogue;
       return;
     }
+    if (catalogueVide) htmlCatalogue = `<div style="color:#999;font-size:11px;text-align:center;padding:8px">Aucun autre article dans le catalogue EBP pour « ${qEsc} ».</div>`;
     listeEl.innerHTML = affiches.map(renderCarteArticle).join('') +
       (total > affiches.length ? `<div style="color:#aaa;font-size:11px;text-align:center;padding:8px">${total - affiches.length} autre(s) article(s) — affinez la recherche.</div>` : '') + htmlCatalogue;
   }
@@ -12269,7 +12286,7 @@
       return;
     }
     const a = trouverArticleParCode(code);
-    if (!a) { bipScan(false); setMessageScan(`❌ Code inconnu : ${code}`, '#c0392b'); return; }
+    if (!a) { bipScan(false); setMessageScan(`❌ Aucun article ni commande ne correspond au code « ${code} » (article pas encore suivi au stock ?)`, '#c0392b'); return; }
     if (_scanMode === 'info') {
       bipScan(true);
       ouvrirFicheArticle(a.id); // directement sur sa fiche dans Stock atelier
