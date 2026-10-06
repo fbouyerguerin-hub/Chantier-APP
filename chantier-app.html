@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V60';
+  const APP_VERSION = 'V61';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11874,6 +11874,7 @@
     (_mouvementsCache || []).forEach(m => {
       const type = m['Type']?.value || m['Type'] || '';
       if (type !== 'Retour') return;
+      if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel de kit interne, pas du réemploi
       const aid = (m['Article'] || [])[0]?.id; if (!aid) return;
       const x = idx[aid] || (idx[aid] = { qte: 0, chantiers: new Set(), derniere: '' });
       x.qte += Number(m['Quantite']) || 0;
@@ -11906,7 +11907,7 @@
     if (!listeEl) return;
     const recherche = normTexte(document.getElementById('stock-recherche')?.value || '');
     const mots = recherche.split(' ').filter(Boolean);
-    let articles = _articlesCache.filter(a => a['Actif'] !== false);
+    let articles = _articlesCache.filter(a => a['Actif'] !== false && !estKit(a));
 
     if (mots.length) {
       articles = articles.filter(a => {
@@ -12212,6 +12213,184 @@
   // Scan d'une étiquette article : onglet Stock atelier, filtré sur l'article,
   // fiche mise en évidence (sortie, retour, inventaire, historique à portée).
   // ============================================================
+  // KITS INTERNES (ouvrages EBP de matériel pour les poseurs : échafaudage…)
+  // Un ouvrage devient « kit » quand un gestionnaire l'active depuis sa fiche :
+  // une fiche est créée dans Articles (Origine = « Kit ») pour porter
+  // l'étiquette QR. Scanner le kit ouvre cet écran :
+  //  • Sortie : chantier + composants pris (quantités) → sorties de stock ;
+  //  • Retour : chantier → composants encore sur ce chantier → retours en stock.
+  // Les mouvements portent la note « Kit CODE » (traçabilité).
+  // ============================================================
+  function estKit(a) { return !!a && (a['Origine'] || '') === 'Kit'; }
+  let _kit = null; // { id, code, designation, mode, chantier, sel: { articleId: qte } }
+  function chargerNomenclatureAsync(code) {
+    return new Promise(resolve => {
+      const n = _nomenclatures.get(code);
+      if (n && n !== 'chargement') return resolve(n);
+      chargerNomenclature(code);
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const m = _nomenclatures.get(code);
+        if ((m && m !== 'chargement') || Date.now() - t0 > 10000) { clearInterval(iv); resolve(m || { erreur: true }); }
+      }, 150);
+    });
+  }
+  async function activerKit(code) {
+    if (!peutGererStock()) return;
+    const x = _catLocal ? _catLocal.parCode.get(normRef(code)) : null;
+    const existant = (_articlesCache || []).find(a => normRef(a['Code EBP']) === normRef(code));
+    if (existant) {
+      if (!estKit(existant)) {
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${existant.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Origine': 'Kit' }) });
+        if (!r.ok) { alert('Activation refusée (' + r.status + ')'); return; }
+        existant['Origine'] = 'Kit';
+      }
+    } else {
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`, {
+        method: 'POST', headers: HEADERS,
+        body: JSON.stringify({ 'Designation': ((x && x.designation) || code).slice(0, 250), 'Code EBP': code, 'Unite': 'kit', 'Origine': 'Kit', 'Actif': true })
+      });
+      if (!r.ok) { alert('Création du kit refusée (' + r.status + ')'); return; }
+      _articlesCache.push(await r.json());
+    }
+    renderFicheArticle();
+    alert('🧰 Kit activé : imprimez son étiquette QR (bouton 🏷️) et collez-la sur le rangement du kit.');
+  }
+  async function ouvrirKit(articleId, mode) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    _kit = { id: a.id, code: String(a['Code EBP'] || '').trim(), designation: a['Designation'] || '', mode: mode || null, chantier: '', sel: {} };
+    document.getElementById('modal-kit').style.display = 'flex';
+    document.getElementById('kit-contenu').innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:16px">⏳ Chargement du kit…</div>';
+    if (fermerFicheArticle) try { fermerFicheArticle(); } catch (e) {}
+    await Promise.all([
+      chargerCatalogueLocal().catch(() => {}),
+      stockTablesConfigurees() ? chargerStock(true).catch(() => {}) : null,
+      chargerNomenclatureAsync(_kit.code)
+    ]);
+    // mode par défaut : retour si du matériel du kit est encore sur un chantier
+    if (!_kit.mode) _kit.mode = chantiersAvecKit().length ? 'retour' : 'sortie';
+    renderKit();
+  }
+  function fermerKit() { document.getElementById('modal-kit').style.display = 'none'; _kit = null; }
+  // Composants du kit suivis au stock (les autres ne peuvent pas sortir)
+  function composantsKit() {
+    const n = _nomenclatures.get(_kit.code);
+    const parCode = new Map((_articlesCache || []).filter(y => y['Code EBP'] && !estKit(y)).map(y => [normRef(y['Code EBP']), y]));
+    return ((n && n.composants) || []).filter(c => !c.non_inclus).map(c => ({ c, a: parCode.get(normRef(c.code)) || null }));
+  }
+  // Chantiers où des composants du kit sont sortis et pas encore revenus
+  function chantiersAvecKit() {
+    const ids = new Set(composantsKit().filter(x => x.a).map(x => x.a.id));
+    const noms = {};
+    (_mouvementsCache || []).forEach(m => {
+      const t = m['Type']?.value || m['Type'] || '';
+      if ((t !== 'Sortie' && t !== 'Retour') || !m['Chantier']) return;
+      if (!ids.has((m['Article'] || [])[0]?.id)) return;
+      noms[m['Chantier']] = true;
+    });
+    return Object.keys(noms).filter(n => soldesChantierStock(n).some(x => ids.has(x.articleId))).sort();
+  }
+  function kitMode(mode) { _kit.mode = mode; _kit.chantier = ''; _kit.sel = {}; renderKit(); }
+  function kitChantier(v) {
+    _kit.chantier = (v || '').trim();
+    _kit.sel = {};
+    if (_kit.mode === 'sortie') composantsKit().forEach(({ c, a }) => { if (a) _kit.sel[a.id] = 0; });
+    renderKit();
+  }
+  function kitQte(articleId, v, max) {
+    let q = parseFloat(String(v).replace(',', '.'));
+    if (isNaN(q) || q < 0) q = 0;
+    if (max !== undefined && q > max) q = max;
+    _kit.sel[articleId] = q;
+    renderKit();
+  }
+  function kitTout(oui) {
+    composantsKit().forEach(({ c, a }) => {
+      if (!a) return;
+      if (_kit.mode === 'sortie') _kit.sel[a.id] = oui ? c.quantite : 0;
+      else { const s = soldesChantierStock(_kit.chantier).find(x => x.articleId === a.id); _kit.sel[a.id] = oui && s ? s.solde : 0; }
+    });
+    renderKit();
+  }
+  function renderKit() {
+    const el = document.getElementById('kit-contenu');
+    if (!el || !_kit) return;
+    const esc = echapperHtmlNote;
+    const n = _nomenclatures.get(_kit.code);
+    let html = `<div style="font-size:18px;font-weight:800;color:var(--gris)">${esc(_kit.designation)}</div>
+      <div style="font-size:11px;color:#999;margin:2px 0 10px">Ouvrage EBP ${esc(_kit.code)}</div>`;
+    if (!n || n.erreur || !(n.composants || []).length) { el.innerHTML = html + '<div style="color:#a35a00;font-size:12px">⚠️ Nomenclature du kit indisponible.</div>'; return; }
+    const onglet = (m, lib) => `<button onclick="kitMode('${m}')" style="flex:1;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;background:${_kit.mode === m ? 'var(--vert)' : '#f1f5f9'};color:${_kit.mode === m ? '#fff' : 'var(--gris)'}">${lib}</button>`;
+    const enCours = chantiersAvecKit();
+    html += `<div style="display:flex;gap:6px;margin-bottom:10px">${onglet('sortie', '➖ Sortie vers un chantier')}${onglet('retour', `↩️ Retour atelier${enCours.length ? ' (' + enCours.length + ')' : ''}`)}</div>`;
+    // Chantier
+    if (_kit.mode === 'sortie') {
+      const noms = new Set();
+      (tableData['Chantiers'] || []).forEach(c => c.value && !normTexte(c.value).includes('stock atelier') && noms.add(c.value));
+      (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé' && c['Nom du chantier']) noms.add(c['Nom du chantier']); });
+      html += `<label style="font-size:11px;font-weight:700;color:#999">Chantier de destination</label>
+        <input list="kit-chantiers" value="${esc(_kit.chantier).replace(/"/g, '&quot;')}" onchange="kitChantier(this.value)" placeholder="Tapez un mot du chantier…" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;font-weight:700;margin:4px 0 10px" />
+        <datalist id="kit-chantiers">${[...noms].sort().map(x => `<option value="${esc(x).replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>`;
+    } else {
+      if (!enCours.length) { el.innerHTML = html + '<div style="background:#f6f6f6;border-radius:10px;padding:14px;text-align:center;color:#666;font-size:12px">📭 Aucun matériel de ce kit n\'est sorti sur un chantier.</div>'; return; }
+      html += `<label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px">${enCours.map(c => `<button onclick="kitChantier(this.dataset.c)" data-c="${esc(c).replace(/"/g, '&quot;')}" style="border:1.5px solid var(--vert);border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;background:${_kit.chantier === c ? 'var(--vert)' : '#fff'};color:${_kit.chantier === c ? '#fff' : 'var(--vert)'}">${esc(c)}</button>`).join('')}</div>`;
+    }
+    if (!_kit.chantier) { el.innerHTML = html + '<div style="font-size:12px;color:#999;text-align:center;padding:10px">Choisissez le chantier pour afficher les composants.</div>'; return; }
+    const soldes = _kit.mode === 'retour' ? soldesChantierStock(_kit.chantier) : [];
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:12px;font-weight:800;color:var(--gris)">${_kit.mode === 'sortie' ? 'Composants pris' : 'Composants qui reviennent'}</span>
+        <span><button onclick="kitTout(true)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">${_kit.mode === 'sortie' ? 'Kit complet' : 'Tout'}</button>
+        <button onclick="kitTout(false)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Aucun</button></span></div>`;
+    let nb = 0;
+    html += composantsKit().map(({ c, a }) => {
+      if (!a) return _kit.mode === 'retour' ? '' : `<div style="padding:7px 0;border-bottom:1px solid #f4f4f4;font-size:12px;color:#aaa">${esc(c.designation)} <span style="font-size:10px">· non suivi au stock</span></div>`;
+      const stock = _stockParArticle[a.id] || 0;
+      const solde = soldes.find(x => x.articleId === a.id)?.solde || 0;
+      if (_kit.mode === 'retour' && solde <= 0) return '';
+      const max = _kit.mode === 'sortie' ? undefined : solde;
+      const q = _kit.sel[a.id] || 0;
+      if (q > 0) nb++;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f4f4f4;${q > 0 ? 'background:#f4f8f3;' : ''}">
+          <input type="checkbox" ${q > 0 ? 'checked' : ''} onchange="kitQte(${a.id}, this.checked ? ${_kit.mode === 'sortie' ? c.quantite : solde} : 0${max !== undefined ? ', ' + max : ''})" style="width:20px;height:20px;accent-color:var(--vert);flex-shrink:0" />
+          <div style="flex:1;min-width:0;font-size:12px"><b style="color:var(--gris)">${esc(c.designation)}</b>
+            <div style="font-size:10px;color:#999">${_kit.mode === 'sortie' ? `kit : ${fmtQte(c.quantite)} ${esc(c.unite)} · stock : <span style="color:${stock < (q || c.quantite) ? '#c0392b' : 'var(--vert)'};font-weight:700">${fmtQte(stock)}</span>` : `sur le chantier : <b>${fmtQte(solde)}</b> ${esc(c.unite)}`}</div></div>
+          <input type="number" min="0" step="any" inputmode="decimal" value="${q || ''}" placeholder="0" onchange="kitQte(${a.id}, this.value${max !== undefined ? ', ' + max : ''})" style="width:62px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:800;text-align:right" />
+        </div>`;
+    }).join('');
+    html += `<button onclick="validerKit()" ${nb ? '' : 'disabled'} style="margin-top:12px;width:100%;background:var(--vert);opacity:${nb ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:800;cursor:pointer">${_kit.mode === 'sortie' ? `✅ Valider la sortie (${nb} composant${nb > 1 ? 's' : ''})` : `✅ Valider le retour (${nb} composant${nb > 1 ? 's' : ''})`}</button>`;
+    el.innerHTML = html;
+  }
+  async function validerKit() {
+    if (!_kit || !_kit.chantier) return;
+    const lignes = Object.entries(_kit.sel).filter(([, q]) => q > 0).map(([id, q]) => ({ a: _articlesCache.find(x => x.id === Number(id)), q }));
+    if (!lignes.length) return;
+    if (_kit.mode === 'sortie') {
+      const manque = lignes.filter(l => (_stockParArticle[l.a.id] || 0) < l.q);
+      if (manque.length && !confirm(`${manque.length} composant(s) en quantité supérieure au stock de l'appli. Valider quand même ?`)) return;
+    }
+    const soldes = _kit.mode === 'retour' ? soldesChantierStock(_kit.chantier) : [];
+    try {
+      await creerMouvementsStock(lignes.map(l => {
+        const s = soldes.find(x => x.articleId === l.a.id);
+        return {
+          articleId: l.a.id, type: _kit.mode === 'sortie' ? 'Sortie' : 'Retour',
+          quantite: _kit.mode === 'sortie' ? -l.q : l.q, chantier: _kit.chantier,
+          note: `Kit ${_kit.code} — ${_kit.designation}`.slice(0, 250),
+          libelle: `${_kit.mode === 'sortie' ? 'Sortie' : 'Retour'} kit — ${l.a['Designation'] || ''}`.slice(0, 250),
+          prixUnitaire: (_kit.mode === 'retour' && s && s.valConnue && s.qteSortie > 0) ? s.valSortie / s.qteSortie : undefined
+        };
+      }));
+      bipScan(true);
+      alert(`✅ ${_kit.mode === 'sortie' ? 'Sortie' : 'Retour'} du kit enregistré(e) : ${lignes.length} composant(s) · ${_kit.chantier}`);
+      await chargerStock(true);
+      fermerKit();
+      if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+    } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  // ============================================================
   // FICHE ARTICLE : toutes les informations d'un article réunies
   // Infos EBP (catalogue, à jour de la synchro) + stock atelier (quantité,
   // emplacement, mini, réemploi) + commandes en cours + derniers mouvements +
@@ -12326,6 +12505,12 @@
 
     // Ouvrage : nomenclature à la place du stock (pas de stock propre)
     if (estOuvrage) {
+      const kit = (_articlesCache || []).find(y => normRef(y['Code EBP']) === normRef(code) && estKit(y));
+      if (kit) html += `<div style="display:flex;gap:6px;margin-top:12px">
+          <button onclick="ouvrirKit(${kit.id})" style="flex:2;background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer">🧰 Sortie / retour du kit</button>
+          ${gestion ? `<button onclick="imprimerEtiquettesArticles([${kit.id}])" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer">🏷️ Étiquette</button>` : ''}
+        </div>`;
+      else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
       html += renderNomenclatureFiche(code);
     }
@@ -12515,6 +12700,15 @@
     }
     const a = trouverArticleParCode(code);
     if (!a) { bipScan(false); setMessageScan(`❌ Aucun article ni commande ne correspond au code « ${code} » (article pas encore suivi au stock ?)`, '#c0392b'); return; }
+    if (estKit(a)) {
+      // Kit interne (ouvrage EBP) : écran de sortie / retour des composants
+      if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Kit : utilisez le 📷 du bandeau pour l\'ouvrir', '#a5761f'); return; }
+      bipScan(true);
+      try { arreterCamera(); } catch (e) {}
+      document.getElementById('modal-scan-stock').style.display = 'none';
+      ouvrirKit(a.id);
+      return;
+    }
     if (_scanMode === 'info') {
       bipScan(true);
       ouvrirFicheArticle(a.id); // directement sur sa fiche article
@@ -14016,6 +14210,7 @@
     _mouvementsCache.forEach(m => {
       const type = m['Type']?.value || m['Type'] || '';
       if (type !== 'Sortie' && type !== 'Retour') return;
+      if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
       const chantier = (m['Chantier'] || '').trim() || '(sans chantier)';
       if (normTexte(chantier).includes('stock atelier')) return;
       const date = m['Date'] || '';
@@ -18738,6 +18933,7 @@
         mvts.forEach(m => {
           const type = m['Type']?.value || m['Type'] || '';
           if (type !== 'Sortie' && type !== 'Retour') return;
+          if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
           const nom = nomParCle.get(normTexte(m['Chantier'] || ''));
           if (!nom) return;
           const date = (m['Date'] || '').split('T')[0];
@@ -20640,6 +20836,16 @@
 </div>
 
 <!-- MODALE MOUVEMENT DE STOCK (Sortie / Retour / Inventaire) -->
+<div id="modal-kit" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:458;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerKit()">
+  <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:640px;max-height:94vh;display:flex;flex-direction:column;box-sizing:border-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px;border-bottom:1px solid #f0f0f0">
+      <div style="font-size:12px;font-weight:800;color:#5e35b1;text-transform:uppercase;letter-spacing:.5px">🧰 Kit interne</div>
+      <button onclick="fermerKit()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div id="kit-contenu" style="overflow-y:auto;padding:12px 16px 18px"></div>
+  </div>
+</div>
+
 <div id="modal-fiche-article" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:455;align-items:flex-end;justify-content:center" onclick="if(event.target===this)fermerFicheArticle()">
   <div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:640px;max-height:94vh;display:flex;flex-direction:column;box-sizing:border-box">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px;border-bottom:1px solid #f0f0f0">
