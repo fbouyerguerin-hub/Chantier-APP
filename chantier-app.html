@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V59';
+  const APP_VERSION = 'V60';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11239,7 +11239,8 @@
             <div style="font-size:13px;font-weight:700;color:var(--gris)">${esc(designation)}</div>
             <div style="font-size:10px;color:#999;margin-top:2px">${[code ? 'EBP ' + esc(code) : '<span style="color:#a5761f">hors EBP</span>', esc((x && x.fournisseur) || (a && a['Fournisseur']) || ''), esc((x && x.ref) || (a && a['Reference fournisseur']) || '')].filter(Boolean).join(' · ')}</div>
             <div style="margin-top:4px;display:flex;gap:5px;flex-wrap:wrap">
-              ${a ? `<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${qte > 0 ? '#e8f0e7' : '#f4f4f4'};color:${qte > 0 ? 'var(--vert)' : '#999'}">📦 ${fmtQte(qte)} ${esc((x && x.unite) || a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + esc(libelleEmplacement(a)) : ''}</span>` : '<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#eef2f7;color:#5a6b80;font-weight:700">pas au stock</span>'}
+              ${x && x.ouvrage ? `<span style="font-size:10px;font-weight:800;border-radius:8px;padding:1px 7px;background:#ede7f6;color:#5e35b1">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
+              ${x && x.ouvrage ? '' : a ? `<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${qte > 0 ? '#e8f0e7' : '#f4f4f4'};color:${qte > 0 ? 'var(--vert)' : '#999'}">📦 ${fmtQte(qte)} ${esc((x && x.unite) || a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + esc(libelleEmplacement(a)) : ''}</span>` : '<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#eef2f7;color:#5a6b80;font-weight:700">pas au stock</span>'}
               ${nb ? `<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#fdf3e0;color:#a5761f;font-weight:700">🧾 ${nb} commande(s)</span>` : ''}
             </div>
           </div>
@@ -12218,6 +12219,54 @@
   // Fonctionne aussi pour un article du catalogue EBP pas encore suivi au stock.
   // ============================================================
   let _ficheArticle = null; // { id, code }
+  const _nomenclatures = new Map(); // code → réponse du Worker (ou 'chargement')
+  function chargerNomenclature(code) {
+    if (_nomenclatures.has(code)) return;
+    _nomenclatures.set(code, 'chargement');
+    fetch(`${EBP_WORKER}/articles/nomenclature?code=${encodeURIComponent(code)}`, { headers: headersWorker(), cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(d => { _nomenclatures.set(code, d); rafraichirFicheArticleOuverte(); })
+      .catch(() => { _nomenclatures.set(code, { erreur: true }); rafraichirFicheArticleOuverte(); });
+  }
+  function renderNomenclatureFiche(code) {
+    const esc = echapperHtmlNote;
+    const n = _nomenclatures.get(code);
+    if (!n || n === 'chargement') return '<div style="font-size:12px;color:#aaa;padding:6px 0">⏳ Chargement de la nomenclature…</div>';
+    if (n.erreur) return '<div style="font-size:12px;color:#a35a00;padding:6px 0">⚠️ Nomenclature indisponible (Worker à mettre à jour ou connexion).</div>';
+    if (!n.composants || !n.composants.length) return '<div style="font-size:12px;color:#999;padding:6px 0">Aucun composant trouvé pour cet ouvrage.</div>';
+    const prive = estProfilPrix();
+    const parCodeStock = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
+    // Ouvrages réalisables avec le stock de l'atelier (composants suivis au stock)
+    let realisables = null, limitant = null, nonSuivis = 0;
+    n.composants.forEach(c => {
+      if (c.non_inclus || c.ouvrage || !(c.quantite > 0)) return;
+      const a = parCodeStock.get(normRef(c.code));
+      if (!a) { if (c.catalogue) nonSuivis++; return; }
+      const possible = Math.floor(((_stockParArticle[a.id] || 0) + 1e-9) / c.quantite);
+      if (realisables === null || possible < realisables) { realisables = possible; limitant = c.designation; }
+    });
+    let html = `<div style="display:flex;gap:8px;margin-bottom:8px">
+        <div style="flex:1;background:#ede7f6;border-radius:10px;padding:10px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:#5e35b1">${realisables === null ? '—' : realisables}</div>
+          <div style="font-size:10px;color:#666">ouvrage(s) réalisable(s) avec le stock${realisables !== null && limitant ? `<br>limité par : ${esc(limitant)}` : ''}</div></div>
+        ${prive && n.cout_composants ? `<div style="flex:1;background:#f6f6f6;border-radius:10px;padding:10px;text-align:center"><div style="font-size:16px;font-weight:800;color:var(--gris)">${fmtEur(n.cout_composants)}</div><div style="font-size:10px;color:#666">coût des composants${n.prix_achat_ebp ? `<br>prix d'achat EBP : ${fmtEur(n.prix_achat_ebp)}` : ''}</div></div>` : ''}
+      </div>`;
+    if (nonSuivis) html += `<div style="font-size:10px;color:#999;margin-bottom:6px">${nonSuivis} composant(s) du catalogue non suivi(s) au stock : non pris en compte dans le calcul.</div>`;
+    html += n.composants.map(c => {
+      const a = parCodeStock.get(normRef(c.code));
+      const stock = a ? (_stockParArticle[a.id] || 0) : null;
+      const manque = a && c.quantite > 0 && stock < c.quantite;
+      const ouvrir = a ? `ouvrirFicheArticleModal(${a.id})` : (c.catalogue || c.ouvrage) ? `ouvrirFicheArticleModal(null, '${String(c.code).replace(/'/g, "\\'")}')` : '';
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:12px;${c.non_inclus ? 'opacity:.55' : ''}">
+          <span style="min-width:0">${ouvrir ? `<a href="#" onclick="event.preventDefault(); ${ouvrir}" style="color:var(--vert);font-weight:700;text-decoration:underline;text-underline-offset:2px">${esc(c.designation)}</a>` : `<b>${esc(c.designation)}</b>`}
+            <br><span style="font-size:10px;color:#999">${esc(c.code)}${c.ouvrage ? ' · 🧩 sous-ouvrage' : ''}${!c.catalogue && !c.ouvrage ? ' · hors catalogue (main d\'œuvre…)' : ''}${c.non_inclus ? ' · non inclus' : ''}${c.quantite_fixe ? ' · quantité fixe' : ''}</span></span>
+          <span style="text-align:right;white-space:nowrap"><b>${fmtQte(c.quantite)} ${esc(c.unite)}</b>
+            ${stock !== null ? `<br><span style="font-size:10px;font-weight:700;color:${manque ? '#c0392b' : 'var(--vert)'}">stock ${fmtQte(stock)}</span>` : ''}
+            ${prive && c.cout ? `<br><span style="font-size:10px;color:#2e7d32">${fmtEur(c.cout)}</span>` : ''}</span>
+        </div>`;
+    }).join('');
+    return html;
+  }
   async function ouvrirFicheArticleModal(articleId, code) {
     const a = articleId ? (_articlesCache || []).find(x => x.id === articleId) : null;
     _ficheArticle = { id: a ? a.id : null, code: String((a && a['Code EBP']) || code || '').trim() };
@@ -12255,10 +12304,13 @@
     const titreSection = t => `<div style="font-size:11px;font-weight:800;color:var(--vert);text-transform:uppercase;letter-spacing:.4px;margin:16px 0 6px">${t}</div>`;
     const prix = (x && Number(x.prix) > 0) ? Number(x.prix) : (a ? prixArticle(a) : null);
     const unite = (x && x.unite) || (a && a['Unite']) || 'u';
+    const estOuvrage = !!(x && x.ouvrage);
+    if (estOuvrage) chargerNomenclature(code);
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris);line-height:1.25">${esc(designation)}</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+        ${estOuvrage ? `<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
         ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
-        ${a ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
+        ${a ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
       </div>`;
 
@@ -12272,9 +12324,16 @@
     if (!x && code) html += `<div style="font-size:11px;color:#999;padding:4px 0">${_catLocal ? 'Article absent du catalogue EBP actif (inactif ou supprimé dans EBP ?).' : '⏳ Lecture du catalogue EBP…'}</div>`;
     if (!code) html += '<div style="font-size:11px;color:#999;padding:4px 0">Article créé hors EBP : aucune information EBP disponible.</div>';
 
+    // Ouvrage : nomenclature à la place du stock (pas de stock propre)
+    if (estOuvrage) {
+      html += titreSection('Nomenclature');
+      html += renderNomenclatureFiche(code);
+    }
     // Stock atelier
-    html += titreSection('Stock atelier');
-    if (a) {
+    if (!estOuvrage) html += titreSection('Stock atelier');
+    if (estOuvrage) {
+      // rien : un ouvrage n'a pas de stock propre
+    } else if (a) {
       const qte = _stockParArticle[a.id] || 0;
       const mini = (a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined) ? Number(a['Stock mini']) : null;
       const sousMini = mini !== null && qte <= mini;
@@ -13401,7 +13460,7 @@
   // recherche se fait sur le téléphone, instantanément, sans appel réseau.
   // Rechargé toutes les 12 h. Conservé sur l'appareil (localStorage) seulement
   // pour les profils sans prix ; avec prix (gestionnaires) : en mémoire uniquement.
-  const CLE_CATALOGUE_LOCAL = 'gb_catalogue_ebp_v1';
+  const CLE_CATALOGUE_LOCAL = 'gb_catalogue_ebp_v2'; // v2 : ouvrages marqués
   const DUREE_CATALOGUE_LOCAL = 12 * 3600 * 1000;
   let _catLocal = null, _catLocalPromesse = null;
   function normCatLocal(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim(); }
@@ -13424,7 +13483,7 @@
       const r = await fetch(`${EBP_WORKER}/articles/all`, { headers: headersWorker(), cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
-      const brut = { t: Date.now(), prix: avecPrix, items: (d.results || []).map(x => ({ code: x.code, designation: x.designation, ref: x.ref, fournisseur: x.fournisseur, famille: x.famille, unite: x.unite, ...(avecPrix ? { prix: x.prix } : {}) })) };
+      const brut = { t: Date.now(), prix: avecPrix, items: (d.results || []).map(x => ({ code: x.code, designation: x.designation, ref: x.ref, fournisseur: x.fournisseur, famille: x.famille, unite: x.unite, ...(x.ouvrage ? { ouvrage: true, nbComp: x.nb_composants || 0 } : {}), ...(avecPrix ? { prix: x.prix } : {}) })) };
       if (!avecPrix) { try { localStorage.setItem(CLE_CATALOGUE_LOCAL, JSON.stringify(brut)); } catch (e) {} }
       _catLocal = indexerCatalogueLocal(brut);
       return _catLocal;
