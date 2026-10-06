@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V57';
+  const APP_VERSION = 'V58';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -11187,8 +11187,9 @@
   // Onglet « 🔍 Articles » : liste des articles (catalogue EBP + articles du stock
   // hors EBP), recherche instantanée sur le catalogue local ; un appui ouvre la
   // fiche article (infos EBP, stock, commandes avec prix payés, mouvements).
-  let _timerArticlesOnglet = null;
-  function renderCommandesArticles() {
+  let _timerArticlesOnglet = null, _articlesOngletLimite = 100, _articlesOngletQ = null;
+  function plusArticlesOnglet() { _articlesOngletLimite += 100; renderCommandesArticles(true); }
+  function renderCommandesArticles(garderLimite) {
     const listeEl = document.getElementById('commandes-articles-liste');
     if (!listeEl) return;
     const q = (document.getElementById('commandes-articles-recherche')?.value || '').trim();
@@ -11203,17 +11204,19 @@
     }
     if (stockTablesConfigurees() && !_stockCharge) chargerStock().then(() => renderCommandesArticles()).catch(() => {});
     const esc = echapperHtmlNote;
-    if (q.length < 2) {
-      listeEl.innerHTML = `<div style="color:#999;font-size:12px;text-align:center;padding:14px;line-height:1.6">📚 ${_catLocal.items.length} articles au catalogue EBP · ${(_articlesCache || []).length} suivis au stock<br>Tapez au moins 2 caractères : désignation, code EBP, référence ou fournisseur.</div>`;
-      return;
-    }
+    if (!garderLimite || q !== _articlesOngletQ) { if (q !== _articlesOngletQ) _articlesOngletLimite = 100; _articlesOngletQ = q; }
+    const tout = q.length < 2; // sans recherche : liste complète, par ordre alphabétique
     _timerArticlesOnglet = setTimeout(() => {
+      const parCodeStock = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
       // Catalogue EBP + articles du stock sans code EBP (hors EBP)
-      const res = rechercherCatalogueLocal(q, 60).map(x => ({ x, a: (_articlesCache || []).find(y => normRef(y['Code EBP']) === normRef(x.code)) || null }));
+      const source = tout
+        ? [..._catLocal.items].sort((p1, p2) => String(p1.designation || '').localeCompare(String(p2.designation || ''), 'fr'))
+        : rechercherCatalogueLocal(q, 5000);
+      const res = source.map(x => ({ x, a: parCodeStock.get(normRef(x.code)) || null }));
       const mots = normCatLocal(q).split(' ').filter(Boolean);
       (_articlesCache || []).filter(a => !a['Code EBP']).forEach(a => {
         const t = normCatLocal(`${a['Designation']} ${a['Reference fournisseur']} ${a['Fournisseur']}`);
-        if (mots.every(m => t.includes(m))) res.push({ x: null, a });
+        if (tout || mots.every(m => t.includes(m))) res.push({ x: null, a });
       });
       // Nombre de lignes de commande par code article (repère d'usage)
       const nbCmd = {};
@@ -11223,7 +11226,8 @@
         return;
       }
       const prive = estProfilPrix();
-      listeEl.innerHTML = `<div style="font-size:11px;color:#999;margin-bottom:6px">${res.length}${res.length >= 60 ? '+' : ''} article(s) — touchez un article pour ouvrir sa fiche</div>` + res.map(({ x, a }) => {
+      const total = res.length, affiches = res.slice(0, _articlesOngletLimite);
+      listeEl.innerHTML = `<div style="font-size:11px;color:#999;margin-bottom:6px">${tout ? `📚 ${total} articles (catalogue EBP${(_articlesCache || []).some(a => !a['Code EBP']) ? ' + hors EBP' : ''}) — tapez un mot pour filtrer` : `${total} article(s) pour « ${esc(q)} »`} · touchez un article pour ouvrir sa fiche</div>` + affiches.map(({ x, a }) => {
         const code = (x && x.code) || '';
         const designation = (x && x.designation) || (a && a['Designation']) || code;
         const qte = a ? (_stockParArticle[a.id] || 0) : null;
@@ -11244,8 +11248,8 @@
             <div style="font-size:16px;color:#ccc">›</div>
           </div>
         </div>`;
-      }).join('');
-    }, 80);
+      }).join('') + (total > affiches.length ? `<button onclick="plusArticlesOnglet()" style="width:100%;margin:4px 0 10px;background:var(--beige-clair);border:none;border-radius:10px;padding:10px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Afficher la suite (${affiches.length} / ${total})</button>` : '');
+    }, tout ? 0 : 80);
   }
 
   function renderCommandesReceptionnees() {
