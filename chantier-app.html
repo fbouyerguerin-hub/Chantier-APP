@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V7';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -727,12 +727,23 @@
   // texte : le clavier n'apparaît plus tout seul. Un appui sur le champ l'ouvre
   // normalement. Ordinateur et tablette avec clavier : comportement inchangé.
   (function () {
-    const tactile = () => window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    // V7 : ne s'applique qu'à un appareil SANS souris (téléphone, tablette). Un PC, même
+    // avec écran tactile, garde le comportement normal. Et un champ que l'utilisateur
+    // vient de toucher / cliquer reçoit toujours le curseur.
+    let dernierAppui = { type: '', cible: null, t: 0 };
+    document.addEventListener('pointerdown', e => { dernierAppui = { type: e.pointerType || '', cible: e.target, t: Date.now() }; }, true);
+    const tactile = () => window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches
+      && dernierAppui.type !== 'mouse' && dernierAppui.type !== 'pen';
+    const appuiSur = el => {
+      if (!dernierAppui.cible || Date.now() - dernierAppui.t > 1000) return false;
+      const c = dernierAppui.cible;
+      return c === el || (el.contains && el.contains(c)) || (c.closest && c.closest('label') && c.closest('label').control === el);
+    };
     const SANS_CLAVIER = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'image', 'hidden']);
     const ouvreClavier = el => el.tagName === 'TEXTAREA' || el.isContentEditable || (el.tagName === 'INPUT' && !SANS_CLAVIER.has((el.type || 'text').toLowerCase()));
     const focusOrigine = HTMLElement.prototype.focus;
     HTMLElement.prototype.focus = function (opts) {
-      if (tactile() && ouvreClavier(this) && !this.dataset.focusForce) return; // pas de clavier non demandé
+      if (tactile() && ouvreClavier(this) && !this.dataset.focusForce && !appuiSur(this)) return; // pas de clavier non demandé
       return focusOrigine.call(this, opts);
     };
   })();
@@ -9091,7 +9102,7 @@
           if (fichiers.length) {
             pjListe = document.createElement('div');
             pjListe.id = pjId;
-            pjListe.style.cssText = 'display:none;margin-top:3px';
+            pjListe.style.cssText = 'display:none;margin-top:3px;max-height:130px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-right:3px';
             fichiers.forEach(f => {
               const a = document.createElement('a');
               a.href = f.url; a.target = '_blank';
@@ -20034,10 +20045,10 @@
   </div>
 
   <div class="modal-backdrop" id="modal-pj-chantier" onclick="fermerModalPJ(event)">
-    <div class="modal-sheet" style="max-height:60vh">
+    <div class="modal-sheet" style="max-height:85vh">
       <div class="modal-header"><h3 id="modal-pj-titre">Pièces jointes</h3><button class="modal-close" onclick="fermerModalPJ()">✕</button></div>
-      <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
-        <div id="modal-pj-liste" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch">
+        <div id="modal-pj-liste" style="display:flex;flex-direction:column;gap:6px;max-height:45vh;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-right:4px;flex-shrink:0"></div>
         <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
           📎 Ajouter un fichier
           <input type="file" id="pj-chantier-input" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx" style="display:none" onchange="previewPJChantier(this)" />
