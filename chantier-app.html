@@ -601,14 +601,6 @@
         <div id="modal-note-collab-apercu" style="display:none;font-size:12px;color:var(--gris);background:#f7f5f0;border-radius:8px;padding:8px 10px;margin-top:6px;line-height:1.4"></div>
       </div>
       <div class="field">
-        <label>☑️ Tâches à réaliser (cochées par le poseur une fois faites)</label>
-        <div id="note-collab-taches-liste" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
-        <div style="display:flex;gap:6px">
-          <input type="text" id="note-collab-tache-input" placeholder="Ajouter une tâche… (ex. Poser les gouttières)" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterTacheNoteCollab();}" style="flex:1;min-width:0" />
-          <button type="button" onclick="ajouterTacheNoteCollab()" style="flex:0 0 auto;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:0 16px;font-size:20px;font-weight:700;cursor:pointer">＋</button>
-        </div>
-      </div>
-      <div class="field">
         <label>Pièces jointes</label>
         <div id="note-collab-pj-liste" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
         <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:13px;color:var(--gris-moyen)">
@@ -619,6 +611,24 @@
       </div>
       <button onclick="enregistrerNoteCollab()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer" id="btn-valider-note-collab">✅ Enregistrer</button>
       <button onclick="supprimerNoteCollab()" style="width:100%;background:#fde8e8;color:#c0392b;border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;margin-top:8px" id="btn-suppr-note-collab">🗑️ Supprimer la note</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL TÂCHES DU CHANTIER (checklist commune à tous les collaborateurs affectés) -->
+<div class="modal-backdrop" id="modal-taches-chantier" onclick="fermerTachesChantier(event)">
+  <div class="modal-sheet" style="max-height:85vh">
+    <div class="modal-header">
+      <h3 id="modal-taches-chantier-titre">☑️ Tâches du chantier</h3>
+      <button class="modal-close" onclick="fermerTachesChantier()">✕</button>
+    </div>
+    <div style="padding:16px 20px;overflow-y:auto">
+      <div style="font-size:12px;color:var(--gris-moyen);margin-bottom:10px;line-height:1.4">Visibles par tous les collaborateurs affectés à ce chantier dans « Mon planning », qui les cochent une fois réalisées.</div>
+      <div id="taches-chantier-liste" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="taches-chantier-input" placeholder="Ajouter une tâche… (ex. Poser les gouttières)" onkeydown="if(event.key==='Enter'){event.preventDefault();ajouterTacheChantier();}" style="flex:1;min-width:0;padding:11px 12px;border:1.5px solid #e5ddd0;border-radius:10px;font-size:14px" />
+        <button type="button" id="taches-chantier-btn-ajout" onclick="ajouterTacheChantier()" style="flex:0 0 auto;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:0 16px;font-size:20px;font-weight:700;cursor:pointer">＋</button>
+      </div>
     </div>
   </div>
 </div>
@@ -709,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V71';
+  const APP_VERSION = 'V73';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4557,8 +4567,16 @@
         const periode = Array.isArray(r['Periode']) ? r['Periode'].map(v => v.value || v).join('/') : r['Periode']?.value || r['Periode'] || '';
         const heuresEstimees = estimerHeuresPeriode(d, periode);
         const chantierId = (r['Chantier'] || [])[0]?.id;
-        byDatePlanning[d].push({ rowId: r.id, chantier: (r['Chantier'] || [])[0]?.value || '—', chantierId, notes: r['Notes'] || '', fichiers: r['Fichiers'] || [], taches: parseTachesPlanning(r['Taches']), periode, heures: heuresEstimees });
+        byDatePlanning[d].push({ rowId: r.id, chantier: (r['Chantier'] || [])[0]?.value || '—', chantierId, notes: r['Notes'] || '', fichiers: r['Fichiers'] || [], taches: [], periode, heures: heuresEstimees });
       });
+
+      // Tâches à cocher : portées par le chantier, communes à tous les collaborateurs affectés
+      const idsChantiersPlanning = [...new Set(Object.values(byDatePlanning).flat().map(x => x.chantierId).filter(Boolean))];
+      const tachesParChantier = {};
+      await Promise.all(idsChantiersPlanning.map(async id => {
+        try { tachesParChantier[id] = await lireTachesChantier(id); } catch (e) { tachesParChantier[id] = []; }
+      }));
+      Object.values(byDatePlanning).flat().forEach(x => { x.taches = tachesParChantier[x.chantierId] || []; });
 
       (await resSaisies.json()).results?.forEach(r => {
         const d = r['Date'];
@@ -4728,21 +4746,18 @@
 
   async function cocherTachePoseur(tacheId, cb) {
     const r = _planningAffectationsPourFenetre[_affectationDetailIndex];
-    if (!r || !r.rowId) return;
+    if (!r || !r.chantierId) return;
     const ok = cb.checked;
     cb.disabled = true;
     try {
-      // Relecture de la ligne pour ne pas écraser une modification récente du gestionnaire
-      const url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING + '/' + r.rowId + '/?user_field_names=true';
-      const cur = await fetch(url, { headers: HEADERS });
-      if (!cur.ok) throw new Error('HTTP ' + cur.status);
-      const taches = parseTachesPlanning((await cur.json())['Taches']);
+      // Relecture de la liste du chantier pour ne pas écraser une modification récente
+      const taches = await lireTachesChantier(r.chantierId);
       const x = taches.find(y => y.id === tacheId);
-      if (!x) { alert('Cette tâche a été modifiée ou retirée entre-temps. La liste va être mise à jour.'); r.taches = taches; renderTachesPoseur(); _tachesPoseurModifiees = true; return; }
+      const majCache = () => _planningAffectationsPourFenetre.forEach(a => { if (a.chantierId === r.chantierId) a.taches = taches; });
+      if (!x) { alert('Cette tâche a été modifiée ou retirée entre-temps. La liste va être mise à jour.'); majCache(); renderTachesPoseur(); _tachesPoseurModifiees = true; return; }
       x.ok = ok; x.par = ok ? (connectedCollab || '') : ''; x.le = ok ? dateYMD(new Date()) : '';
-      const res = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Taches: JSON.stringify(taches) }) });
-      if (!res.ok) throw new Error(await res.text());
-      r.taches = taches;
+      await ecrireTachesChantier(r.chantierId, taches);
+      majCache();
       _tachesPoseurModifiees = true;
       renderTachesPoseur();
     } catch (e) {
@@ -4771,7 +4786,7 @@
     const content = document.getElementById('modal-affectation-detail-content');
     content.innerHTML = `
       <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes ? linkifierTexteNote(r.notes) : '—'}</div></div>
-      ${(r.taches && r.taches.length) ? `<div class="bloc-detail-aff"><div class="label-detail-aff">☑️ Tâches à réaliser — cochez quand c'est fait</div><div id="modal-affectation-detail-taches"></div></div>` : ''}
+      ${(r.taches && r.taches.length) ? `<div class="bloc-detail-aff"><div class="label-detail-aff">☑️ Tâches du chantier — cochez quand c'est fait</div><div id="modal-affectation-detail-taches"></div></div>` : ''}
       <div class="bloc-detail-aff"><div class="label-detail-aff">📄 Bon de commande de l'affaire</div><div id="modal-affectation-detail-bdc" style="font-size:13px;color:#aaa">${r.chantierId ? 'Chargement…' : '—'}</div></div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📦 Commandes</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
@@ -8973,6 +8988,22 @@
           });
           tdNom.appendChild(pjListe);
         }
+        {
+          const tachesCh = parseTachesPlanning(chData?.[CHAMP_TACHES_CHANTIER]);
+          if (isGestAdmin || tachesCh.length) {
+            const toutFait = tachesCh.length && tachesCh.every(x => x.ok);
+            const btnTaches = document.createElement('button');
+            btnTaches.textContent = tachesCh.length ? '☑️ ' + resumeTaches(tachesCh) + ' tâche(s)' : '☑️ + tâches';
+            btnTaches.title = 'Tâches du chantier (visibles par les collaborateurs affectés)';
+            btnTaches.style.cssText = 'margin-top:4px;width:100%;font-size:9px;border-radius:4px;padding:4px 2px;cursor:pointer;font-weight:800;touch-action:manipulation;'
+              + (toutFait ? 'background:#e8f5e4;border:1px solid var(--vert);color:var(--vert)'
+                 : tachesCh.length ? 'background:#fff3e0;border:1px solid #e6a23c;color:#b45309'
+                 : 'background:#fafafa;border:1px dashed #ccc;color:#999');
+            btnTaches.onclick = e => { e.stopPropagation(); if (isGestAdmin) ouvrirTachesChantier(chantier); };
+            if (!isGestAdmin) btnTaches.style.cursor = 'default';
+            tdNom.appendChild(btnTaches);
+          }
+        }
         if (isGestAdmin) {
           const btnPJ = document.createElement('button');
           btnPJ.textContent = '+ 📎';
@@ -9028,7 +9059,6 @@
             const heures = aff['heures'] || '';
             const notes = aff['Notes'] || '';
             const fichiersAff = aff['Fichiers'] || [];
-            const tachesAff = parseTachesPlanning(aff['Taches']);
             const estDouble = !!collabIdAff && planningCollectifData.filter(p =>
               p['Date'] === dateStr && (p['Collaborateurs']||p['Collaborateur']||[])[0]?.id === collabIdAff
             ).length > 1;
@@ -9039,11 +9069,10 @@
               (isSaisie ? 'cursor:default;' : 'cursor:grab;') +
               (estDouble ? 'background:#fdecea;border:1.5px solid #c0392b;color:#c0392b;font-weight:700' : (isSaisie ? 'background:#e8f0e7;border-color:#4a7c3f' : ''));
             div.innerHTML = '<span style="display:inline-flex;align-items:center;gap:2px">' + (estDouble ? '⚠️ ' : '👷 ') + collabNom.split(' ')[0] +
-              (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes || tachesAff.length ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note ou des tâches pour ce jour') + '">📝' + (fichiersAff.length ? '📎' : '') + '</button>' : '') +
+              (isGestAdmin && !isSaisie ? '<button class="btn-note-collab' + (notes ? ' has-note' : '') + '" title="' + (notes ? 'Note : ' + notes.replace(/"/g,'&quot;') : 'Ajouter une note pour ce jour') + '">📝' + (fichiersAff.length ? '📎' : '') + '</button>' : '') +
               '</span>' +
               (heures ? '<div class="aff-notes">⏱ '+heures+'h</div>' : '') +
               (notes ? '<div class="aff-notes" title="' + notes.replace(/"/g,'&quot;') + '">📝 '+tronquer(notes, 18)+'</div>' : '') +
-              (tachesAff.length ? '<div class="aff-notes" style="' + (tachesAff.every(x => x.ok) ? 'color:var(--vert);font-weight:800' : '') + '">☑️ ' + resumeTaches(tachesAff) + ' tâche(s)</div>' : '') +
               (isGestAdmin && !isSaisie ? '<button class="btn-del-aff" style="font-size:9px">✕</button>' : '');
 
             if (isGestAdmin && !isSaisie) {
@@ -10498,7 +10527,6 @@
             const chantier = (aff['Chantier'] || [])[0]?.value || '—';
             const notes = aff['Notes'] || '';
             const fichiersAff = aff['Fichiers'] || [];
-            const tachesAff = parseTachesPlanning(aff['Taches']);
             const pjHTML = fichiersAff.length ? fichiersAff.map(f => '<a href="' + f.url + '" target="_blank" class="aff-notes" style="display:block;color:var(--vert);text-decoration:underline" onclick="event.stopPropagation()">📎 ' + (f.visible_name || f.name || 'Fichier') + '</a>').join('') : '';
             html += '<div class="aff-tag">🏗 ' + chantier + (notes ? '<div class="aff-notes">' + notes + '</div>' : '') + pjHTML + '<button class="btn-del-aff" onclick="supprimerAffAdmin(' + aff.id + ', event)">✕</button></div>';
           });
@@ -10618,7 +10646,7 @@
     }
   }
 
-  // ── TÂCHES À COCHER (champ Baserow « Taches », texte long JSON, table Planning) ──
+  // ── TÂCHES À COCHER DU CHANTIER (champ Baserow « Taches chantier », texte long JSON, table Chantiers) ──
   // Format : [{ id, t: 'libellé', ok: bool, par: 'Nom', le: 'AAAA-MM-JJ' }]
   function parseTachesPlanning(v) {
     try {
@@ -10635,49 +10663,94 @@
     return '✔ fait' + (x.par ? ' par ' + escTache(x.par.split(' ')[0]) : '') + (le ? ' le ' + le : '');
   }
 
-  function renderNoteCollabTaches() {
-    const zone = document.getElementById('note-collab-taches-liste');
-    if (!zone || !currentNoteCollab) return;
-    const taches = currentNoteCollab.taches;
+  const CHAMP_TACHES_CHANTIER = 'Taches chantier';
+  let currentTachesChantier = null; // { id, nom, taches }
+
+  async function lireTachesChantier(chantierId) {
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantierId + '/?user_field_names=true', { headers: HEADERS });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return parseTachesPlanning((await res.json())[CHAMP_TACHES_CHANTIER]);
+  }
+  async function ecrireTachesChantier(chantierId, taches) {
+    const json = taches.length ? JSON.stringify(taches) : '';
+    const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantierId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_TACHES_CHANTIER]: json }) });
+    if (!res.ok) {
+      const err = await res.text();
+      if (err.includes(CHAMP_TACHES_CHANTIER) || /field|champ/i.test(err)) throw new Error('le champ « ' + CHAMP_TACHES_CHANTIER + ' » (texte long) n\'existe pas encore dans la table Chantiers de Baserow.');
+      throw new Error(err);
+    }
+    const cached = (dataChantiersCached?.results || []).find(r => r.id === chantierId);
+    if (cached) cached[CHAMP_TACHES_CHANTIER] = json;
+  }
+  // Relit la liste à jour, applique la modification puis réécrit (évite d'écraser
+  // une coche faite entre-temps par un poseur ou un autre gestionnaire).
+  async function modifierTachesChantier(modif) {
+    if (!currentTachesChantier) return;
+    const zone = document.getElementById('taches-chantier-liste');
+    zone.style.opacity = '.5'; zone.style.pointerEvents = 'none';
+    try {
+      const taches = await lireTachesChantier(currentTachesChantier.id);
+      modif(taches);
+      await ecrireTachesChantier(currentTachesChantier.id, taches);
+      currentTachesChantier.taches = taches;
+    } catch (e) { alert('Erreur : ' + e.message); }
+    finally { zone.style.opacity = ''; zone.style.pointerEvents = ''; renderTachesChantier(); }
+  }
+
+  function renderTachesChantier() {
+    const zone = document.getElementById('taches-chantier-liste');
+    if (!zone || !currentTachesChantier) return;
+    const taches = currentTachesChantier.taches;
     zone.innerHTML = taches.length ? taches.map(x => `
       <div style="display:flex;align-items:center;gap:10px;background:${x.ok ? '#eef6ec' : '#fff'};border:1px solid ${x.ok ? '#b9d8b1' : '#eee6d8'};border-radius:10px;padding:8px 10px">
-        <input type="checkbox" ${x.ok ? 'checked' : ''} onchange="basculerTacheNoteCollab('${x.id}', this.checked)" style="width:22px;height:22px;flex:0 0 auto;accent-color:var(--vert);cursor:pointer" />
+        <input type="checkbox" ${x.ok ? 'checked' : ''} onchange="basculerTacheChantier('${x.id}', this.checked)" style="width:24px;height:24px;flex:0 0 auto;accent-color:var(--vert);cursor:pointer" />
         <div style="flex:1;min-width:0">
-          <div style="font-size:13px;color:var(--gris);${x.ok ? 'text-decoration:line-through;opacity:.7' : ''};word-break:break-word">${escTache(x.t)}</div>
-          ${x.ok ? `<div style="font-size:10px;color:var(--vert);font-weight:700">${metaTacheFaite(x)}</div>` : ''}
+          <div style="font-size:14px;color:var(--gris);${x.ok ? 'text-decoration:line-through;opacity:.7' : ''};word-break:break-word">${escTache(x.t)}</div>
+          ${x.ok ? `<div style="font-size:11px;color:var(--vert);font-weight:700">${metaTacheFaite(x)}</div>` : ''}
         </div>
-        <button type="button" onclick="retirerTacheNoteCollab('${x.id}')" title="Retirer la tâche" style="flex:0 0 auto;background:#fdecea;border:none;border-radius:8px;width:30px;height:30px;color:#c0392b;font-size:14px;cursor:pointer">✕</button>
+        <button type="button" onclick="retirerTacheChantier('${x.id}')" title="Retirer la tâche" style="flex:0 0 auto;background:#fdecea;border:none;border-radius:8px;width:32px;height:32px;color:#c0392b;font-size:14px;cursor:pointer">✕</button>
       </div>`).join('')
-      : '<div style="color:#aaa;font-size:12px">Aucune tâche</div>';
+      : '<div style="color:#aaa;font-size:12px">Aucune tâche pour ce chantier</div>';
   }
-  function ajouterTacheNoteCollab() {
-    const input = document.getElementById('note-collab-tache-input');
+
+  async function ouvrirTachesChantier(chantier) {
+    const cached = (dataChantiersCached?.results || []).find(r => r.id === chantier.id);
+    currentTachesChantier = { id: chantier.id, nom: chantier.nom, taches: parseTachesPlanning(cached && cached[CHAMP_TACHES_CHANTIER]) };
+    document.getElementById('modal-taches-chantier-titre').textContent = '☑️ ' + chantier.nom;
+    document.getElementById('taches-chantier-input').value = '';
+    renderTachesChantier();
+    document.getElementById('modal-taches-chantier').classList.add('open');
+    try { currentTachesChantier.taches = await lireTachesChantier(chantier.id); renderTachesChantier(); } catch (e) { /* on garde le cache */ }
+  }
+  function fermerTachesChantier(e) {
+    if (e && e.target !== document.getElementById('modal-taches-chantier')) return;
+    document.getElementById('modal-taches-chantier').classList.remove('open');
+    currentTachesChantier = null;
+    const grid = document.getElementById('planning-collectif-grid');
+    if (grid && grid.innerHTML.trim()) renderPlanningCollectifGrid();
+  }
+  function ajouterTacheChantier() {
+    const input = document.getElementById('taches-chantier-input');
     const t = (input.value || '').trim();
-    if (!t || !currentNoteCollab) return;
-    currentNoteCollab.taches.push({ id: idTache(), t, ok: false, par: '', le: '' });
+    if (!t) return;
     input.value = '';
-    renderNoteCollabTaches();
-    input.focus();
+    modifierTachesChantier(taches => taches.push({ id: idTache(), t, ok: false, par: '', le: '' })).then(() => input.focus());
   }
-  function retirerTacheNoteCollab(id) {
-    if (!currentNoteCollab) return;
-    currentNoteCollab.taches = currentNoteCollab.taches.filter(x => x.id !== id);
-    renderNoteCollabTaches();
+  function retirerTacheChantier(id) {
+    if (!confirm('Retirer cette tâche du chantier ?')) return;
+    modifierTachesChantier(taches => { const i = taches.findIndex(x => x.id === id); if (i >= 0) taches.splice(i, 1); });
   }
-  function basculerTacheNoteCollab(id, ok) {
-    const x = currentNoteCollab && currentNoteCollab.taches.find(y => y.id === id);
-    if (!x) return;
-    x.ok = ok; x.par = ok ? (connectedCollab || '') : ''; x.le = ok ? dateYMD(new Date()) : '';
-    currentNoteCollab.basculees.add(id);
-    renderNoteCollabTaches();
+  function basculerTacheChantier(id, ok) {
+    modifierTachesChantier(taches => {
+      const x = taches.find(y => y.id === id); if (!x) return;
+      x.ok = ok; x.par = ok ? (connectedCollab || '') : ''; x.le = ok ? dateYMD(new Date()) : '';
+    });
   }
 
   function ouvrirModalNoteCollab(affId, collabNom, noteActuelle, fichiersActuels, e) {
     if (e) e.stopPropagation();
-    const affSrc = planningCollectifData.find(p => p.id === affId) || (typeof planningAdminData !== 'undefined' ? planningAdminData.find(p => p.id === affId) : null);
-    currentNoteCollab = { affId, fichiers: fichiersActuels || [], taches: parseTachesPlanning(affSrc && affSrc['Taches']).map(x => ({ ...x })), basculees: new Set() };
-    document.getElementById('note-collab-tache-input').value = '';
-    renderNoteCollabTaches();
+    currentNoteCollab = { affId, fichiers: fichiersActuels || [] };
     document.getElementById('modal-note-collab-title').textContent = '📝 Note — ' + collabNom.split(' ')[0];
     document.getElementById('modal-note-collab-texte').value = noteActuelle || '';
     document.getElementById('btn-suppr-note-collab').style.display = noteActuelle ? '' : 'none';
@@ -10742,33 +10815,12 @@
         nouveaux.push({ name: (await r.json()).name });
       }
       const fichiersFinaux = [...currentNoteCollab.fichiers.map(f => ({ name: f.name })), ...nouveaux];
-      // Tâche saisie mais pas encore ajoutée avec ＋ : on l'ajoute quand même
-      const tacheEnCours = (document.getElementById('note-collab-tache-input').value || '').trim();
-      if (tacheEnCours) currentNoteCollab.taches.push({ id: idTache(), t: tacheEnCours, ok: false, par: '', le: '' });
-      // Le poseur a pu cocher des tâches pendant que la modale était ouverte : on reprend
-      // ses coches pour les tâches que le gestionnaire n'a pas lui-même modifiées.
-      try {
-        const rCur = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true', { headers: HEADERS });
-        if (rCur.ok) {
-          const distantes = parseTachesPlanning((await rCur.json())['Taches']);
-          currentNoteCollab.taches.forEach(x => {
-            if (currentNoteCollab.basculees.has(x.id)) return;
-            const d = distantes.find(y => y.id === x.id);
-            if (d) { x.ok = !!d.ok; x.par = d.par || ''; x.le = d.le || ''; }
-          });
-        }
-      } catch (e) { /* lecture facultative */ }
-      const tachesJson = currentNoteCollab.taches.length ? JSON.stringify(currentNoteCollab.taches) : '';
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_PLANNING_ADMIN + '/' + currentNoteCollab.affId + '/?user_field_names=true',
-        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: texte, Fichiers: fichiersFinaux, Taches: tachesJson }) });
-      if (!res.ok) {
-        const err = await res.text();
-        if (/Taches/.test(err)) throw new Error('le champ « Taches » (texte long) n\'existe pas encore dans la table Planning de Baserow.');
-        throw new Error(err);
-      }
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ Notes: texte, Fichiers: fichiersFinaux }) });
+      if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const aff = planningCollectifData.find(p => p.id === currentNoteCollab.affId) || planningAdminData.find(p => p.id === currentNoteCollab.affId);
-      if (aff) { aff.Notes = texte; aff.Fichiers = data['Fichiers'] || []; aff.Taches = tachesJson; }
+      if (aff) { aff.Notes = texte; aff.Fichiers = data['Fichiers'] || []; }
       document.getElementById('modal-note-collab').classList.remove('open');
       await rafraichirVuesApresNote();
     } catch(e) { alert('Erreur : ' + e.message); }
