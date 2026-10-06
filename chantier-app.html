@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V74';
+  const APP_VERSION = 'V76';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -4288,6 +4288,7 @@
     if (modal && modal.style.display !== 'none') {
       _modalCommandesCache = await chargerCommandesPourChantiers([_modalCommandesChantierId]);
       renderModalCommandes();
+      if (_modalCommandeFocusId && !(document.getElementById('modal-commandes-recherche')?.value || '').trim()) toggleDetailsCommande(_modalCommandeFocusId + '-modal');
     } else {
       await chargerCommandesPage();
     }
@@ -4299,7 +4300,11 @@
   // Valider AR, réception atelier/chantier, départ sur chantier, documents.
   let _modalCommandesCache = [];
 
-  async function ouvrirCommandesChantier(chantierId, nomChantier) {
+  // Commande ciblée (ouverture directe sur son détail depuis Mon planning)
+  let _modalCommandeFocusId = null;
+
+  async function ouvrirCommandesChantier(chantierId, nomChantier, commandeFocusId) {
+    _modalCommandeFocusId = commandeFocusId || null;
     _modalCommandesChantierId = chantierId;
     _modalCommandesChantierNom = nomChantier;
     const modal = document.getElementById('modal-commandes-chantier');
@@ -4314,6 +4319,16 @@
     _modalCommandesCache = await chargerCommandesPourChantiers([chantierId]);
     _peutVoirPrixActuel = await peutVoirPrixCommandes();
     renderModalCommandes();
+    if (_modalCommandeFocusId) {
+      // Détail de la commande déplié d'office
+      toggleDetailsCommande(_modalCommandeFocusId + '-modal');
+      content.scrollTop = 0;
+    }
+  }
+
+  function quitterFocusCommande() {
+    _modalCommandeFocusId = null;
+    renderModalCommandes();
   }
 
   function renderModalCommandes() {
@@ -4321,6 +4336,14 @@
     const recherche = (document.getElementById('modal-commandes-recherche')?.value || '').trim().toLowerCase();
 
     let commandes = _modalCommandesCache;
+    if (_modalCommandeFocusId && !recherche) {
+      const cible = commandes.filter(r => r.id === _modalCommandeFocusId);
+      if (cible.length) {
+        content.innerHTML = `<a href="#" onclick="event.preventDefault();quitterFocusCommande()" style="display:inline-block;margin-bottom:10px;font-size:13px;font-weight:700;color:var(--vert);text-decoration:underline">‹ Toutes les commandes du chantier (${commandes.length})</a>`
+          + cible.map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
+        return;
+      }
+    }
     if (recherche) {
       commandes = commandes.filter(r => {
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
@@ -4624,7 +4647,6 @@
               ${r.notes ? `<div class="planning-cell-notes">📝 ${r.notes}</div>` : ''}
               ${(r.taches && r.taches.length) ? `<div class="planning-cell-notes" style="font-weight:700;${r.taches.every(x => x.ok) ? 'color:var(--vert)' : 'color:#c26b00'}">☑️ ${resumeTaches(r.taches)} tâche(s)</div>` : ''}
               ${(r.fichiers && r.fichiers.length) ? r.fichiers.map(f => `<a href="${f.url}" target="_blank" class="planning-cell-notes" onclick="event.stopPropagation()" style="display:block;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
-              ${(r.chantierId && chantiersAvecCommandes.has(r.chantierId)) ? `<div onclick="event.stopPropagation();ouvrirCommandesChantier(${r.chantierId}, ${JSON.stringify(r.chantier).replace(/"/g, '&quot;')})" style="cursor:pointer;margin:5px -7px -5px;padding:4px 7px;background:rgba(255,255,255,0.5);border-top:1px solid rgba(0,0,0,0.08);border-radius:0 0 5px 5px;font-size:10px;font-weight:700;text-align:center">📦 Commande</div>` : ''}
             </div>`;
           }).join('');
         } else if (ferie) {
@@ -4692,7 +4714,8 @@
 
     return resume + infos.map((i, idx) => {
       const c = i.c;
-      const entete = `<div style="font-size:12px;color:#7a746a"><b style="color:#3a3530">${echapperHTMLAff(c['Fournisseur'] || 'Fournisseur ?')}</b>${c['Numero commande'] ? ' · N° ' + echapperHTMLAff(c['Numero commande']) : ''}${i.statut ? ' · ' + echapperHTMLAff(i.statut) : ''}</div>`;
+      const lienCmd = `<a href="#" onclick="event.preventDefault();ouvrirCommandeDepuisAffectation(${idx})" title="Ouvrir la commande" style="color:var(--vert);font-weight:800;text-decoration:underline">${c['Numero commande'] ? 'N° ' + echapperHTMLAff(c['Numero commande']) : 'Voir la commande'} ›</a>`;
+      const entete = `<div style="font-size:12px;color:#7a746a"><b style="color:#3a3530">${echapperHTMLAff(c['Fournisseur'] || 'Fournisseur ?')}</b> · ${lienCmd}${i.statut ? ' · ' + echapperHTMLAff(i.statut) : ''}</div>`;
       const refCmd = String(c['Reference complete'] || '').trim();
       const description = refCmd ? `<div style="margin-top:3px;font-size:13px;font-weight:700;color:#3a3530;word-break:break-word">📝 ${echapperHTMLAff(refCmd)}</div>` : '';
       let emplacement;
@@ -4715,6 +4738,19 @@
       }
       return `<div style="${idx ? 'border-top:1px solid #eee;' : ''}padding:9px 0">${entete}${description}${emplacement}</div>`;
     }).join('');
+  }
+  // Ouvre la fenêtre Commandes du chantier (avec toutes ses actions : réception,
+  // départ chantier, documents…) directement filtrée sur la commande cliquée.
+  async function ouvrirCommandeDepuisAffectation(idx) {
+    const i = _commandesAffectationCache[idx];
+    if (!i) return;
+    const c = i.c;
+    const ch = (c['Chantier'] || [])[0];
+    const aff = _planningAffectationsPourFenetre[_affectationDetailIndex];
+    const chantierId = aff?.chantierId || ch?.id;
+    const nom = aff?.chantier || ch?.value || '';
+    if (!chantierId) return;
+    await ouvrirCommandesChantier(chantierId, nom, c.id);
   }
   function voirEmplacementCommandeAffectation(idx) {
     const i = _commandesAffectationCache[idx];
@@ -4808,7 +4844,7 @@
       ${(r.taches && r.taches.length) ? `<div class="bloc-detail-aff"><div class="label-detail-aff">☑️ Tâches du chantier — cochez quand c'est fait</div><div id="modal-affectation-detail-taches"></div></div>` : ''}
       <div class="bloc-detail-aff"><div class="label-detail-aff">📄 Bon de commande de l'affaire</div><div id="modal-affectation-detail-bdc" style="font-size:13px;color:#aaa">${r.chantierId ? 'Chargement…' : '—'}</div></div>
       <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
-      <div class="bloc-detail-aff"><div class="label-detail-aff">📦 Commandes</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
+      <div class="bloc-detail-aff"><div class="label-detail-aff" style="display:flex;justify-content:space-between;align-items:center;gap:8px">📦 Commandes${r.chantierId ? `<a href="#" onclick="event.preventDefault();ouvrirCommandesChantier(${r.chantierId}, ${JSON.stringify(r.chantier).replace(/"/g, '&quot;')})" style="text-transform:none;letter-spacing:0;font-size:12px;color:var(--vert);text-decoration:underline">Toutes les commandes ›</a>` : ''}</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
     `;
     if (!document.getElementById('style-detail-aff')) {
       const style = document.createElement('style');
