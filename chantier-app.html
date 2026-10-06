@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V63';
+  const APP_VERSION = 'V64';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12826,7 +12826,80 @@
   // ── Impression des étiquettes rayonnage (planche A4 de 14 étiquettes 99,1 × 38,1 mm, Avery L7163) ──
   const ETIQ_PAR_PLANCHE = 14;
   async function imprimerEtiquettesArticles(ids) {
-    return imprimerEtiquettesArticlesObjets(ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean));
+    const objets = ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean);
+    // Kit interne : modèle A4 à 2 étiquettes avec la nomenclature complète
+    if (objets.length === 1 && typeof estKit === 'function' && estKit(objets[0])) return imprimerEtiquetteKit(objets[0].id);
+    return imprimerEtiquettesArticlesObjets(objets.filter(a => !(typeof estKit === 'function' && estKit(a))));
+  }
+  // ── Étiquette KIT INTERNE : A4, 2 étiquettes 199,6 × 143,5 mm (type Avery L7168),
+  // QR du kit + liste complète des composants (désignation, code, quantité).
+  async function imprimerEtiquetteKit(articleId) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    const fen = window.open('', '_blank'); // ouverte tout de suite (sinon bloquée), remplie ensuite
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Préparation de l\'étiquette du kit…</p>');
+    try {
+      const code = String(a['Code EBP'] || '').trim();
+      const n = await chargerNomenclatureAsync(code);
+      const comps = ((n && n.composants) || []).filter(c => !c.non_inclus);
+      await chargerLibScan('qrcode');
+      const tmp = document.createElement('div');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(tmp);
+      new QRCode(tmp, { text: urlScan(code), width: 320, height: 320, correctLevel: QRCode.CorrectLevel.M });
+      const c = tmp.querySelector('canvas');
+      const qr = c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      tmp.remove();
+      const esc = t => echapperHtmlNote(t == null ? '' : String(t));
+      const deuxColonnes = comps.length > 12;
+      const taille = comps.length > 30 ? 7 : comps.length > 20 ? 8 : comps.length > 12 ? 9 : 10.5;
+      const lignes = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(x.unite)}</td></tr>`).join('');
+      const liste = deuxColonnes
+        ? (() => { const m = Math.ceil(comps.length / 2); const t = l => `<table class="li"><thead><tr><th>Composant</th><th>Code</th><th>Qté</th></tr></thead><tbody>${l}</tbody></table>`;
+            const ls = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(x.unite)}</td></tr>`);
+            return `<div class="cols">${t(ls.slice(0, m).join(''))}${t(ls.slice(m).join(''))}</div>`; })()
+        : `<table class="li"><thead><tr><th>Composant</th><th>Code</th><th>Qté</th></tr></thead><tbody>${lignes}</tbody></table>`;
+      const etiquette = `<div class="et">
+        <div class="hd">
+          <img class="qr" src="${qr}" />
+          <div class="ti">
+            <div class="ki">🧰 KIT INTERNE · GUÉRIN BÂTIMENTS</div>
+            <div class="no">${esc(a['Designation'] || code)}</div>
+            <div class="co">${esc(code)} · ${comps.length} composant(s)</div>
+            <div class="mo">Scanner : sortie vers un chantier / retour à l'atelier</div>
+          </div>
+        </div>
+        ${comps.length ? liste : '<div style="padding:4mm;color:#777">Nomenclature indisponible.</div>'}
+      </div>`;
+      fen.document.open();
+      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Kit ${esc(code)}</title><style>
+        /* Avery L7168 : 2 étiquettes 199,6 × 143,5 mm — marges 5 mm (haut) / 5,2 mm (côtés) */
+        @page { size: A4; margin: 5mm 5.2mm; }
+        body { margin: 0; font-family: Arial, sans-serif; color: #000; }
+        .et { box-sizing: border-box; width: 199.6mm; height: 143.5mm; padding: 6mm 7mm; overflow: hidden; break-inside: avoid; display: flex; flex-direction: column; }
+        .hd { display: flex; gap: 6mm; align-items: center; border-bottom: 0.6mm solid #000; padding-bottom: 3mm; margin-bottom: 3mm; }
+        .qr { width: 42mm; height: 42mm; image-rendering: pixelated; flex-shrink: 0; }
+        .ti { min-width: 0; }
+        .ki { font-size: 9pt; font-weight: 800; color: #5e35b1; letter-spacing: .3mm; }
+        .no { font-size: 20pt; font-weight: 800; line-height: 1.15; margin: 1.5mm 0; }
+        .co { font-size: 11pt; font-family: monospace; font-weight: 700; }
+        .mo { font-size: 8.5pt; color: #555; margin-top: 1.5mm; }
+        .cols { display: flex; gap: 5mm; }
+        .cols .li { flex: 1; }
+        .li { width: 100%; border-collapse: collapse; font-size: ${taille}pt; }
+        .li th { text-align: left; font-size: ${Math.max(7, taille - 1.5)}pt; color: #555; border-bottom: 0.4mm solid #000; padding: 0.6mm 1mm; }
+        .li td { border-bottom: 0.2mm solid #ccc; padding: 0.6mm 1mm; vertical-align: top; }
+        .li .c { font-family: monospace; white-space: nowrap; color: #333; }
+        .li .q { text-align: right; font-weight: 800; white-space: nowrap; }
+        @media screen { body { background: #eee; padding: 10px; } .et { background: #fff; outline: 1px dashed #bbb; margin: 0 auto 6mm; } }
+      </style></head><body>${etiquette}${etiquette}
+      <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) {
+      fen.close();
+      alert('Erreur : ' + e.message);
+    }
   }
   // Seuls les articles référencés dans EBP (champ « Code EBP » renseigné) reçoivent
   // une étiquette QR ; les articles « hors EBP » sont écartés.
