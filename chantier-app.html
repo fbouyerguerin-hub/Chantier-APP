@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V52';
+  const APP_VERSION = 'V53';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -12169,6 +12169,19 @@
 
   // Scan d'une étiquette article : onglet Stock atelier, filtré sur l'article,
   // fiche mise en évidence (sortie, retour, inventaire, historique à portée).
+  // Onglet Stock atelier avec une recherche (article pas encore au stock → carte catalogue EBP)
+  async function ouvrirRechercheStock(texte) {
+    try { await arreterCamera(); } catch (e) {}
+    const modal = document.getElementById('modal-scan-stock');
+    if (modal) modal.style.display = 'none';
+    _panierSortie = [];
+    if (currentNav !== 'commandes') switchPage('commandes');
+    _stockFiltre = 'tous';
+    const r = document.getElementById('stock-recherche');
+    if (r) r.value = texte || '';
+    switchCommandesVue('stock');
+    setFiltreStock('tous');
+  }
   async function ouvrirFicheArticle(articleId) {
     const a = (_articlesCache || []).find(x => x.id === articleId);
     if (!a) return;
@@ -12208,7 +12221,7 @@
   }
 
   function traiterCodeScanne(brut, source = '') {
-    const code = resoudreCodeScanne(brut);
+    let code = resoudreCodeScanne(brut);
     if (!code) return;
     // Anti-rebond : la caméra relit le même code plusieurs fois par seconde
     const now = Date.now();
@@ -12218,12 +12231,28 @@
     if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
     if (_scanMode === 'info' && _departScanUid && selectionDepartParCode(code)) { bipScan(true); return; }
     if (/^LIG-\d+$/i.test(code)) {
-      const r = trouverCommandeDeLigne(Number(code.split('-')[1]));
+      // QR d'une ligne de la fiche A4 (hors réception / départ en cours) : on va à
+      // l'ARTICLE de la ligne — sa fiche s'il est suivi au stock, sinon sa fiche
+      // catalogue EBP ; à défaut (ligne en texte libre), la fiche de la commande.
+      const ligneId = Number(code.split('-')[1]);
+      const r = trouverCommandeDeLigne(ligneId);
       if (!r) { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return; }
-      if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Fiche de commande : utilisez 📷 sur la page Commandes', '#a5761f'); return; }
-      bipScan(true);
-      afficherFicheScan({ type: 'commande', id: r.id });
-      return;
+      const l = (_commandesLignesCache[r.id] || []).find(x => x.id === ligneId);
+      const aStock = l ? trouverArticlePourLigne(l) : null;
+      if (aStock) {
+        code = codeBarreArticle(aStock); // traité ensuite comme un scan d'article (fiche, ou panier de sortie)
+      } else if (_scanMode === 'info' && l && codeArticleLigne(l)) {
+        bipScan(true);
+        ouvrirRechercheStock(codeArticleLigne(l)); // pas encore au stock : fiche catalogue EBP
+        return;
+      } else if (_scanMode === 'info') {
+        bipScan(true);
+        setMessageScan('ℹ️ Ligne sans code article : fiche de la commande', '#a5761f');
+        afficherFicheScan({ type: 'commande', id: r.id });
+        return;
+      } else {
+        bipScan(false); setMessageScan('❌ Cet article de la commande n\'est pas suivi au stock', '#c0392b'); return;
+      }
     }
     // Étiquette de commande
     if (/^CMD-\d+$/i.test(code) || (_scanMode === 'info' && trouverCommandeParCode(code))) {
