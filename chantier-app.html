@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V11';
+  const APP_VERSION = 'V12';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1147,7 +1147,11 @@
     } finally { _baserowLiberer(); }
   }
 
-  function viderCacheBaserow() { _cacheBaserow.clear(); }
+  function viderCacheBaserow() {
+    _cacheBaserow.clear();
+    // Données dérivées : relues aussi (commandes en cours des articles…)
+    try { if (typeof _lignesEnCoursDate !== 'undefined') _lignesEnCoursDate = 0; } catch (e) {}
+  }
   // Changement d'onglet : on relit les données « vivantes » (saisies, planning, commandes…)
   // mais on garde les listes de référence (collaborateurs, chantiers, véhicules, tâches…).
   // Toute écriture, le bouton 🔄 et le retour sur l'appli vident toujours TOUT le cache.
@@ -12931,7 +12935,7 @@
     const attentes = [chargerCatalogueLocal().catch(() => {})];
     if (stockTablesConfigurees() && !_stockCharge) attentes.push(chargerStock().catch(() => {}));
     if (!(_commandesCache || []).length) attentes.push(chargerCommandesPage().catch(() => {}));
-    attentes.push(chargerLignesEnCours());
+    attentes.push(chargerLignesEnCours(true)); // fiche : toujours l'état à jour des commandes
     await Promise.all(attentes);
     if (_ficheArticle && !_ficheArticle.id && _ficheArticle.code) {
       const trouve = (_articlesCache || []).find(x => normRef(x['Code EBP']) === normRef(_ficheArticle.code));
