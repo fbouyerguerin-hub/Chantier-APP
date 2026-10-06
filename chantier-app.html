@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1085,11 +1085,13 @@
   // V20 : délais raccourcis — le cache sert surtout à ne pas relire 5 fois la même
   // table dans le même écran ; il est en plus vidé à chaque changement d'onglet.
   const CACHE_BASEROW_TTL_DEFAUT = 5 * 1000;
-  const CACHE_BASEROW_TTL_REFERENCE = 30 * 1000; // tables qui changent peu
+  const CACHE_BASEROW_TTL_REFERENCE = 120 * 1000; // tables qui changent peu (V2 : 2 min, conservées entre onglets)
+  const CACHE_BASEROW_TTL_CONGES = 30 * 1000;
   const CACHE_BASEROW_TABLES_REFERENCE = new Set([
     TABLES.Collaborateur.id, TABLES.Chantiers.id, TABLES.Vehicules.id, TABLES.TypeTaches.id,
     TABLES.SousTaches.id, TABLES.Zones.id, '1022869' /* congés */
   ].map(String));
+  const CACHE_BASEROW_TABLE_CONGES = '1022869';
   // Jamais mis en cache : messages (veille toutes les minutes), utilisateurs (connexion), signatures
   const CACHE_BASEROW_TABLES_EXCLUES = new Set([TABLE_MESSAGES, TABLE_USERS, TABLE_SIGNATURES].map(String));
   const _cacheBaserow = new Map(); // url -> { t, ttl, promesse }
@@ -1134,6 +1136,15 @@
   }
 
   function viderCacheBaserow() { _cacheBaserow.clear(); }
+  // Changement d'onglet : on relit les données « vivantes » (saisies, planning, commandes…)
+  // mais on garde les listes de référence (collaborateurs, chantiers, véhicules, tâches…).
+  // Toute écriture, le bouton 🔄 et le retour sur l'appli vident toujours TOUT le cache.
+  function viderCacheVolatile() {
+    for (const [url, e] of _cacheBaserow) {
+      const m = url.match(/\/rows\/table\/(\d+)\//);
+      if (!m || !CACHE_BASEROW_TABLES_REFERENCE.has(m[1])) _cacheBaserow.delete(url);
+    }
+  }
 
   window.fetch = function(input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
@@ -1152,7 +1163,7 @@
       if (!res.ok) _cacheBaserow.delete(url);
       return res;
     }, err => { _cacheBaserow.delete(url); throw err; });
-    _cacheBaserow.set(url, { t: maintenant, ttl: CACHE_BASEROW_TABLES_REFERENCE.has(m[1]) ? CACHE_BASEROW_TTL_REFERENCE : CACHE_BASEROW_TTL_DEFAUT, promesse });
+    _cacheBaserow.set(url, { t: maintenant, ttl: m[1] === CACHE_BASEROW_TABLE_CONGES ? CACHE_BASEROW_TTL_CONGES : CACHE_BASEROW_TABLES_REFERENCE.has(m[1]) ? CACHE_BASEROW_TTL_REFERENCE : CACHE_BASEROW_TTL_DEFAUT, promesse });
     return promesse.then(r => r.clone());
   };
 
@@ -1275,11 +1286,23 @@
       return new Response(JSON.stringify({ ...data, _nbBrut: undefined }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     let resultats = data.results;
-    let next = data.next.replace('http://', 'https://');
-    while (next) {
-      const d = await fetchPageBaserow(next, options);
-      resultats = resultats.concat(d.results || []);
-      next = d.next ? d.next.replace('http://', 'https://') : null;
+    const taillePage = data._nbBrut || resultats.length;
+    const total = parseInt(data.count);
+    if (taillePage && total) {
+      // Pages 2…n demandées en parallèle (4 à la fois) au lieu d'une par une
+      const urls = [];
+      for (let pg = 2; pg <= Math.ceil(total / taillePage); pg++) { const u = new URL(url); u.searchParams.set('page', pg); urls.push(u.toString()); }
+      const pages = new Array(urls.length); let suivant = 0;
+      const travailleur = async () => { while (suivant < urls.length) { const i = suivant++; pages[i] = (await fetchPageBaserow(urls[i], options)).results || []; } };
+      await Promise.all(Array.from({ length: Math.min(4, urls.length) }, travailleur));
+      resultats = resultats.concat(...pages);
+    } else {
+      let next = data.next.replace('http://', 'https://');
+      while (next) {
+        const d = await fetchPageBaserow(next, options);
+        resultats = resultats.concat(d.results || []);
+        next = d.next ? d.next.replace('http://', 'https://') : null;
+      }
     }
     return new Response(JSON.stringify({ ...data, count: resultats.length, next: null, previous: null, results: resultats }), {
       status: 200, headers: { 'Content-Type': 'application/json' }
@@ -1679,7 +1702,7 @@
   let currentNav = 'saisie';
 
   function switchPage(nav) {
-    if (typeof viderCacheBaserow === 'function') viderCacheBaserow(); // chaque onglet relit Baserow
+    if (typeof viderCacheVolatile === 'function') viderCacheVolatile(); // chaque onglet relit Baserow (listes de référence gardées)
     currentNav = nav;
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const navBtn = document.getElementById('nav-' + nav);
@@ -3367,19 +3390,12 @@
 
   // Récupère toutes les saisies de temps sur une période (pagination incluse), pour un collaborateur ou tous
   async function fetchSaisiesPeriodeRtt(dateDebut, dateFin, collabId) {
-    let allRows = [], page = 1, hasMore = true;
-    while (hasMore) {
-      let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
-        '/?user_field_names=true&size=200&page=' + page +
-        '&filter__Date__date_after_or_equal=' + dateDebut +
-        '&filter__Date__date_before_or_equal=' + dateFin;
-      if (collabId) url += '&filter__Collaborateur__link_row_has=' + collabId;
-      const data = await fetchPageBaserow(url, { headers: HEADERS });
-      allRows = allRows.concat(data.results || []);
-      hasMore = !!data.next;
-      page++;
-    }
-    return allRows;
+    let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
+      '/?user_field_names=true&size=200' +
+      '&filter__Date__date_after_or_equal=' + dateDebut +
+      '&filter__Date__date_before_or_equal=' + dateFin;
+    if (collabId) url += '&filter__Collaborateur__link_row_has=' + collabId;
+    return fetchToutesLesPages(url); // pages lues en parallèle
   }
 
   // Seuils hebdomadaires :
@@ -3583,11 +3599,15 @@
         return;
       }
 
-      const congesResultatsRttPerso = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200');
-      const congesCollab = congesResultatsRttPerso.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
-
+      // Congés (filtrés sur le collaborateur), saisies, fiche collaborateur et ajustements lus en parallèle
       const anneeEnCours = new Date().getFullYear();
-      const saisiesCollab = await fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id);
+      const pCollabRowRtt = obtenirCollaborateurConnecte();
+      const pAjustRtt = chargerAjustementsRtt(feuilleCollab.id);
+      const [congesResultatsRttPerso, saisiesCollab] = await Promise.all([
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES + '/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=' + feuilleCollab.id),
+        fetchSaisiesPeriodeRtt(anneeEnCours + '-01-01', dateYMD(new Date()), feuilleCollab.id)
+      ]);
+      const congesCollab = congesResultatsRttPerso.filter(r => (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id));
       enregistrerAbsencesCollab(feuilleCollab.id, congesCollab);
 
       const demandesRtt = congesCollab.filter(r => r['Type de demande']?.value === 'RTT');
@@ -3617,7 +3637,7 @@
       // Recherche par nom (via obtenirCollaborateurConnecte), plus fiable que
       // feuilleCollab.id qui peut ne pas encore être résolu selon le moment
       // où cette fonction est appelée (même correctif que pour les commandes).
-      const collabRow = await obtenirCollaborateurConnecte();
+      const collabRow = await pCollabRowRtt;
       const rttSoldeInitial = parseFloat(collabRow['RTT solde initial (h)']) || 0;
       const heuresSupSoldeInitial = parseFloat(collabRow['Heures sup solde initial (h)']) || 0;
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
@@ -3632,7 +3652,7 @@
       const heuresSup = heuresSupResult.total + heuresSupSoldeInitial;
       syncHeuresSupplementaires(feuilleCollab.id, heuresSup);
 
-      const ajustementsRtt = await chargerAjustementsRtt(feuilleCollab.id);
+      const ajustementsRtt = await pAjustRtt;
       const totalAjustRtt = totalAjustementsRtt(ajustementsRtt);
       const acquisAvantAjust = acquisSemaines + heuresSup + rttSoldeInitial;
       const acquis = acquisAvantAjust + totalAjustRtt;
@@ -4529,9 +4549,17 @@
 
   // Ensemble des IDs de chantiers ayant au moins une commande fournisseur —
   // permet de n'afficher l'icône 📦 que quand c'est pertinent.
-  async function obtenirChantiersAvecCommandes() {
+  let _chantiersAvecCmdMemo = null; // { t, promesse }
+  function obtenirChantiersAvecCommandes() {
+    if (_chantiersAvecCmdMemo && Date.now() - _chantiersAvecCmdMemo.t < 60000) return _chantiersAvecCmdMemo.promesse;
+    const promesse = _obtenirChantiersAvecCommandes();
+    _chantiersAvecCmdMemo = { t: Date.now(), promesse };
+    return promesse;
+  }
+  async function _obtenirChantiersAvecCommandes() {
     try {
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
+      // Seuls les champs Chantier et Statut sont lus (réponse bien plus légère)
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200&include=Chantier,Statut`;
       let toutes = await fetchToutesLesPages(url);
       // Postes Pose/Fab Acier/Fab Bois : ne pas compter les commandes pas
       // encore validées (AR non reçu) pour décider d'afficher l'icône 📦,
@@ -4570,23 +4598,20 @@
     try {
       if (!feuilleCollab || !feuilleCollab.id) await resolveFeuilleCollab();
 
-      // Charger congés
-      const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=200`;
-      const congesResultatsPerso = await fetchToutesLesPages(urlConges);
-      const conges = congesResultatsPerso.filter(r =>
-        (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id) && r['Statut']?.value !== 'Refusé'
-      );
-
-      // Charger planning prévu ET saisies réelles en parallèle
+      // Congés du collaborateur, planning prévu, saisies réelles et fiches véhicules en parallèle
+      const urlConges = `https://api.baserow.io/api/database/rows/table/${TABLE_CONGES}/?user_field_names=true&size=200&filter__Collaborateurs__link_row_has=${feuilleCollab.id}`;
       const byDatePlanning = {};
       const byDateSaisies = {};
 
-      const [resPlan, resSaisies, chantiersAvecCommandes] = await Promise.all([
+      const [congesResultatsPerso, resPlan, resSaisies] = await Promise.all([
+        fetchToutesLesPages(urlConges),
         fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
         fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200${connectedViewId ? '&view_id=' + connectedViewId : ''}&filter__Date__date_after_or_equal=${dateDebut}&filter__Date__date_before_or_equal=${dateFin}`, { headers: HEADERS }),
-        obtenirChantiersAvecCommandes(),
         chargerFichesVehicules()
       ]);
+      const conges = congesResultatsPerso.filter(r =>
+        (r['Collaborateurs'] || []).some(c => c.id === feuilleCollab.id) && r['Statut']?.value !== 'Refusé'
+      );
 
       const planRows = (await resPlan.json()).results || [];
       // Véhicules par date + chantier (lignes sans collaborateur), pour ne montrer un véhicule
@@ -11315,8 +11340,11 @@
       const urlCommandes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`;
       const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200`;
       // Commandes, lignes d'articles et droits lus en même temps
-      const [peutVoirPrix, toutesCmd, toutesLignes] = await Promise.all([
-        peutVoirPrixCommandes(), fetchToutesLesPages(urlCommandes), fetchToutesLesPages(urlLignes)
+      const estUtilisateurSimple = connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire';
+      const [peutVoirPrix, toutesCmd, toutesLignes, posteCmd, chantierIdsCmd] = await Promise.all([
+        peutVoirPrixCommandes(), fetchToutesLesPages(urlCommandes), fetchToutesLesPages(urlLignes),
+        estUtilisateurSimple ? obtenirPosteCollaborateurConnecte() : null,
+        estUtilisateurSimple ? obtenirChantierIdsAssignesUtilisateur().catch(() => new Set()) : null
       ]);
       _peutVoirPrixActuel = peutVoirPrix;
       let toutes = toutesCmd;
@@ -11325,9 +11353,9 @@
       // affectés — sauf pour Fab Acier/Fab Bois (ateliers, sans affectation
       // chantier au jour le jour) qui doivent voir toutes les commandes.
       if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') {
-        const poste = await obtenirPosteCollaborateurConnecte();
+        const poste = posteCmd;
         if (!POSTES_ASSIMILES_FAB.includes(poste)) {
-          const chantierIdsAssignes = await obtenirChantierIdsAssignesUtilisateur();
+          const chantierIdsAssignes = chantierIdsCmd || new Set();
           toutes = toutes.filter(r => (r['Chantier'] || []).some(c => chantierIdsAssignes.has(c.id)));
         }
 
@@ -19333,20 +19361,26 @@
 
   // Chargement commun export Excel / vue Rentabilité : saisies + commandes fournisseurs + prix de vente EBP
   async function chargerDonneesAnalyseChantier(dateDebut, dateFin) {
-    let allRows = [];
-    let page = 1;
-    let hasMore = true;
-    while (hasMore) {
-      let url = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
-        '/?user_field_names=true&size=200&page=' + page +
-        '&view_id=' + VUE_FEUILLE_HEURES;
-      if (dateDebut) url += '&filter__Date__date_after_or_equal=' + dateDebut;
-      if (dateFin) url += '&filter__Date__date_before_or_equal=' + dateFin;
-      const data = await fetchPageBaserow(url, { headers: HEADERS });
-      allRows = allRows.concat(data.results || []);
-      hasMore = !!data.next;
-      page++;
-    }
+    // Toutes les lectures partent en même temps (au lieu de l'une après l'autre)
+    const enAttente = pr => pr.then(v => ({ v }), e => ({ e }));
+    const valeur = async pr => { const r = await pr; if (r.e) throw r.e; return r.v; };
+    const pPrixRenta = enAttente(peutVoirPrixCommandes());
+    let urlSaisiesRenta = 'https://api.baserow.io/api/database/rows/table/' + TABLE_SAISIE +
+      '/?user_field_names=true&size=200&view_id=' + VUE_FEUILLE_HEURES;
+    if (dateDebut) urlSaisiesRenta += '&filter__Date__date_after_or_equal=' + dateDebut;
+    if (dateFin) urlSaisiesRenta += '&filter__Date__date_before_or_equal=' + dateFin;
+    const pSaisiesRenta = enAttente(fetchToutesLesPages(urlSaisiesRenta));
+    const pCmdRenta = enAttente(fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200'));
+    // Tables réservées aux comptes qui voient les prix : lancées dès que le droit est connu
+    const siPrix = f => pPrixRenta.then(r => (r.v ? enAttente(f()) : { v: null }));
+    const pCmdClientsRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200'));
+    const pChantiersRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200'));
+    const pStockRenta = siPrix(() => stockTablesConfigurees() ? Promise.all([
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/?user_field_names=true&size=200`),
+      fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true&size=200`)
+    ]) : Promise.resolve(null));
+
+    const allRows = await valeur(pSaisiesRenta);
 
     // Construire les données pour le classeur Excel (équivalent direct de guerin_analyse_chantier.py)
     const dataAnalyse = allRows.map(r => {
@@ -19367,9 +19401,9 @@
     // Sur les exports datés (semaine/mois/année), on ne garde que les
     // commandes passées sur la même période ; sur "tout", on garde tout
     // l'historique des commandes de ces chantiers.
-    const peutVoirPrixExport = await peutVoirPrixCommandes();
+    const peutVoirPrixExport = await valeur(pPrixRenta);
     const chantiersConcernes = new Set(dataAnalyse.map(r => r.chantier));
-    const toutesCommandesExport = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200');
+    const toutesCommandesExport = await valeur(pCmdRenta);
     const commandesParChantier = {};
     // Chantier sans heure sur la période mais avec des commandes : inclus aussi
     // (sinon un chantier en cours d'approvisionnement n'apparaît pas en rentabilité)
@@ -19406,7 +19440,7 @@
     const sommeCmdClients = {};
     if (peutVoirPrixExport) {
       try {
-        const cmdClients = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200');
+        const cmdClients = await valeur(pCmdClientsRenta);
         diagEbp.total = cmdClients.length;
         diagEbp.sansChantier = cmdClients.filter(r => !(r['Chantier'] || []).length).length;
         cmdClients.forEach(r => {
@@ -19427,7 +19461,7 @@
         });
       } catch (e) { diagEbp.erreur = e.message; /* repli sur la fiche chantier */ }
       try {
-        const chantiersRows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+        const chantiersRows = await valeur(pChantiersRenta);
         chantiersRows.forEach(c => {
           const nom = c['Nom du chantier'];
           const brut = c[CHAMP_PRIX_VENTE];
@@ -19446,10 +19480,7 @@
     const stockParChantier = {};
     if (peutVoirPrixExport && stockTablesConfigurees()) {
       try {
-        const [mvts, arts] = await Promise.all([
-          fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/?user_field_names=true&size=200`),
-          fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true&size=200`)
-        ]);
+        const [mvts, arts] = await valeur(pStockRenta);
         const artParId = new Map(arts.map(a => [a.id, a]));
         // Le chantier d'un mouvement est un texte : rapprochement insensible aux accents/casse
         const nomParCle = new Map([...chantiersConcernes].map(n => [normTexte(n), n]));
