@@ -701,7 +701,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V61';
+  const APP_VERSION = 'V63';
   const TABLE_SAISIE = '1014445';
   const TABLE_USERS = '1025187';
   const TABLE_MESSAGES = '1026255';
@@ -1028,6 +1028,7 @@
     try {
       viderCacheBaserow();
       await Promise.all(Object.keys(TABLES).map(k => loadTable(k).catch(() => {})));
+      verifierVersionCatalogue(true).catch(() => {}); // catalogue EBP / ouvrages mis à jour si besoin
       switchPage(currentNav || 'saisie');
     } finally { if (b) { b.disabled = false; b.style.opacity = '1'; } }
   }
@@ -11089,7 +11090,7 @@
     if (vue === 'ar') renderCommandesEnAttenteAR();
     if (vue === 'partielle') renderCommandesPartielles();
     if (vue === 'receptionnees') renderCommandesReceptionnees();
-    if (vue === 'articles') renderCommandesArticles();
+    if (vue === 'articles') { renderCommandesArticles(); verifierVersionCatalogue(); }
     if (vue === 'retour') renderCommandesRetour();
     if (vue === 'stock') ouvrirVueStock();
   }
@@ -11811,7 +11812,7 @@
   }
 
   async function ouvrirVueStock() {
-    chargerCatalogueLocal().catch(() => {}); // préchargé en arrière-plan pour la recherche
+    chargerCatalogueLocal().then(() => verifierVersionCatalogue()).catch(() => {}); // préchargé, puis mis à jour si EBP a changé
     const listeEl = document.getElementById('stock-liste');
     const outils = document.getElementById('stock-outils-gestion');
     { const be = document.getElementById('btn-etiq-catalogue'); if (be) be.style.display = peutGererStock() ? 'block' : 'none'; }
@@ -12221,7 +12222,27 @@
   //  • Retour : chantier → composants encore sur ce chantier → retours en stock.
   // Les mouvements portent la note « Kit CODE » (traçabilité).
   // ============================================================
-  function estKit(a) { return !!a && (a['Origine'] || '') === 'Kit'; }
+  function estKit(a) { return !!a && (a['Origine'] || '') === 'Kit' && a['Actif'] !== false; }
+  // Retirer un ouvrage de la gestion « kit » : la fiche technique est désactivée
+  // (l'historique des mouvements des composants est conservé ; l'étiquette QR
+  // ouvrira de nouveau la fiche de l'ouvrage, sans écran de kit).
+  async function desactiverKit(articleId) {
+    if (!peutGererStock()) return;
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    const ancienKit = _kit; _kit = { id: a.id, code: String(a['Code EBP'] || '').trim() };
+    let dehors = [];
+    try { await chargerNomenclatureAsync(_kit.code); dehors = chantiersAvecKit(); } catch (e) {}
+    _kit = ancienKit;
+    const msg = dehors.length
+      ? `⚠️ Du matériel de ce kit est encore sorti sur : ${dehors.join(', ')}.\nSon retour se fera alors par « ↩️ Retour chantier » du Stock atelier.\n\nRetirer quand même « ${a['Designation']} » de la gestion kit ?`
+      : `Retirer « ${a['Designation']} » de la gestion kit ?\nL'historique est conservé ; l'étiquette QR ouvrira la fiche de l'ouvrage.`;
+    if (!confirm(msg)) return;
+    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${a.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Actif': false }) });
+    if (!r.ok) { alert('Modification refusée (' + r.status + ')'); return; }
+    a['Actif'] = false;
+    renderFicheArticle();
+  }
   let _kit = null; // { id, code, designation, mode, chantier, sel: { articleId: qte } }
   function chargerNomenclatureAsync(code) {
     return new Promise(resolve => {
@@ -12240,10 +12261,10 @@
     const x = _catLocal ? _catLocal.parCode.get(normRef(code)) : null;
     const existant = (_articlesCache || []).find(a => normRef(a['Code EBP']) === normRef(code));
     if (existant) {
-      if (!estKit(existant)) {
-        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${existant.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Origine': 'Kit' }) });
+      if (!estKit(existant) || existant['Actif'] === false) {
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${existant.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Origine': 'Kit', 'Actif': true }) });
         if (!r.ok) { alert('Activation refusée (' + r.status + ')'); return; }
-        existant['Origine'] = 'Kit';
+        existant['Origine'] = 'Kit'; existant['Actif'] = true;
       }
     } else {
       const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`, {
@@ -12505,11 +12526,12 @@
 
     // Ouvrage : nomenclature à la place du stock (pas de stock propre)
     if (estOuvrage) {
-      const kit = (_articlesCache || []).find(y => normRef(y['Code EBP']) === normRef(code) && estKit(y));
+      const kit = (_articlesCache || []).find(y => normRef(y['Code EBP']) === normRef(code) && estKit(y)); // kit actif uniquement
       if (kit) html += `<div style="display:flex;gap:6px;margin-top:12px">
           <button onclick="ouvrirKit(${kit.id})" style="flex:2;background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer">🧰 Sortie / retour du kit</button>
           ${gestion ? `<button onclick="imprimerEtiquettesArticles([${kit.id}])" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer">🏷️ Étiquette</button>` : ''}
-        </div>`;
+        </div>
+        ${gestion ? `<button onclick="desactiverKit(${kit.id})" style="width:100%;margin-top:6px;background:none;border:1px solid #e0d6f0;color:#8e7cc3;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">Retirer de la gestion kit</button>` : ''}`;
       else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
       html += renderNomenclatureFiche(code);
@@ -13677,12 +13699,34 @@
       const r = await fetch(`${EBP_WORKER}/articles/all`, { headers: headersWorker(), cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
-      const brut = { t: Date.now(), prix: avecPrix, items: (d.results || []).map(x => ({ code: x.code, designation: x.designation, ref: x.ref, fournisseur: x.fournisseur, famille: x.famille, unite: x.unite, ...(x.ouvrage ? { ouvrage: true, nbComp: x.nb_composants || 0 } : {}), ...(avecPrix ? { prix: x.prix } : {}) })) };
+      const brut = { t: Date.now(), version: d.version || '', prix: avecPrix, items: (d.results || []).map(x => ({ code: x.code, designation: x.designation, ref: x.ref, fournisseur: x.fournisseur, famille: x.famille, unite: x.unite, ...(x.ouvrage ? { ouvrage: true, nbComp: x.nb_composants || 0 } : {}), ...(avecPrix ? { prix: x.prix } : {}) })) };
       if (!avecPrix) { try { localStorage.setItem(CLE_CATALOGUE_LOCAL, JSON.stringify(brut)); } catch (e) {} }
       _catLocal = indexerCatalogueLocal(brut);
       return _catLocal;
     })().finally(() => { _catLocalPromesse = null; });
     return _catLocalPromesse;
+  }
+  // Vérifie (requête légère) si le catalogue ou les nomenclatures ont changé dans
+  // EBP depuis le téléchargement ; si oui, retéléchargement immédiat.
+  // Au plus une vérification toutes les 2 minutes.
+  let _catVerifT = 0;
+  async function verifierVersionCatalogue(forcer = false) {
+    if (!_catLocal || (!forcer && Date.now() - _catVerifT < 2 * 60000)) return false;
+    _catVerifT = Date.now();
+    try {
+      const r = await fetch(`${EBP_WORKER}/articles/version`, { headers: headersWorker(), cache: 'no-store' });
+      if (!r.ok) return false;
+      const { version } = await r.json();
+      if (version && version !== _catLocal.version) {
+        await chargerCatalogueLocal(true);
+        _nomenclatures.clear();
+        if (document.getElementById('commandes-vue-articles')?.style.display === 'block') renderCommandesArticles(true);
+        if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+        rafraichirFicheArticleOuverte();
+        return true;
+      }
+    } catch (e) {}
+    return false;
   }
   function rechercherCatalogueLocal(q, limite = 30) {
     if (!_catLocal) return [];
@@ -14589,14 +14633,15 @@
     try {
       const controller = new AbortController();
       const t = setTimeout(() => controller.abort(), 55000);
-      const resp = await fetch(`${EBP_WORKER}/sync-articles`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
+      const resp = await fetch(`${EBP_WORKER}/sync-articles?ouvrages=1`, { cache: 'no-store', signal: controller.signal, headers: headersWorker() });
       clearTimeout(t);
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
       if (data.status === 'erreur') throw new Error(data.message || (data.erreurs || []).join(' · ') || 'erreur');
       statut.style.cssText += ';background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7';
-      statut.textContent = `✅ Catalogue EBP : ${data.catalogue ?? '?'} articles · ${data.lus_ebp ?? 0} lu(s) dans EBP · ${data.maj ?? 0} fiche(s) en stock mise(s) à jour${data.rattaches ? ', ' + data.rattaches + ' rattachée(s)' : ''}${data.erreurs?.length ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
+      statut.textContent = `✅ Catalogue EBP : ${data.catalogue ?? '?'} articles · ${data.lus_ebp ?? 0} lu(s) dans EBP · ${data.maj ?? 0} fiche(s) en stock mise(s) à jour${data.rattaches ? ', ' + data.rattaches + ' rattachée(s)' : ''}${data.ouvrages?.ouvrages !== undefined ? ` · ${data.ouvrages.ouvrages} ouvrage(s)` : ''}${data.erreurs?.length ? ', ' + data.erreurs.length + ' erreur(s)' : ''}`;
       await chargerStock(true);
+      try { await chargerCatalogueLocal(true); _nomenclatures.clear(); } catch (e) {}
       renderStock();
     } catch (e) {
       statut.style.cssText += ';background:#fdecea;color:#c62828;border:1px solid #ef9a9a';
