@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V12';
+  const APP_VERSION = 'V13';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -11669,9 +11669,8 @@
         const t = normCatLocal(`${a['Designation']} ${a['Reference fournisseur']} ${a['Fournisseur']}`);
         if (tout || mots.every(m => t.includes(m))) res.push({ x: null, a });
       });
-      // Nombre de lignes de commande par code article (repère d'usage)
-      const nbCmd = {};
-      Object.values(_commandesLignesCache || {}).forEach(lignes => lignes.forEach(l => { const c = normRef(codeArticleLigne(l)); if (c) nbCmd[c] = (nbCmd[c] || 0) + 1; }));
+      // Commandes EN COURS uniquement (non réceptionnées) : nombre de commandes et quantité attendue
+      if (!_lignesEnCoursDate && !_lignesEnCoursPromesse) chargerLignesEnCours().then(() => renderCommandesArticles(true));
       if (!res.length) {
         listeEl.innerHTML = `<div style="background:#f6f6f6;border-radius:10px;padding:14px;text-align:center;color:#666"><div style="font-size:22px">🔍</div><div style="font-size:13px;font-weight:800;margin:4px 0">Aucun article trouvé pour « ${esc(q)} »</div><div style="font-size:11px">Ni dans le catalogue EBP (articles actifs), ni dans le stock. Essayez le code EBP ou la référence fournisseur.</div></div>`;
         return;
@@ -11683,7 +11682,9 @@
         const designation = (x && x.designation) || (a && a['Designation']) || code;
         const qte = a ? (_stockParArticle[a.id] || 0) : null;
         const prix = x && Number(x.prix) > 0 ? Number(x.prix) : (a ? prixArticle(a) : null);
-        const nb = code ? (nbCmd[normRef(code)] || 0) : 0;
+        const enCmdArt = enCommandeArticle(code, a);
+        const nb = new Set(enCmdArt.map(e => e.r.id)).size;
+        const qteAttendue = totalEnCommande(enCmdArt);
         const ouvrir = a ? `ouvrirFicheArticleModal(${a.id})` : `ouvrirFicheArticleModal(null, '${String(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`;
         return `<div onclick="${ouvrir}" style="cursor:pointer;background:#fff;border:1px solid #eee;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;gap:10px;align-items:center">
           <div style="min-width:0">
@@ -11692,7 +11693,7 @@
             <div style="margin-top:4px;display:flex;gap:5px;flex-wrap:wrap">
               ${x && x.ouvrage ? `<span style="font-size:10px;font-weight:800;border-radius:8px;padding:1px 7px;background:#ede7f6;color:#5e35b1">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
               ${x && x.ouvrage ? '' : a ? `<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${qte > 0 ? '#e8f0e7' : '#f4f4f4'};color:${qte > 0 ? 'var(--vert)' : '#999'}">📦 ${fmtQte(qte)} ${esc((x && x.unite) || a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + esc(libelleEmplacement(a)) : ''}</span>` : '<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#eef2f7;color:#5a6b80;font-weight:700">pas au stock</span>'}
-              ${nb ? `<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#fdf3e0;color:#a5761f;font-weight:700">🧾 ${nb} commande(s)</span>` : ''}
+              ${nb ? `<span title="Commandé, pas encore réceptionné" style="font-size:10px;border-radius:8px;padding:1px 7px;background:#fff3e0;border:1px solid #f0c27a;color:#a2560f;font-weight:800">🚚 ${nb} commande${nb > 1 ? 's' : ''} en cours · ${fmtQte(qteAttendue)} attendu${qteAttendue > 1 ? 's' : ''}</span>` : ''}
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0">
