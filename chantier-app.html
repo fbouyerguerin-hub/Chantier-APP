@@ -32,6 +32,16 @@
     .header-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; }
     .header-logo { height: 78px; width: auto; filter: brightness(1.1); }
     .header-title { font-size: 13px; font-weight: 700; color: #fff; text-align: right; letter-spacing: 0.3px; }
+    /* Bandeaux figés (titre, onglets, recherche, dates, filtres) : restent visibles au défilement.
+       --h-header = hauteur de l'en-tête de l'appli, --h-bandeau = hauteur du bandeau de la page affichée
+       (mis à jour automatiquement par caleBandeaux()). */
+    .bandeau-fige { position: sticky; top: var(--h-header, 0px); z-index: 9; background: var(--gris-clair); box-shadow: 0 6px 8px -8px rgba(0,0,0,0.25); }
+    .filtre-fige { position: sticky; top: calc(var(--h-header, 0px) + var(--h-bandeau, 0px)); z-index: 8; background: var(--gris-clair); padding-top: 6px; padding-bottom: 6px; box-shadow: 0 6px 8px -8px rgba(0,0,0,0.18); }
+    /* En-tête compacte dès que l'on fait défiler : laisse plus de place au contenu */
+    .header.header-compact .header-logo { height: 34px; }
+    .header.header-compact .header-top { padding: 6px 16px; }
+    .header-logo, .header-top { transition: height .15s, padding .15s; }
+    @media print { .bandeau-fige, .filtre-fige { position: static; box-shadow: none; } }
     .header-bar { height: 4px; background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%); }
 
     /* SECTIONS */
@@ -728,7 +738,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V20';
+  const APP_VERSION = 'V22';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1386,18 +1396,37 @@
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     window.scrollTo(0, 0);
-    if (id === 'page-commandes') caleBandeauCommandes();
+    caleBandeaux();
   }
 
-  // Positionne le bandeau des commandes juste sous l'en-tête de l'appli (s'il est affiché)
-  function caleBandeauCommandes() {
-    const bandeau = document.getElementById('commandes-bandeau');
-    if (!bandeau) return;
+  // Bandeaux figés : cale les bandeaux (.bandeau-fige) sous l'en-tête de l'appli et les
+  // filtres de sous-onglets (.filtre-fige) sous le bandeau de la page affichée.
+  function caleBandeaux() {
     const header = document.querySelector('.header');
-    const hauteur = header && getComputedStyle(header).display !== 'none' ? header.offsetHeight : 0;
-    bandeau.style.top = hauteur + 'px';
+    const hHeader = header && getComputedStyle(header).display !== 'none' ? header.offsetHeight : 0;
+    const page = document.querySelector('.page.active');
+    const bandeau = page ? page.querySelector('.bandeau-fige') : null;
+    const racine = document.documentElement.style;
+    racine.setProperty('--h-header', hHeader + 'px');
+    racine.setProperty('--h-bandeau', (bandeau ? bandeau.offsetHeight : 0) + 'px');
   }
-  window.addEventListener('resize', caleBandeauCommandes);
+  function caleBandeauCommandes() { caleBandeaux(); } // compatibilité anciens appels
+  window.addEventListener('resize', caleBandeaux);
+  window.addEventListener('scroll', () => {
+    const header = document.querySelector('.header');
+    if (!header) return;
+    const compact = window.scrollY > 40;
+    if (header.classList.contains('header-compact') !== compact) header.classList.toggle('header-compact', compact);
+  }, { passive: true });
+  document.addEventListener('DOMContentLoaded', () => {
+    // Recalcul automatique dès qu'un bandeau ou l'en-tête change de hauteur
+    // (message de synchro, onglets masqués, en-tête compacte…)
+    if ('ResizeObserver' in window) {
+      const ro = new ResizeObserver(() => caleBandeaux());
+      document.querySelectorAll('.header, .bandeau-fige').forEach(el => ro.observe(el));
+    }
+    caleBandeaux();
+  });
 
   // ── ZONE REQUISE ──
   // Une tâche OU une sous-tâche exige une zone si elle est cochée « Zone requise » dans Baserow
@@ -20601,6 +20630,7 @@
 
 <!-- PAGE GESTION -->
 <div id="page-gestion" class="page">
+  <div class="bandeau-fige">
   <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:16px 20px;margin-bottom:16px">
     <div style="font-size:16px;font-weight:800;color:#fff">⚙️ Administration</div>
     <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px">Espace réservé aux administrateurs</div>
@@ -20615,9 +20645,11 @@
     <button class="tab-btn" id="tab-g-rentabilite" onclick="switchGestionTab('rentabilite')" style="font-size:11px">💶 Renta</button>
     <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
   </div>
+  </div>
 
   <!-- UTILISATEURS -->
   <div id="gestion-utilisateurs">
+  <div class="filtre-fige">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Comptes collaborateurs</div>
       <button onclick="ouvrirFormUser(null)" id="btn-nouvel-user" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
@@ -20630,11 +20662,13 @@
       <button id="tab-users-actifs" onclick="switchUsersTab('actifs')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">✅ Actifs</button>
       <button id="tab-users-inactifs" onclick="switchUsersTab('inactifs')" style="flex:1;padding:8px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">❌ Inactifs</button>
     </div>
+  </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
   <!-- CHANTIERS -->
   <div id="gestion-chantiers" style="display:none">
+  <div class="filtre-fige">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
       <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
@@ -20644,11 +20678,13 @@
       <select id="filtre-ca-chantiers" onchange="filtrerChantiersGestion()" style="display:none;width:100%;margin-top:8px;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box"></select>
       <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--gris-moyen)"><input type="checkbox" id="voir-clotures-chantiers" onchange="filtrerChantiersGestion()"> 🔒 Voir uniquement les chantiers clôturés (<span id="nb-clotures-chantiers">0</span>)</label>
     </div>
+  </div>
     <div id="liste-chantiers-gestion"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
   <!-- CONGÉS ADMIN -->
   <div id="gestion-conges-admin" style="display:none">
+  <div class="filtre-fige">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Demandes de congés</div>
       <button onclick="ouvrirFormCongeAdmin(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouvelle</button>
@@ -20667,11 +20703,13 @@
         <option value="Autre">Autre</option>
       </select>
     </div>
+  </div>
     <div id="liste-conges-admin"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
   <!-- EXPORT -->
   <div id="gestion-rentabilite" style="display:none">
+  <div class="filtre-fige">
     <div style="margin:0 16px 10px;display:flex;align-items:center;gap:8px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">💶 Rentabilité chantiers</div>
       <button onclick="exportRentaFiltre(this)" title="Exporte les chantiers affichés (filtre, tri, taux et coefficient)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
@@ -20692,6 +20730,7 @@
       </select>
       <label style="font-size:11px;color:var(--gris-moyen);display:flex;align-items:center;gap:4px"><input type="checkbox" id="renta-hors" onchange="renderRentabilite()"> Hors analyse</label>
     </div>
+  </div>
     <div id="renta-avert" style="display:none;margin:0 16px 10px;font-size:11px;color:#856404;background:#fef3cd;border-radius:8px;padding:6px 10px"></div>
     <div id="renta-kpis" style="margin:0 16px 12px"></div>
     <div id="renta-liste" style="margin:0 16px 20px"></div>
@@ -20801,6 +20840,7 @@
 
   <!-- PLANNING ADMIN -->
   <div id="gestion-planning-admin" style="display:none">
+  <div class="filtre-fige">
     <div class="semaine-nav-admin">
       <button class="semaine-nav-btn" onclick="changerSemaineAdmin(-1)">‹</button>
       <div style="text-align:center;flex:1">
@@ -20809,6 +20849,7 @@
       <button class="semaine-nav-btn" onclick="changerSemaineAdmin(1)">›</button>
       <button onclick="exportExcelAdmin()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 Excel</button>
     </div>
+  </div>
     <div id="planning-admin-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
     <div class="planning-admin-wrap">
       <table class="planning-admin-table" id="planning-admin-grid"></table>
@@ -21310,6 +21351,7 @@
 
 <!-- PAGE PLAN DE CHARGE -->
 <div id="page-charge" class="page" style="display:none">
+  <div class="bandeau-fige">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">👷 Plan de charge</div>
     <button id="btn-nouvelle-affaire" onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
@@ -21324,13 +21366,16 @@
     <button id="charge-tab-btn-suivi" onclick="switchChargeTab('suivi')"
       style="padding:8px 16px;border:none;border-bottom:3px solid transparent;background:none;font-size:13px;font-weight:700;cursor:pointer;color:#aaa">📈 Suivi</button>
   </div>
+  </div>
 
   <!-- Sous-onglet Affaires -->
   <div id="charge-tab-affaires" style="padding:0 16px 100px">
+  <div class="filtre-fige">
     <div style="margin:8px 0 4px">
       <input type="text" id="charge-affaires-recherche" placeholder="🔍 Rechercher un chantier…" oninput="filtrerListeAffaires(this.value)"
         style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
     </div>
+  </div>
     <div id="charge-affaires-liste">
       <div class="feuille-loading">⏳ Chargement…</div>
     </div>
@@ -21339,6 +21384,7 @@
   <!-- Sous-onglet Capacité -->
   <div id="charge-tab-capacite" style="display:none">
     <!-- Filtres par poste -->
+  <div class="filtre-fige">
     <div style="display:flex;gap:6px;margin:8px 16px 12px;overflow-x:auto;padding-bottom:2px">
       <button id="btn-poste-tous" onclick="filtrerPosteCharge('tous')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
       <button id="btn-poste-etude" onclick="filtrerPosteCharge('Étude')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Étude</button>
@@ -21360,6 +21406,7 @@
       <input type="text" id="charge-capacite-recherche" placeholder="🔍 Rechercher un chantier dans le calendrier…" oninput="filtrerCapaciteChantier(this.value)"
         style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
     </div>
+  </div>
     <div id="charge-content" style="padding:0 16px 100px">
       <div class="feuille-loading">⏳ Chargement…</div>
     </div>
@@ -21367,10 +21414,12 @@
 
   <!-- Sous-onglet Suivi -->
   <div id="charge-tab-suivi" style="display:none;padding:0 0 100px">
+  <div class="filtre-fige">
     <div style="padding:8px 16px 4px">
       <input id="suivi-search" type="text" placeholder="🔍 Rechercher un chantier…" oninput="filtrerSuivi(this.value)"
         style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
     </div>
+  </div>
     <div id="charge-suivi-content" style="padding:8px 0">
       <div class="feuille-loading">⏳ Chargement…</div>
     </div>
@@ -21442,12 +21491,14 @@
 
 <!-- PAGE MESSAGES -->
 <div id="page-messages" class="page" style="display:none">
+  <div class="bandeau-fige">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">✉️ Mes messages</div>
     <button onclick="ouvrirNouveauMessage()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
   </div>
   <div style="padding:0 16px 10px">
     <input type="text" id="search-messages-collab" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerConversations()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:13px;outline:none" />
+  </div>
   </div>
   <div id="messages-content" style="padding:8px 16px 80px">
     <div class="feuille-loading">⏳ Chargement…</div>
@@ -21548,7 +21599,7 @@
 <!-- PAGE COMMANDES FOURNISSEURS -->
 <div id="page-commandes" class="page" style="display:none">
   <!-- Bandeau fixe en haut de l'écran (titre, recherche, onglets) -->
-  <div id="commandes-bandeau" style="position:sticky;top:0;z-index:9;background:var(--gris-clair);padding-bottom:8px;box-shadow:0 6px 8px -8px rgba(0,0,0,0.25)">
+  <div id="commandes-bandeau" class="bandeau-fige" style="padding-bottom:8px">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📦 Commandes fournisseurs</div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -21585,7 +21636,7 @@
 
   <!-- Vue Liste (commandes validées AR, en attente de réception) -->
   <div id="commandes-vue-liste">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
@@ -21594,7 +21645,7 @@
 
   <!-- Vue En attente AR -->
   <div id="commandes-vue-ar" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
@@ -21602,7 +21653,7 @@
 
   <!-- Vue Réception partielle -->
   <div id="commandes-vue-partielle" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesPartielles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-partielle-liste" style="padding:8px 16px 80px"></div>
@@ -21610,7 +21661,7 @@
 
   <!-- Vue Réceptionnées -->
   <div id="commandes-vue-receptionnees" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-receptionnees-liste" style="padding:8px 16px 80px"></div>
@@ -21618,7 +21669,7 @@
 
   <!-- Vue Par chantier -->
   <div id="commandes-vue-chantier" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-chantier-recherche" placeholder="🔍 Rechercher un chantier…" oninput="renderCommandesParChantier()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-par-chantier" style="padding:8px 16px 80px"></div>
@@ -21626,7 +21677,7 @@
 
   <!-- Vue Articles / Tarifs (consultation des prix par article, tous fournisseurs/chantiers) -->
   <div id="commandes-vue-articles" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (désignation, code EBP, référence, fournisseur)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-articles-liste" style="padding:8px 16px 80px"></div>
@@ -21634,7 +21685,7 @@
 
   <!-- Vue Retour chantier : marquer les articles d'une commande concernés par un retour -->
   <div id="commandes-vue-retour" style="display:none">
-    <div style="padding:10px 16px 0">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="retour-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
@@ -21655,6 +21706,7 @@
       </div>
       <button id="btn-etiq-catalogue" onclick="ouvrirEtiquettesCatalogue()" style="display:none;width:100%;background:#fff;border:1.5px dashed var(--vert);border-radius:10px;padding:9px;font-size:12px;font-weight:800;color:var(--vert);cursor:pointer;margin-bottom:8px">🖨️ Étiquettes en masse — catalogue EBP</button>
       <div id="stock-sync-statut" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600"></div>
+  <div class="filtre-fige" style="margin:0 -16px;padding:6px 16px 4px">
       <input type="text" id="stock-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon (tout le catalogue)…" oninput="renderStock(); programmerRechercheCatalogue()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
       <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:4px">
         <button class="stock-filtre-btn" data-filtre="tous" onclick="setFiltreStock('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
@@ -21663,6 +21715,7 @@
         <button class="stock-filtre-btn" data-filtre="sansemp" onclick="setFiltreStock('sansemp')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">📍 Sans emplacement</button>
         <button class="stock-filtre-btn" data-filtre="reemploi" onclick="setFiltreStock('reemploi')" title="Matériel revenu des chantiers, disponible pour un autre chantier" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">↩️ Réemploi chantier</button>
       </div>
+  </div>
     </div>
     <div id="stock-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -21671,6 +21724,7 @@
 
 <!-- PAGE COMMANDES CLIENTS (EBP — ventes) — réservée Administrateur/Gestionnaire -->
 <div id="page-commandes-clients" class="page" style="display:none">
+  <div class="bandeau-fige">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">🧾 Commandes clients</div>
     <button onclick="syncEBPClients()" id="btn-sync-ebp-clients" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
@@ -21682,11 +21736,13 @@
     <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
+  </div>
   <div id="commandes-clients-liste" style="padding:0 16px 80px"></div>
 </div>
 
 <!-- PAGE RÉPERTOIRE (contacts clients, fournisseurs, sous-traitants…) — consultation pour tous, édition Admin/Gestionnaire -->
 <div id="page-repertoire" class="page" style="display:none">
+  <div class="bandeau-fige">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📇 Répertoire</div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -21708,6 +21764,7 @@
   </div>
   <div id="repertoire-filtres" style="display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 16px 8px"></div>
   <div id="repertoire-resume" style="padding:0 16px 6px;font-size:12px;color:var(--gris-moyen)"></div>
+  </div>
   <div id="repertoire-liste" style="padding:0 16px 80px"></div>
 </div>
 
@@ -21731,12 +21788,14 @@
 <!-- PAGE FEUILLE D'HEURES -->
 <div id="page-feuille" class="page">
 
+  <div class="bandeau-fige">
   <div class="mois-selector">
     <button class="mois-btn" onclick="changerMois(-1)">‹</button>
     <span class="mois-label" id="mois-label">—</span>
     <button class="mois-btn" onclick="changerMois(1)">›</button>
     <button class="btn-print" onclick="imprimerPage('feuille')">🖨️</button>
     <button id="btn-signer-semaine" onclick="ouvrirSignatureSemaineEnCours()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;margin-left:6px">✍️ Signer</button>
+  </div>
   </div>
 
   <div class="print-title" id="print-title-feuille"></div>
