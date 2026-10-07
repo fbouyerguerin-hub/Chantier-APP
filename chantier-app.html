@@ -728,7 +728,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V19';
+  const APP_VERSION = 'V20';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12235,7 +12235,10 @@
       resumeEl.textContent = filtrees.length ? `${filtrees.length} commande(s) en attente de réception` : 'Aucune commande en attente';
     }
 
-    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    // Commandes en retard en tête (les plus en retard d'abord), puis les autres par date de commande
+    const triees = [...filtrees].sort((a, b) => (joursRetardReception(b) - joursRetardReception(a)) || (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    const nbRetard = filtrees.filter(r => joursRetardReception(r) > 0).length;
+    if (nbRetard) resumeEl.innerHTML = echapperHtmlNote(resumeEl.textContent) + ` · <span style="color:#c0392b;font-weight:800">⏰ ${nbRetard} en retard</span>`;
     if (_commandesVueActuelle === 'liste') _commandesTrieesActuelles = triees;
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'liste')).join('') ||
       '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>';
@@ -15783,6 +15786,18 @@
     }
   }
 
+  // Nombre de jours de retard sur la date de réception prévue (0 = pas en retard).
+  // Concerne les commandes en attente de réception ou partiellement reçues.
+  function joursRetardReception(r) {
+    const prevue = r['Date reception prevue'];
+    if (!prevue) return 0;
+    const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
+    if (statut !== 'En attente réception' && statut !== 'Réception partielle') return 0;
+    const auj = new Date(); auj.setHours(12, 0, 0, 0);
+    const j = Math.round((auj - new Date(String(prevue).slice(0, 10) + 'T12:00:00')) / 86400000);
+    return j > 0 ? j : 0;
+  }
+
   function renderCarteCommande(r, peutVoirPrix, contexte) {
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
@@ -15950,14 +15965,15 @@
       <div id="details-${uidRetour}" style="display:none">${renderFormRetourArticles(r, uidRetour)}</div>
     ` : '';
 
-    return `<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
+    const retard = joursRetardReception(r);
+    return `<div style="background:${retard ? '#fff6f5' : '#fff'};border:${retard ? '1.5px solid #e8a39b' : '1px solid #eee'};${retard ? 'border-left:5px solid #c0392b;' : ''}border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
         <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
         <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
-      ${(dateReceptionPrevue && statut !== 'En attente AR' && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:#8a5fc2;margin-bottom:2px">📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
+      ${(dateReceptionPrevue && statut !== 'En attente AR' && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:${retard ? '#c0392b' : '#8a5fc2'};${retard ? 'font-weight:700;' : ''}margin-bottom:2px">${retard ? `<span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ En retard de ${retard} j</span>` : ''}📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="display:flex;align-items:center;gap:6px">
           <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
