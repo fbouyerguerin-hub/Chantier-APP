@@ -675,6 +675,15 @@
       <div class="modal-option" onclick="imprimerCommandesListe('simple')">📋 Liste simple <span style="margin-left:6px;font-weight:400;color:#aaa;font-size:12px">(sans le détail des articles)</span></div>
       <div class="modal-option" onclick="imprimerCommandesListe('articles')">📑 Liste avec articles <span style="margin-left:6px;font-weight:400;color:#aaa;font-size:12px">(détail des lignes de chaque commande)</span></div>
     </div>
+    <div id="bloc-export-mensuel" style="display:none;margin:4px 20px 18px;padding:12px;border-radius:10px;background:var(--beige-clair)">
+      <div style="font-size:13px;font-weight:800;color:var(--gris)">📦 Export mensuel — sauvegarde</div>
+      <div style="font-size:11px;color:var(--gris-moyen);margin:3px 0 8px">Toutes les commandes du mois (date de commande) : index Excel + pièces jointes (commande, AR, documents), rangées par commande dans un ZIP.</div>
+      <div style="display:flex;gap:8px">
+        <input type="month" id="export-mois" style="flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px" />
+        <button id="btn-export-mois" onclick="exporterCommandesMois()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer">Exporter</button>
+      </div>
+      <div id="export-mois-statut" style="font-size:11px;color:var(--gris-moyen);margin-top:6px"></div>
+    </div>
   </div>
 </div>
 
@@ -719,7 +728,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V15';
+  const APP_VERSION = 'V17';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1458,27 +1467,30 @@
   }
 
   function renderLignes() {
+    // Les tâches dépendent du chantier : sans chantier sélectionné, aucun choix n'est proposé.
+    const chantierChoisi = !!globalSelected['Chantiers'];
     document.getElementById('lignes-container').innerHTML = lignes.map((l, i) => `
       <div class="ligne-card">
         <div class="ligne-header">
           <span class="ligne-num">Tâche ${i+1}</span>
           <button class="btn-delete" onclick="supprimerLigne(${l.id})">🗑 Supprimer</button>
         </div>
-        <div class="field">
+        ${chantierChoisi ? '' : `<div onclick="openModal('Chantiers', null)" style="cursor:pointer;background:var(--beige-clair);border:1px dashed #d8cdb8;border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:#7a6a3a;text-align:center">🏗 Sélectionnez d'abord un chantier pour choisir la tâche et la sous-tâche.</div>`}
+        <div class="field" style="display:${chantierChoisi ? 'block' : 'none'}">
           <label>Type de tâche <span style="color:#c0392b">*</span></label>
           <div class="selector" onclick="openModal('TypeTaches',${l.id})">
             <span class="selector-value ${l.typeTache?'':'empty'}" id="val-TypeTaches-${l.id}">${l.typeTache?l.typeTache.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
-        <div class="field">
+        <div class="field" style="display:${chantierChoisi ? 'block' : 'none'}">
           <label>Sous-tâche <span style="color:#c0392b">*</span></label>
           <div class="selector" onclick="openModal('SousTaches',${l.id})">
             <span class="selector-value ${l.sousTache?'':'empty'}" id="val-SousTaches-${l.id}">${l.sousTache?l.sousTache.value:'Sélectionner…'}</span>
             <span>▾</span>
           </div>
         </div>
-        <div class="field" id="zone-field-${l.id}" style="display:${ligneExigeZone(l)?'block':'none'}">
+        <div class="field" id="zone-field-${l.id}" style="display:${chantierChoisi && ligneExigeZone(l)?'block':'none'}">
           <label>Zone</label>
           <div style="background:#fffbe6;border:1px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:11px;color:#7a6a3a;margin-bottom:8px;line-height:1.7">
             Z1a → 0 à 5 km &nbsp;|&nbsp; Z1b → 5 à 10 km &nbsp;|&nbsp; Z2 → 10 à 20 km &nbsp;|&nbsp; Z3 → 20 à 30 km<br>
@@ -1534,6 +1546,11 @@
       ongletVehSaisie = (cur && cur.value && !estDansOngletImmatSaisie(cur.value)) ? 'autre' : 'immat';
     }
     const chantierSelectionne = globalSelected['Chantiers'];
+    if ((key === 'TypeTaches' || key === 'SousTaches') && !chantierSelectionne) {
+      modalKey = null; modalLigneId = null;
+      alert('⚠️ Sélectionnez d\'abord un chantier : les tâches proposées dépendent du chantier.');
+      return;
+    }
     if ((key === 'TypeTaches' || key === 'SousTaches') && chantierSelectionne) {
       try {
         const resultats = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLES[key].id + '/?user_field_names=true&size=200');
@@ -1642,9 +1659,17 @@
         if (el) { el.textContent = value; el.classList.remove('empty'); }
       }
     } else {
+      const ancienChantierId = modalKey === 'Chantiers' ? globalSelected.Chantiers?.id : null;
       globalSelected[modalKey] = obj;
       const el = document.getElementById(`val-${modalKey}`);
       if (el) { el.textContent = value; el.classList.remove('empty'); }
+      if (modalKey === 'Chantiers') {
+        // Autre chantier : tâches / sous-tâches / zone choisies pour l'ancien ne sont plus valables
+        if (ancienChantierId != null && String(ancienChantierId) !== String(id)) {
+          lignes.forEach(l => { l.typeTache = null; l.sousTache = null; l.zone = null; });
+        }
+        renderLignes(); // affiche les choix de tâches maintenant qu'un chantier est sélectionné
+      }
     }
     closeModal();
   }
@@ -11558,17 +11583,179 @@
   // articles de chaque commande (réutilise renderLignesArticlesGroupees).
   function ouvrirImpressionCommandes() {
     const label = LABELS_ONGLETS_COMMANDES[_commandesVueActuelle];
-    if (!label) {
+    const exportOk = estProfilPrix();
+    if (!label && !exportOk) {
       alert('L\'impression est disponible depuis les onglets En attente AR, En attente réception, Partielle ou Réceptionnées. Sélectionnez l\'un de ces onglets puis réessayez.');
       return;
     }
-    document.getElementById('modal-commandes-impression-onglet').textContent = label;
+    // Impression : liée à l'onglet affiché. Export mensuel : Administrateur / Gestionnaire (montants).
+    document.querySelector('#modal-commandes-impression .modal-options').style.display = label ? '' : 'none';
+    document.getElementById('modal-commandes-impression-onglet').parentElement.style.display = label ? '' : 'none';
+    document.getElementById('bloc-export-mensuel').style.display = exportOk ? 'block' : 'none';
+    const inpMois = document.getElementById('export-mois');
+    if (inpMois && !inpMois.value) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); inpMois.value = dateYMD(d).slice(0, 7); }
+    document.getElementById('export-mois-statut').textContent = '';
+    document.getElementById('modal-commandes-impression-onglet').textContent = label || '—';
     document.getElementById('modal-commandes-impression').classList.add('open');
   }
 
   function fermerModalImpressionCommandes(e) {
     if (!e || e.target === document.getElementById('modal-commandes-impression') || e.target.classList.contains('modal-close')) {
       document.getElementById('modal-commandes-impression').classList.remove('open');
+    }
+  }
+
+  // ── Export mensuel (sauvegarde) : Excel d'index + pièces jointes, en ZIP ──
+  // Même arborescence que le script guerin_archive_commandes.py :
+  //   Commandes_AAAA-MM/Commandes_AAAA-MM.xlsx
+  //   Commandes_AAAA-MM/CF00009250 - JORIS - CH1334/Commande - ….pdf, AR - ….pdf…
+  async function exporterCommandesMois() {
+    if (!estProfilPrix()) { alert('Export réservé aux profils Administrateur et Gestionnaire.'); return; }
+    const mois = document.getElementById('export-mois').value;
+    if (!/^\d{4}-\d{2}$/.test(mois)) { alert('Choisissez un mois.'); return; }
+    const statut = document.getElementById('export-mois-statut');
+    const btn = document.getElementById('btn-export-mois');
+    const info = t => { statut.textContent = t; };
+    btn.disabled = true; btn.style.opacity = .5;
+    try {
+      info('⏳ Chargement des modules…');
+      await chargerLibScan('jszip');
+      if (typeof ExcelJS === 'undefined') throw new Error('Module Excel indisponible (connexion ?)');
+      const lireTout = async (table) => {
+        let url = `https://api.baserow.io/api/database/rows/table/${table}/?user_field_names=true&size=200`, res = [];
+        while (url) {
+          const r = await fetch(url, { headers: HEADERS });
+          if (!r.ok) throw new Error('Baserow ' + r.status);
+          const d = await r.json();
+          res = res.concat(d.results || []);
+          url = d.next ? d.next.replace('http://', 'https://') : null;
+        }
+        return res;
+      };
+      info('⏳ Lecture des commandes…');
+      const commandes = (await lireTout(TABLE_COMMANDES_FOURNISSEURS))
+        .filter(c => String(c['Date commande'] || '').startsWith(mois))
+        .sort((a, b) => String(a['Numero commande'] || '').localeCompare(String(b['Numero commande'] || '')));
+      if (!commandes.length) { info(`Aucune commande datée de ${mois}.`); return; }
+      const ids = new Set(commandes.map(c => c.id));
+      const lignesParCmd = {};
+      (await lireTout(TABLE_COMMANDES_FOURNISSEURS_LIGNES)).forEach(l => {
+        const cid = (l['Commande'] || [])[0]?.id;
+        if (ids.has(cid)) (lignesParCmd[cid] = lignesParCmd[cid] || []).push(l);
+      });
+
+      const v = x => x == null ? '' : Array.isArray(x) ? x.map(v).filter(Boolean).join(', ') : typeof x === 'object' ? String(x.value ?? x.name ?? '') : typeof x === 'boolean' ? (x ? 'oui' : '') : String(x);
+      const n = x => { const f = parseFloat(String(x ?? '').replace(',', '.')); return isNaN(f) ? null : f; };
+      const d = x => x ? new Date(String(x).slice(0, 10) + 'T12:00:00') : null;
+      const propre = (s, max = 80) => (String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, max).replace(/[ .]+$/, '')) || 'sans_nom';
+      const dossierCmd = c => { const ch = v(c['Chantier']); return propre([v(c['Numero commande']) || 'ID' + c.id, v(c['Fournisseur']), ch ? ch.split(' ')[0] : ''].filter(Boolean).join(' - ')); };
+      const CHAMPS = [['PDF', 'Commande'], ['PDF sans prix', 'Commande sans prix'], ['Accusé de réception', 'AR'], ['Documents', 'Document']];
+
+      const racine = `Commandes_${mois}`;
+      const zip = new JSZip();
+      const pieces = {}, echecs = [];
+      let nbFichiers = 0, i = 0;
+      for (const c of commandes) {
+        i++;
+        const dossier = dossierCmd(c);
+        pieces[c.id] = {};
+        for (const [champ, prefixe] of CHAMPS) {
+          for (const f of (c[champ] || [])) {
+            if (!f || !f.url) continue;
+            info(`⏳ Pièces jointes : commande ${i}/${commandes.length}…`);
+            const nomOrig = f.visible_name || f.name || 'fichier';
+            const ext = (nomOrig.match(/\.[a-z0-9]{2,5}$/i) || ['.pdf'])[0];
+            let nom = `${prefixe} - ${propre(nomOrig.replace(/\.[a-z0-9]{2,5}$/i, ''), 90)}${ext}`, k = 2;
+            while (zip.file(`${racine}/${dossier}/${nom}`)) nom = `${prefixe} - ${propre(nomOrig.replace(/\.[a-z0-9]{2,5}$/i, ''), 90)} (${k++})${ext}`;
+            try {
+              const r = await fetch(f.url);
+              if (!r.ok) throw new Error(r.status);
+              zip.file(`${racine}/${dossier}/${nom}`, await r.blob());
+              (pieces[c.id][prefixe] = pieces[c.id][prefixe] || []).push(nom);
+              nbFichiers++;
+            } catch (e) {
+              echecs.push({ c, nom, url: f.url });
+              (pieces[c.id][prefixe] = pieces[c.id][prefixe] || []).push({ url: f.url });
+            }
+          }
+        }
+      }
+
+      info('⏳ Génération de l\'Excel…');
+      const wb = new ExcelJS.Workbook();
+      const entete = (ws, cols) => {
+        ws.columns = cols.map(([header, width]) => ({ header, width }));
+        const r = ws.getRow(1);
+        r.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E5E3E' } };
+        r.alignment = { vertical: 'middle', wrapText: true };
+        ws.views = [{ state: 'frozen', ySplit: 1 }];
+      };
+      const euro = '#,##0.00 "€"', lien = { color: { argb: 'FF0563C1' }, underline: true };
+      const ws = wb.addWorksheet('Commandes');
+      entete(ws, [['N° commande', 18], ['Fournisseur', 22], ['Chantier', 34], ['Date commande', 13], ['AR validé le', 13], ['AR validé par', 16], ['Réception prévue', 13], ['Réceptionné le', 13], ['Réceptionné par', 16], ['Statut', 20], ['Montant HT (€)', 14], ['Lieu de réception', 18], ['Note', 40], ['Dossier', 10], ['Commande', 12], ['Commande sans prix', 12], ['AR', 10], ['Documents', 12]]);
+      for (const c of commandes) {
+        const dossier = dossierCmd(c), p = pieces[c.id];
+        const row = ws.addRow([v(c['Numero commande']), v(c['Fournisseur']), v(c['Chantier']), d(c['Date commande']), d(c['Date validation AR']), v(c['Valide par']), d(c['Date reception prevue']), d(c['Date reception']), v(c['Receptionne par']), v(c['Statut']), n(c['Montant total HT']), v(c['Lieu de réception']), v(c['Note statut'])]);
+        [4, 5, 7, 8].forEach(col => { row.getCell(col).numFmt = 'dd/mm/yyyy'; });
+        row.getCell(11).numFmt = euro;
+        row.getCell(13).alignment = { wrapText: true, vertical: 'top' };
+        const poser = (col, texte, cible) => { const cell = row.getCell(col); cell.value = { text: texte, hyperlink: cible }; cell.font = lien; };
+        poser(14, '📁 Ouvrir', dossier);
+        [[15, 'Commande'], [16, 'Commande sans prix'], [17, 'AR']].forEach(([col, pre]) => {
+          const l = p[pre]; if (!l || !l.length) return;
+          if (l.length > 1) return poser(col, `📄 ${l.length} fichiers`, dossier);
+          poser(col, typeof l[0] === 'string' ? '📄 PDF' : '🌐 en ligne', typeof l[0] === 'string' ? `${dossier}/${l[0]}` : l[0].url);
+        });
+        if (p['Document'] && p['Document'].length) poser(18, `📎 ${p['Document'].length} doc(s)`, dossier);
+      }
+      ws.autoFilter = { from: 'A1', to: { row: ws.rowCount, column: 18 } };
+      ws.addRow([]);
+      const tot = ws.addRow(['TOTAL', `${commandes.length} commande(s)`, '', '', '', '', '', '', '', '', commandes.reduce((s, c) => s + (n(c['Montant total HT']) || 0), 0)]);
+      tot.font = { bold: true }; tot.getCell(11).numFmt = euro;
+
+      const wl = wb.addWorksheet('Lignes');
+      entete(wl, [['N° commande', 18], ['Fournisseur', 22], ['Chantier', 34], ['Code article', 14], ['Désignation', 55], ['Quantité', 10], ['Unité', 12], ['Montant HT (€)', 14], ['Retour chantier', 12]]);
+      for (const c of commandes) {
+        (lignesParCmd[c.id] || []).sort((a, b) => a.id - b.id).forEach(l => {
+          const r = wl.addRow([v(c['Numero commande']), v(c['Fournisseur']), v(c['Chantier']), v(l['Code article']) || v(l['Reference']), v(l['Description']), n(l['Quantite']), libUnite(l['Unite']), n(l['Montant HT']), v(l['Retour chantier'])]);
+          r.getCell(8).numFmt = euro;
+        });
+      }
+      if (wl.rowCount > 1) wl.autoFilter = { from: 'A1', to: { row: wl.rowCount, column: 9 } };
+
+      const wsy = wb.addWorksheet('Synthèse');
+      wsy.columns = [{ width: 40 }, { width: 14 }, { width: 16 }];
+      wsy.addRow([`Commandes fournisseurs — ${mois}`]).font = { bold: true, size: 14 };
+      wsy.addRow([`Export du ${new Date().toLocaleString('fr-FR')} par ${connectedCollab || '?'}`]);
+      for (const [titre, cle] of [['Par fournisseur', 'Fournisseur'], ['Par chantier', 'Chantier']]) {
+        wsy.addRow([]);
+        const h = wsy.addRow([titre, 'Commandes', 'Montant HT (€)']);
+        h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        [1, 2, 3].forEach(col => { h.getCell(col).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E5E3E' } }; });
+        const agg = {};
+        commandes.forEach(c => { const k = v(c[cle]) || '(non renseigné)'; agg[k] = agg[k] || [0, 0]; agg[k][0]++; agg[k][1] += n(c['Montant total HT']) || 0; });
+        Object.entries(agg).sort((a, b) => b[1][1] - a[1][1]).forEach(([k, [nb, m]]) => { wsy.addRow([k, nb, m]).getCell(3).numFmt = euro; });
+      }
+      if (echecs.length) {
+        const we = wb.addWorksheet('Non téléchargés');
+        entete(we, [['N° commande', 18], ['Fichier', 50], ['Lien Baserow', 60]]);
+        echecs.forEach(x => { const r = we.addRow([v(x.c['Numero commande']), x.nom, '']); r.getCell(3).value = { text: 'ouvrir', hyperlink: x.url }; r.getCell(3).font = lien; });
+      }
+      zip.file(`${racine}/${racine}.xlsx`, await wb.xlsx.writeBuffer());
+
+      info('⏳ Compression…');
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' }, m => info(`⏳ Compression… ${Math.round(m.percent)} %`));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = racine + '.zip';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      info(`✅ ${commandes.length} commande(s), ${nbFichiers} pièce(s) jointe(s)` + (echecs.length ? ` · ⚠️ ${echecs.length} non téléchargée(s) (voir l'onglet « Non téléchargés » de l'Excel)` : ''));
+    } catch (e) {
+      console.error('Export mensuel', e);
+      info('❌ ' + e.message);
+    } finally {
+      btn.disabled = false; btn.style.opacity = 1;
     }
   }
 
@@ -12553,7 +12740,9 @@
     scanner: ['https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
               'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'],
     qrcode:  ['https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js',
-              'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js']
+              'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js'],
+    jszip:   ['https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+              'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js']
   };
   const _libsChargees = {};
   function chargerLibScan(nom) {
