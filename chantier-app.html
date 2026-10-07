@@ -728,7 +728,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V17';
+  const APP_VERSION = 'V18';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -11649,7 +11649,7 @@
       const d = x => x ? new Date(String(x).slice(0, 10) + 'T12:00:00') : null;
       const propre = (s, max = 80) => (String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, max).replace(/[ .]+$/, '')) || 'sans_nom';
       const dossierCmd = c => { const ch = v(c['Chantier']); return propre([v(c['Numero commande']) || 'ID' + c.id, v(c['Fournisseur']), ch ? ch.split(' ')[0] : ''].filter(Boolean).join(' - ')); };
-      const CHAMPS = [['PDF', 'Commande'], ['PDF sans prix', 'Commande sans prix'], ['Accusé de réception', 'AR'], ['Documents', 'Document']];
+      const CHAMPS = [['PDF', 'Commande'], ['PDF sans prix', 'Commande sans prix'], ['Accusé de réception', 'AR'], ['Documents', 'Document'], ['Documents prives', 'Document privé']];
 
       const racine = `Commandes_${mois}`;
       const zip = new JSZip();
@@ -11693,7 +11693,7 @@
       };
       const euro = '#,##0.00 "€"', lien = { color: { argb: 'FF0563C1' }, underline: true };
       const ws = wb.addWorksheet('Commandes');
-      entete(ws, [['N° commande', 18], ['Fournisseur', 22], ['Chantier', 34], ['Date commande', 13], ['AR validé le', 13], ['AR validé par', 16], ['Réception prévue', 13], ['Réceptionné le', 13], ['Réceptionné par', 16], ['Statut', 20], ['Montant HT (€)', 14], ['Lieu de réception', 18], ['Note', 40], ['Dossier', 10], ['Commande', 12], ['Commande sans prix', 12], ['AR', 10], ['Documents', 12]]);
+      entete(ws, [['N° commande', 18], ['Fournisseur', 22], ['Chantier', 34], ['Date commande', 13], ['AR validé le', 13], ['AR validé par', 16], ['Réception prévue', 13], ['Réceptionné le', 13], ['Réceptionné par', 16], ['Statut', 20], ['Montant HT (€)', 14], ['Lieu de réception', 18], ['Note', 40], ['Dossier', 10], ['Commande', 12], ['Commande sans prix', 12], ['AR', 10], ['Documents', 12], ['Documents privés', 12], ['Notes', 45], ['Notes privées', 45]]);
       for (const c of commandes) {
         const dossier = dossierCmd(c), p = pieces[c.id];
         const row = ws.addRow([v(c['Numero commande']), v(c['Fournisseur']), v(c['Chantier']), d(c['Date commande']), d(c['Date validation AR']), v(c['Valide par']), d(c['Date reception prevue']), d(c['Date reception']), v(c['Receptionne par']), v(c['Statut']), n(c['Montant total HT']), v(c['Lieu de réception']), v(c['Note statut'])]);
@@ -11708,8 +11708,10 @@
           poser(col, typeof l[0] === 'string' ? '📄 PDF' : '🌐 en ligne', typeof l[0] === 'string' ? `${dossier}/${l[0]}` : l[0].url);
         });
         if (p['Document'] && p['Document'].length) poser(18, `📎 ${p['Document'].length} doc(s)`, dossier);
+        if (p['Document privé'] && p['Document privé'].length) poser(19, `🔒 ${p['Document privé'].length} doc(s)`, dossier);
+        [[20, 'Notes'], [21, 'Notes privees']].forEach(([col, champ]) => { const cell = row.getCell(col); cell.value = v(c[champ]); cell.alignment = { wrapText: true, vertical: 'top' }; });
       }
-      ws.autoFilter = { from: 'A1', to: { row: ws.rowCount, column: 18 } };
+      ws.autoFilter = { from: 'A1', to: { row: ws.rowCount, column: 21 } };
       ws.addRow([]);
       const tot = ws.addRow(['TOTAL', `${commandes.length} commande(s)`, '', '', '', '', '', '', '', '', commandes.reduce((s, c) => s + (n(c['Montant total HT']) || 0), 0)]);
       tot.font = { bold: true }; tot.getCell(11).numFmt = euro;
@@ -15919,15 +15921,7 @@
         <a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>
         ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
       </div>` : ''}
-      ${documents.map((f, i) => `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-        <a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a>
-        ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerDocumentCommande(${r.id}, ${i}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
-      </div>`).join('')}
-      <label style="display:flex;align-items:center;gap:6px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:8px;padding:8px 10px;cursor:pointer;font-size:11px;color:var(--gris-moyen);margin-top:8px">
-        📎 Ajouter un document (bon de livraison, photo…)
-        <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this, '${uid}')" />
-      </label>
-      <div id="doc-statut-${uid}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
+      ${blocNotesDocumentsCommande(r, uid)}
       ${(estCommandeStockAtelier(r) && nbArticles) ? `<button onclick="imprimerEtiquettesRayonnageCommande(${r.id})" style="width:100%;margin-top:8px;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">🗄️ Étiquettes rayonnage des articles</button>` : ''}
       ${actionsHTML}
       ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<button onclick="supprimerCommande(${r.id})" style="width:100%;margin-top:10px;background:none;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px;font-size:10px;font-weight:700;cursor:pointer">🗑️ Supprimer cette commande</button>` : ''}
@@ -16030,16 +16024,104 @@
     }
   }
 
-  async function supprimerDocumentCommande(id, index, uid) {
+  // ── Notes & pièces jointes d'une commande : deux colonnes ──
+  //  • 👥 Partagé : visible par tous             → champs « Documents » + « Notes »
+  //  • 🔒 Privé   : Administrateur / Gestionnaire → champs « Documents prives » + « Notes privees »
+  // Notes : une ligne par note « jj/mm/aaaa hh:mm · Nom : texte », ajoutées à la suite
+  // (jamais écrasées). Chaque ajout de fichier laisse aussi une note (qui / quand).
+  const CHAMPS_NOTES_DOCS = {
+    public: { docs: 'Documents', notes: 'Notes', titre: '👥 Partagé — visible par tous', fond: '#f7f5f0', bord: '#e6dfd0' },
+    prive:  { docs: 'Documents prives', notes: 'Notes privees', titre: '🔒 Privé — Administrateur / Gestionnaire', fond: '#f6f0f8', bord: '#e0cfe8' }
+  };
+  function peutGererNotesDocs(type) { return type === 'public' || estProfilPrix(); }
+
+  function blocNotesDocumentsCommande(r, uid) {
+    const esc = echapperHtmlNote;
+    const gestion = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+    const colonne = type => {
+      const c = CHAMPS_NOTES_DOCS[type];
+      const champsAbsents = [c.docs, c.notes].filter(f => !(f in r));
+      const docs = r[c.docs] || [];
+      const notes = String(r[c.notes] || '').split('\n').map(t => t.trim()).filter(Boolean);
+      const noteHtml = t => {
+        const m = t.match(/^(\d{2}\/\d{2}\/\d{4}(?: \d{2}:\d{2})?) · ([^:]+?) : ([\s\S]*)$/);
+        return m
+          ? `<div style="padding:4px 0;border-bottom:1px dotted #e3ddd0;font-size:11px;color:#555"><span style="color:#999">${esc(m[1])} · <b style="color:#777">${esc(m[2])}</b></span><br>${esc(m[3])}</div>`
+          : `<div style="padding:4px 0;border-bottom:1px dotted #e3ddd0;font-size:11px;color:#555">${esc(t)}</div>`;
+      };
+      return `<div style="background:${c.fond};border:1px solid ${c.bord};border-radius:10px;padding:8px 10px;min-width:0">
+        <div style="font-size:11px;font-weight:800;color:var(--gris);margin-bottom:4px">${c.titre}</div>
+        ${champsAbsents.length && gestion ? `<div style="font-size:10px;color:#c0392b;margin-bottom:4px">⚠️ Champ(s) à créer dans Baserow (table Commandes Fournisseurs) : ${champsAbsents.map(f => '« ' + f + ' »').join(', ')}</div>` : ''}
+        ${docs.map((f, i) => `<div style="display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0">
+          <a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${esc(f.visible_name || f.name)}</a>
+          ${gestion ? `<span onclick="supprimerDocumentCommande(${r.id}, ${i}, '${uid}', '${type}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
+        </div>`).join('')}
+        ${notes.length ? `<div style="margin-top:4px">${notes.map(noteHtml).join('')}</div>` : (docs.length ? '' : '<div style="font-size:11px;color:#aaa;font-style:italic">Aucune note ni pièce jointe.</div>')}
+        ${champsAbsents.length ? '' : `
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <textarea id="note-${type}-${uid}" rows="1" placeholder="Ajouter une note…" style="flex:1;min-width:0;resize:vertical;border:1px solid #ddd;border-radius:8px;padding:6px 8px;font-size:11px;font-family:inherit"></textarea>
+          <button onclick="ajouterNoteCommande(${r.id}, '${type}', '${uid}')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 10px;font-size:13px;font-weight:700;cursor:pointer" title="Enregistrer la note">💬</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;background:#fff;border:1.5px dashed #ddd5c5;border-radius:8px;padding:6px 8px;cursor:pointer;font-size:11px;color:var(--gris-moyen);margin-top:6px">
+          📎 Ajouter un document${type === 'public' ? ' (bon de livraison, photo…)' : ''}
+          <input type="file" accept="image/*,.pdf" style="display:none" onchange="ajouterDocumentCommande(${r.id}, this, '${uid}', '${type}')" />
+        </label>`}
+        <div id="doc-statut-${type}-${uid}" style="font-size:11px;color:var(--vert);margin-top:4px"></div>
+      </div>`;
+    };
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:8px">
+      ${colonne('public')}${estProfilPrix() ? colonne('prive') : ''}
+    </div>`;
+  }
+
+  async function lireCommandeFraiche(id) {
+    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS });
+    if (!r.ok) throw new Error('Lecture de la commande impossible (' + r.status + ')');
+    return r.json();
+  }
+  function ligneNoteCommande(texte) {
+    const d = new Date();
+    const date = d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    return `${date} · ${connectedCollab || '?'} : ${String(texte).replace(/\s*\n\s*/g, ' ').trim()}`;
+  }
+
+  async function ajouterNoteCommande(id, type, uid) {
+    if (!peutGererNotesDocs(type)) return;
+    const c = CHAMPS_NOTES_DOCS[type];
+    const champ = document.getElementById(`note-${type}-${uid}`);
+    const texte = (champ?.value || '').trim();
+    if (!texte) { champ?.focus(); return; }
+    const statutEl = document.getElementById(`doc-statut-${type}-${uid}`);
+    if (statutEl) statutEl.textContent = '⏳ Enregistrement…';
+    try {
+      // Relecture juste avant l'écriture : une note ajoutée entre-temps par un autre n'est pas perdue
+      const actuel = await lireCommandeFraiche(id);
+      const valeur = [String(actuel[c.notes] || '').trim(), ligneNoteCommande(texte)].filter(Boolean).join('\n');
+      const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [c.notes]: valeur })
+      });
+      if (!rPatch.ok) throw new Error('Baserow a refusé la note (' + rPatch.status + ') : ' + (await rPatch.text()));
+      await rafraichirApresActionCommande();
+    } catch (e) {
+      console.error('Erreur ajout note commande', e);
+      alert('Erreur lors de l\'enregistrement de la note : ' + e.message);
+      if (statutEl) statutEl.textContent = '';
+    }
+  }
+
+  async function supprimerDocumentCommande(id, index, uid, type = 'public') {
     if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
     if (!confirm('Supprimer ce document ?')) return;
+    const c = CHAMPS_NOTES_DOCS[type];
     try {
-      const commande = _commandesCache.find(r => r.id === id);
-      const existants = (commande?.['Documents'] || []).map(f => ({ name: f.name }));
-      existants.splice(index, 1);
+      const actuel = await lireCommandeFraiche(id);
+      const avant = (_commandesCache.find(r => r.id === id)?.[c.docs] || [])[index];
+      const existants = (actuel[c.docs] || []).filter((f, i) => avant ? f.name !== avant.name : i !== index)
+        .map(f => ({ name: f.name, visible_name: f.visible_name }));
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Documents': existants })
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [c.docs]: existants })
       });
+
       if (!rPatch.ok) throw new Error('Baserow a refusé la suppression (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
     } catch (e) {
@@ -16048,24 +16130,29 @@
     }
   }
 
-  async function ajouterDocumentCommande(id, input, uid) {
-    if (!input.files.length) return;
-    const statutEl = document.getElementById('doc-statut-' + uid);
+  async function ajouterDocumentCommande(id, input, uid, type = 'public') {
+    if (!input.files.length || !peutGererNotesDocs(type)) return;
+    const c = CHAMPS_NOTES_DOCS[type];
+    const statutEl = document.getElementById(`doc-statut-${type}-${uid}`) || document.getElementById('doc-statut-' + uid);
     if (statutEl) statutEl.textContent = '⏳ Envoi…';
     try {
-      const commande = _commandesCache.find(r => r.id === id);
-      const existants = (commande?.['Documents'] || []).map(f => ({ name: f.name }));
       const fd = new FormData();
       fd.append('file', input.files[0]);
       const rUpload = await fetch('https://api.baserow.io/api/user-files/upload-file/', {
         method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd
       });
       if (!rUpload.ok) throw new Error('Échec de l\'envoi du fichier');
-      const nouveau = { name: (await rUpload.json()).name };
-
+      const nomFichier = input.files[0].name;
+      const nouveau = { name: (await rUpload.json()).name, visible_name: nomFichier };
+      // Relecture : conserve les fichiers ajoutés entre-temps et leur nom d'origine,
+      // et trace qui a ajouté le fichier (note de la même colonne)
+      const actuel = await lireCommandeFraiche(id);
+      const existants = (actuel[c.docs] || []).map(f => ({ name: f.name, visible_name: f.visible_name }));
+      const payload = { [c.docs]: [...existants, nouveau] };
+      if (c.notes in actuel) payload[c.notes] = [String(actuel[c.notes] || '').trim(), ligneNoteCommande('📎 ' + nomFichier + ' ajouté')].filter(Boolean).join('\n');
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS,
-        body: JSON.stringify({ 'Documents': [...existants, nouveau] })
+        body: JSON.stringify(payload)
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
