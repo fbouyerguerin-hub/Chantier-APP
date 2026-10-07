@@ -719,7 +719,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V13';
+  const APP_VERSION = 'V15';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -757,6 +757,13 @@
   //   - Quantite recue : nombre décimal (quantité cumulée réceptionnée sur une
   //     ligne en réception partielle ; vide = ligne reçue en totalité).
   const CHAMP_QTE_RECUE = 'Quantite recue';
+  // Unités EBP : une unité purement numérique (« 100 », « 1000 ») est un
+  // conditionnement (vendu par 100 pièces), à ne pas confondre avec une quantité.
+  //  - libUnite('100')      → « 100 pcs »   (unité seule : « Unité : », « / unité »)
+  //  - uniteApresQte('100') → « × 100 pcs » (après une quantité : « 5 × 100 pcs »)
+  function estUniteConditionnement(u) { return /^\d+(?:[.,]\d+)?$/.test(String(u ?? '').trim()); }
+  function libUnite(u) { const s = String(u ?? '').trim(); return estUniteConditionnement(s) ? s + ' pcs' : s; }
+  function uniteApresQte(u) { const s = String(u ?? '').trim(); return estUniteConditionnement(s) ? '× ' + s + ' pcs' : s; }
   function lireQteRecue(l) {
     const v = l[CHAMP_QTE_RECUE];
     return (v === undefined || v === null || v === '') ? null : Number(v);
@@ -11692,12 +11699,12 @@
             <div style="font-size:10px;color:#999;margin-top:2px">${[code ? 'EBP ' + esc(code) : '<span style="color:#a5761f">hors EBP</span>', esc((x && x.fournisseur) || (a && a['Fournisseur']) || ''), esc((x && x.ref) || (a && a['Reference fournisseur']) || '')].filter(Boolean).join(' · ')}</div>
             <div style="margin-top:4px;display:flex;gap:5px;flex-wrap:wrap">
               ${x && x.ouvrage ? `<span style="font-size:10px;font-weight:800;border-radius:8px;padding:1px 7px;background:#ede7f6;color:#5e35b1">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
-              ${x && x.ouvrage ? '' : a ? `<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${qte > 0 ? '#e8f0e7' : '#f4f4f4'};color:${qte > 0 ? 'var(--vert)' : '#999'}">📦 ${fmtQte(qte)} ${esc((x && x.unite) || a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + esc(libelleEmplacement(a)) : ''}</span>` : '<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#eef2f7;color:#5a6b80;font-weight:700">pas au stock</span>'}
+              ${x && x.ouvrage ? '' : a ? `<span style="font-size:10px;font-weight:700;border-radius:8px;padding:1px 7px;background:${qte > 0 ? '#e8f0e7' : '#f4f4f4'};color:${qte > 0 ? 'var(--vert)' : '#999'}">📦 ${fmtQte(qte)} ${esc(uniteApresQte((x && x.unite) || a['Unite']))}${libelleEmplacement(a) ? ' · 📍 ' + esc(libelleEmplacement(a)) : ''}</span>` : '<span style="font-size:10px;border-radius:8px;padding:1px 7px;background:#eef2f7;color:#5a6b80;font-weight:700">pas au stock</span>'}
               ${nb ? `<span title="Commandé, pas encore réceptionné" style="font-size:10px;border-radius:8px;padding:1px 7px;background:#fff3e0;border:1px solid #f0c27a;color:#a2560f;font-weight:800">🚚 ${nb} commande${nb > 1 ? 's' : ''} en cours · ${fmtQte(qteAttendue)} attendu${qteAttendue > 1 ? 's' : ''}</span>` : ''}
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0">
-            ${prive && prix ? `<div style="font-size:12px;font-weight:800;color:#2e7d32">${fmtEur(prix)}</div><div style="font-size:9px;color:#999">PA HT / ${esc((x && x.unite) || (a && a['Unite']) || 'u')}</div>` : ''}
+            ${prive && prix ? `<div style="font-size:12px;font-weight:800;color:#2e7d32">${fmtEur(prix)}</div><div style="font-size:9px;color:#999">PA HT / ${esc(libUnite((x && x.unite) || (a && a['Unite']) || 'u'))}</div>` : ''}
             <div style="font-size:16px;color:#ccc">›</div>
           </div>
         </div>`;
@@ -11839,7 +11846,7 @@
         <span>
           <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
           ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
-          ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
+          ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${uniteApresQte(l['Unite'])}</span>` : ''}
         </span>
       </label>`;
     }).join('') : '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucun article détaillé sur cette commande.</div>';
@@ -11866,13 +11873,13 @@
           <span>
             <span style="font-weight:${checked ? 700 : 400}">${l['Description'] || ''}</span>
             ${l['Reference fournisseur'] ? ` <span style="color:#aaa">· ${l['Reference fournisseur']}</span>` : ''}
-            ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${l['Unite'] || ''}</span>` : ''}
+            ${qte !== '' ? ` <span style="color:#aaa">· ${qte} ${uniteApresQte(l['Unite'])}</span>` : ''}
           </span>
         </label>
         <div id="manquant-qte-${uid}-${l.id}" style="display:${checked ? 'flex' : 'none'};align-items:center;gap:6px;padding:0 4px 6px 28px;font-size:11px;color:#a5761f">
           <span style="font-weight:700">Qté reçue :</span>
           <input type="number" min="0" step="any" inputmode="decimal" data-ligne-id="${l.id}" class="manquant-qte-input-${uid}" value="${qteRecue !== null ? qteRecue : ''}" placeholder="0" style="width:70px;padding:4px 6px;border:1.5px solid #f0d9a8;border-radius:6px;font-size:12px;background:#fff" />
-          <span>${qte !== '' ? '/ ' + qte + ' ' + (l['Unite'] || '') : (l['Unite'] || '')}</span>
+          <span>${qte !== '' ? '/ ' + qte + ' ' + uniteApresQte(l['Unite']) : libUnite(l['Unite'])}</span>
         </div>
       </div>`;
     }).join('') : '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucun article détaillé sur cette commande — précisez ce qui manque dans la note ci-dessous.</div>';
@@ -12143,7 +12150,7 @@
         const badgeEtat = enPartielle
           ? (estManquante
               ? (lireQteRecue(l) > 0
-                  ? ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 reçu ${String(lireQteRecue(l)).replace('.', ',')}${qte !== '' ? ' / ' + qte : ''} ${l['Unite'] || ''}</span>`
+                  ? ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 reçu ${String(lireQteRecue(l)).replace('.', ',')}${qte !== '' ? ' / ' + qte : ''} ${uniteApresQte(l['Unite'])}</span>`
                   : ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#f0d9a8;color:#a5761f;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">🔶 manquant</span>`)
               : ` <span style="display:inline-block;padding:1px 6px;border-radius:8px;background:#dceeda;color:#2f7d3c;font-size:9px;font-weight:700;margin-left:4px;white-space:nowrap">✅ reçu</span>`)
           : '';
@@ -12156,7 +12163,7 @@
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${lienFicheArticleLigne(l)}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
-          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${l['Unite'] || ''}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${uniteApresQte(l['Unite'])}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
           ${actionsAdmin}
         </tr>`;
@@ -12447,12 +12454,12 @@
         <div style="min-width:0">
           <div onclick="ouvrirFicheArticleModal(${a.id})" style="font-size:13px;font-weight:700;color:var(--gris);cursor:pointer;text-decoration:underline;text-decoration-color:#ddd;text-underline-offset:3px">${echapperHtmlNote(a['Designation'] || '(sans désignation)')}${badgeOrigine}</div>
           ${sousTitre ? `<div style="font-size:10px;color:#999;margin-top:2px">${sousTitre}</div>` : ''}
-          ${(() => { const p = estProfilPrix() ? prixArticle(a) : null; return p ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(p)} HT / ${echapperHtmlNote(a['Unite'] || 'u')}${qte > 0 ? ' · valeur stock ' + fmtEur(qte * p) : ''}</div>` : ''; })()}
+          ${(() => { const p = estProfilPrix() ? prixArticle(a) : null; return p ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(p)} HT / ${echapperHtmlNote(libUnite(a['Unite'] || 'u'))}${qte > 0 ? ' · valeur stock ' + fmtEur(qte * p) : ''}</div>` : ''; })()}
           ${(() => { const re = reemploiDisponible(a); return re ? `<div style="display:inline-block;margin-top:4px;padding:2px 8px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:10px;font-weight:800">↩️ Réemploi : ${fmtQte(re.qte)} revenu(s) de ${echapperHtmlNote(re.chantiers.slice(0, 2).join(', '))}${re.chantiers.length > 2 ? '…' : ''}${re.derniere ? ' · ' + re.derniere.split('-').reverse().join('/') : ''}</div>` : ''; })()}
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:18px;font-weight:800;color:${couleurQte};line-height:1">${fmtQte(qte)}</div>
-          <div style="font-size:10px;color:#999">${echapperHtmlNote(a['Unite'] || 'u')}${mini !== null ? ' · mini ' + fmtQte(mini) : ''}</div>
+          <div style="font-size:10px;color:#999">${echapperHtmlNote(libUnite(a['Unite'] || 'u'))}${mini !== null ? ' · mini ' + fmtQte(mini) : ''}</div>
           ${qteEnCmd > 0 ? `<div onclick="ouvrirFicheArticleModal(${a.id})" title="Commandé, pas encore réceptionné" style="cursor:pointer;margin-top:4px;display:inline-block;padding:2px 7px;border-radius:8px;background:#fff3e0;border:1px solid #f0c27a;color:#a2560f;font-size:10px;font-weight:800;white-space:nowrap">🚚 +${fmtQte(qteEnCmd)} en commande</div>` : ''}
         </div>
       </div>
@@ -12506,7 +12513,7 @@
     const lignesCmd = apparitions.slice(0, 8).map(({ c, l }) => {
       const d = c['Date commande'] ? new Date(c['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
       const ch = (c['Chantier'] || [])[0]?.value || '';
-      return `<div style="font-size:10px;color:#777;padding:2px 0">${d} · ${echapperHtmlNote(c['Numero commande'] || '')} · ${echapperHtmlNote(c['Fournisseur'] || '')} · 🏗 ${echapperHtmlNote(ch)} · ${fmtQte(l['Quantite'])} ${echapperHtmlNote(l['Unite'] || '')}</div>`;
+      return `<div style="font-size:10px;color:#777;padding:2px 0">${d} · ${echapperHtmlNote(c['Numero commande'] || '')} · ${echapperHtmlNote(c['Fournisseur'] || '')} · 🏗 ${echapperHtmlNote(ch)} · ${fmtQte(l['Quantite'])} ${echapperHtmlNote(uniteApresQte(l['Unite']))}</div>`;
     }).join('');
 
     return `<div style="margin-top:10px;border-top:1px solid #f0f0f0;padding-top:8px">
@@ -12836,7 +12843,7 @@
       return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f4f4f4;${q > 0 ? 'background:#f4f8f3;' : ''}">
           <input type="checkbox" ${q > 0 ? 'checked' : ''} onchange="kitQte(${a.id}, this.checked ? ${_kit.mode === 'sortie' ? c.quantite : solde} : 0${max !== undefined ? ', ' + max : ''})" style="width:20px;height:20px;accent-color:var(--vert);flex-shrink:0" />
           <div style="flex:1;min-width:0;font-size:12px"><b style="color:var(--gris)">${esc(c.designation)}</b>
-            <div style="font-size:10px;color:#999">${_kit.mode === 'sortie' ? `kit : ${fmtQte(c.quantite)} ${esc(c.unite)} · stock : <span style="color:${stock < (q || c.quantite) ? '#c0392b' : 'var(--vert)'};font-weight:700">${fmtQte(stock)}</span>` : `sur le chantier : <b>${fmtQte(solde)}</b> ${esc(c.unite)}`}</div></div>
+            <div style="font-size:10px;color:#999">${_kit.mode === 'sortie' ? `kit : ${fmtQte(c.quantite)} ${esc(uniteApresQte(c.unite))} · stock : <span style="color:${stock < (q || c.quantite) ? '#c0392b' : 'var(--vert)'};font-weight:700">${fmtQte(stock)}</span>` : `sur le chantier : <b>${fmtQte(solde)}</b> ${esc(uniteApresQte(c.unite))}`}</div></div>
           <input type="number" min="0" step="any" inputmode="decimal" value="${q || ''}" placeholder="0" onchange="kitQte(${a.id}, this.value${max !== undefined ? ', ' + max : ''})" style="width:62px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:800;text-align:right" />
         </div>`;
     }).join('');
@@ -12920,7 +12927,7 @@
       return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:12px;${c.non_inclus ? 'opacity:.55' : ''}">
           <span style="min-width:0">${ouvrir ? `<a href="#" onclick="event.preventDefault(); ${ouvrir}" style="color:var(--vert);font-weight:700;text-decoration:underline;text-underline-offset:2px">${esc(c.designation)}</a>` : `<b>${esc(c.designation)}</b>`}
             <br><span style="font-size:10px;color:#999">${esc(c.code)}${c.ouvrage ? ' · 🧩 sous-ouvrage' : ''}${!c.catalogue && !c.ouvrage ? ' · hors catalogue (main d\'œuvre…)' : ''}${c.non_inclus ? ' · non inclus' : ''}${c.quantite_fixe ? ' · quantité fixe' : ''}</span></span>
-          <span style="text-align:right;white-space:nowrap"><b>${fmtQte(c.quantite)} ${esc(c.unite)}</b>
+          <span style="text-align:right;white-space:nowrap"><b>${fmtQte(c.quantite)} ${esc(uniteApresQte(c.unite))}</b>
             ${stock !== null ? `<br><span style="font-size:10px;font-weight:700;color:${manque ? '#c0392b' : 'var(--vert)'}">stock ${fmtQte(stock)}</span>` : ''}
             ${prive && c.cout ? `<br><span style="font-size:10px;color:#2e7d32">${fmtEur(c.cout)}</span>` : ''}</span>
         </div>`;
@@ -12980,8 +12987,8 @@
     html += champ('Fournisseur', esc((x && x.fournisseur) || (a && a['Fournisseur']) || ''))
       + champ('Référence fournisseur', esc((x && x.ref) || (a && a['Reference fournisseur']) || ''))
       + champ('Famille', esc((x && x.famille) || (a && a['Famille']) || ''))
-      + champ('Unité', esc(unite))
-      + (prive && prix ? champ('Prix d\'achat HT', `<span style="color:#2e7d32">${fmtEur(prix)} / ${esc(unite)}</span>`) : '');
+      + champ('Unité', esc(libUnite(unite)))
+      + (prive && prix ? champ('Prix d\'achat HT', `<span style="color:#2e7d32">${fmtEur(prix)} / ${esc(libUnite(unite))}</span>`) : '');
     if (!x && code) html += `<div style="font-size:11px;color:#999;padding:4px 0">${_catLocal ? 'Article absent du catalogue EBP actif (inactif ou supprimé dans EBP ?).' : '⏳ Lecture du catalogue EBP…'}</div>`;
     if (!code) html += '<div style="font-size:11px;color:#999;padding:4px 0">Article créé hors EBP : aucune information EBP disponible.</div>';
 
@@ -13000,7 +13007,7 @@
     // Commande en cours (passée, pas encore réceptionnée)
     const enCmd = estOuvrage ? [] : enCommandeArticle(code, a);
     const blocEnCommande = enCmd.length ? `<div style="background:#fff3e0;border:1.5px solid #f0c27a;border-radius:10px;padding:10px 12px;margin:8px 0">
-        <div style="font-size:13px;font-weight:800;color:#a2560f">🚚 Commande en cours : ${fmtQte(totalEnCommande(enCmd))} ${esc(unite)} attendu(s)</div>
+        <div style="font-size:13px;font-weight:800;color:#a2560f">🚚 Commande en cours : ${fmtQte(totalEnCommande(enCmd))} ${esc(uniteApresQte(unite))} attendu(s)</div>
         ${enCmd.slice(0, 6).map(({ r, qte, partielle }) => {
           const prevue = r['Date reception prevue'] ? ' · prévue le ' + new Date(String(r['Date reception prevue']).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
           const statut = partielle ? 'reliquat (réception partielle)' : extraireValeurChamp(r['Statut'], 'En attente AR');
@@ -13021,12 +13028,12 @@
       html += `<div style="display:flex;gap:8px;margin-bottom:6px">
           <div style="flex:1;background:${sousMini ? '#fdecea' : '#e8f0e7'};border-radius:10px;padding:10px;text-align:center">
             <div style="font-size:24px;font-weight:800;color:${qte <= 0 ? '#999' : sousMini ? '#c0392b' : 'var(--vert)'}">${fmtQte(qte)}</div>
-            <div style="font-size:10px;color:#777">${esc(unite)} en stock${sousMini ? ' · ⚠️ sous le mini' : ''}</div></div>
+            <div style="font-size:10px;color:#777">${esc(uniteApresQte(unite))} en stock${sousMini ? ' · ⚠️ sous le mini' : ''}</div></div>
           ${prive && prix ? `<div style="flex:1;background:#f6f6f6;border-radius:10px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--gris)">${fmtEur(Math.max(0, qte) * prix)}</div><div style="font-size:10px;color:#777">valeur du stock</div></div>` : ''}
         </div>`
         + blocEnCommande
         + champ('Emplacement', libelleEmplacement(a) ? '📍 ' + esc(libelleEmplacement(a)) : '<span style="color:#c0392b">non renseigné</span>')
-        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(unite) : '—')
+        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteApresQte(unite)) : '—')
         + (re ? champ('Réemploi', `<span style="color:#7c5200">↩️ ${fmtQte(re.qte)} revenu(s) de ${esc(re.chantiers.slice(0, 2).join(', '))}</span>`) : '')
         + (!isNaN(px) && !isNaN(py) ? `<button onclick="voirArticleSurPlan(${a.id})" style="margin-top:6px;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🗺️ Voir sur le plan</button>` : '');
       const b = (label, action, fond = 'var(--beige-clair)', coul = 'var(--gris)') => `<button onclick="${action}" style="flex:1 1 30%;background:${fond};color:${coul};border:none;border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer">${label}</button>`;
@@ -13063,7 +13070,7 @@
       const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
       return `<div onclick="fermerFicheArticle(); ouvrirScanInfo('CMD-${r.id}')" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:12px">
           <span><b>${esc(r['Numero commande'] || '')}</b> <span style="color:#999">· ${esc(r['Fournisseur'] || '')} · ${esc((r['Chantier'] || [])[0]?.value || 'stock')}${r['Date commande'] ? ' · ' + new Date(String(r['Date commande']).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : ''}</span></span>
-          <span style="white-space:nowrap;text-align:right">${fmtQte(l['Quantite'])} ${esc(l['Unite'] || '')}${prive && Number(l['Montant HT']) > 0 && Number(l['Quantite']) > 0 ? `<br><span style="font-size:10px;color:#2e7d32;font-weight:700">${fmtEur(Number(l['Montant HT']) / Number(l['Quantite']))} HT/u payé</span>` : ''}<br><span style="font-size:10px;color:${couleurStatutCommande(statut)}">${esc(statut)}</span></span>
+          <span style="white-space:nowrap;text-align:right">${fmtQte(l['Quantite'])} ${esc(uniteApresQte(l['Unite']))}${prive && Number(l['Montant HT']) > 0 && Number(l['Quantite']) > 0 ? `<br><span style="font-size:10px;color:#2e7d32;font-weight:700">${fmtEur(Number(l['Montant HT']) / Number(l['Quantite']))} HT/u payé</span>` : ''}<br><span style="font-size:10px;color:${couleurStatutCommande(statut)}">${esc(statut)}</span></span>
         </div>`;
     };
     const cmdEnCours = lignesCmd.filter(x => idsLignesEnCours.has(x.l.id));
@@ -13124,7 +13131,7 @@
       });
       const chantiers = Object.entries(parChantier).filter(([, q]) => Math.abs(q) > 0.0005).sort((p, q) => q[1] - p[1]);
       html += titreSection(`Chantiers consommateurs (${chantiers.length})`);
-      html += chantiers.length ? chantiers.slice(0, 10).map(([n, q]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f4f4f4;font-size:12px"><span>${esc(n)}</span><b>${fmtQte(q)} ${esc(unite)}</b></div>`).join('')
+      html += chantiers.length ? chantiers.slice(0, 10).map(([n, q]) => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f4f4f4;font-size:12px"><span>${esc(n)}</span><b>${fmtQte(q)} ${esc(uniteApresQte(unite))}</b></div>`).join('')
         : '<div style="font-size:12px;color:#999;padding:4px 0">Aucune sortie vers un chantier.</div>';
       html += titreSection(`Derniers mouvements (${mvts.length})`);
       const icone = { 'Entrée': '➕', 'Sortie': '➖', 'Retour': '↩️', 'Inventaire': '📋' };
@@ -13294,7 +13301,7 @@
       return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0">
         <div style="flex:1;min-width:0">
           <div style="font-size:12px;font-weight:700;color:var(--gris);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${echapperHtmlNote(a['Designation'] || '')}</div>
-          <div style="font-size:10px;color:${manque ? '#c0392b' : '#999'}">${manque ? '⚠️ ' : ''}stock ${fmtQte(dispo)} ${echapperHtmlNote(a['Unite'] || '')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</div>
+          <div style="font-size:10px;color:${manque ? '#c0392b' : '#999'}">${manque ? '⚠️ ' : ''}stock ${fmtQte(dispo)} ${echapperHtmlNote(uniteApresQte(a['Unite']))}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</div>
         </div>
         <button onclick="modifierQtePanier(${i},-1)" style="width:34px;height:34px;border:none;border-radius:8px;background:#f1f5f9;font-size:18px;cursor:pointer">−</button>
         <input type="text" inputmode="decimal" value="${fmtQte(p.quantite)}" onchange="saisirQtePanier(${i},this.value)" style="width:52px;text-align:center;padding:7px 4px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700" />
@@ -13374,10 +13381,10 @@
       const esc = t => echapperHtmlNote(t == null ? '' : String(t));
       const deuxColonnes = comps.length > 12;
       const taille = comps.length > 30 ? 7 : comps.length > 20 ? 8 : comps.length > 12 ? 9 : 10.5;
-      const lignes = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(x.unite)}</td></tr>`).join('');
+      const lignes = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(uniteApresQte(x.unite))}</td></tr>`).join('');
       const liste = deuxColonnes
         ? (() => { const m = Math.ceil(comps.length / 2); const t = l => `<table class="li"><thead><tr><th>Composant</th><th>Code</th><th>Qté</th></tr></thead><tbody>${l}</tbody></table>`;
-            const ls = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(x.unite)}</td></tr>`);
+            const ls = comps.map(x => `<tr><td class="d">${esc(x.designation)}</td><td class="c">${esc(x.code)}</td><td class="q">${fmtQte(x.quantite)} ${esc(uniteApresQte(x.unite))}</td></tr>`);
             return `<div class="cols">${t(ls.slice(0, m).join(''))}${t(ls.slice(m).join(''))}</div>`; })()
         : `<table class="li"><thead><tr><th>Composant</th><th>Code</th><th>Qté</th></tr></thead><tbody>${lignes}</tbody></table>`;
       const etiquette = `<div class="et">
@@ -13456,6 +13463,7 @@
         <div class="tx">
           <div class="de">${esc(a['Designation'])}</div>
           <div class="co">${esc(codeBarreArticle(a))}</div>
+          ${a['Unite'] ? `<div class="un">${estUniteConditionnement(a['Unite']) ? 'Conditionnement : ' : 'Unité : '}<b>${esc(libUnite(a['Unite']))}</b></div>` : ''}
           ${libelleEmplacement(a) ? `<div class="em">📍 ${esc(libelleEmplacement(a))}</div>` : ''}
           <div class="lo">GUÉRIN BÂTIMENTS · stock atelier</div>
         </div></div>`).join('');
@@ -13471,6 +13479,7 @@
         .de { font-size: 10pt; font-weight: 700; line-height: 1.15; max-height: 3.5em; overflow: hidden; }
         .co { font-size: 12pt; font-family: monospace; font-weight: 800; }
         .em { font-size: 11pt; font-weight: 800; color: #a5761f; }
+        .un { font-size: 8pt; color: #333; }
         .lo { font-size: 6pt; color: #888; }
         @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
       </style></head><body><div class="pl">${cases}</div>
@@ -13713,7 +13722,7 @@
           <td class="n">${i + 1}</td>
           <td><div class="de">${esc(l['Description'])}${reste}</div>
               <div class="co">${code ? 'Code EBP <b>' + esc(code) + '</b>' : ''}${l['Reference fournisseur'] ? ' · Réf. fourn. ' + esc(l['Reference fournisseur']) : ''}</div></td>
-          <td class="qt">${qte} ${esc(l['Unite'] || '')}</td>
+          <td class="qt">${qte} ${esc(uniteApresQte(l['Unite']))}</td>
           <td class="ck">☐</td>
         </tr>`;
       }).join('');
@@ -13968,10 +13977,10 @@
           const code = codeArticleLigne(l);
           if (!e) return `<div onclick="selectionnerLigneExpress(${l.id})" style="cursor:pointer;display:flex;justify-content:space-between;gap:8px;padding:6px 4px;border-bottom:1px solid #eee;font-size:12px">
               <span><b>${esc(l['Description'] || '?')}</b>${code ? ` <span style="color:#999">· ${esc(code)}</span>` : ''}</span>
-              <span style="white-space:nowrap;color:#2e7d32">✓ ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd - deja)} ${esc(l['Unite'] || '')}</span></div>`;
+              <span style="white-space:nowrap;color:#2e7d32">✓ ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd - deja)} ${esc(uniteApresQte(l['Unite']))}</span></div>`;
           return `<div id="rx-ligne-${l.id}" style="background:#fff;border:1.5px solid #f0b46b;border-radius:10px;padding:8px;margin:6px 0;font-size:12px">
               <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(l['Description'] || '?')}</b><button onclick="retirerEcartExpress(${l.id})" title="Finalement conforme" style="background:none;border:none;color:#999;cursor:pointer;font-size:14px">✕</button></div>
-              <div style="color:#999;margin-bottom:6px">${code ? esc(code) + ' · ' : ''}commandé : ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd)} ${esc(l['Unite'] || '')}${deja ? ` · déjà reçu : ${fmtQte(deja)}` : ''}</div>
+              <div style="color:#999;margin-bottom:6px">${code ? esc(code) + ' · ' : ''}commandé : ${fmtQte(isNaN(qteCmd) ? 0 : qteCmd)} ${esc(uniteApresQte(l['Unite']))}${deja ? ` · déjà reçu : ${fmtQte(deja)}` : ''}</div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                 <span>Pièces manquantes / non conformes :</span>
                 <input type="number" min="0" step="any" inputmode="decimal" value="${e.manquant || ''}" placeholder="0" onchange="majEcartExpress(${l.id}, 'manquant', this.value)" style="width:64px;padding:6px;border:1.5px solid #e67e22;border-radius:6px;font-weight:800;text-align:right" />
@@ -14029,9 +14038,9 @@
       const l = lignes.find(x => x.id === lid) || {}, e = ecarts[lid];
       return `• ${l['Description'] || 'article'} : ${e.motif} — ${fmtQte(e.manquant)} pièce(s) sur ${fmtQte(e.manquant + e.aujourdhui)}${e.detail ? ' — ' + e.detail : ''}`;
     }).join('\n');
-    const note = document.getElementById('reception-note-' + uid);
-    if (note) note.value = resume ? 'Réception non conforme :\n' + resume : '';
-    const ok = await validerReception(uid, r.id);
+    // Le résumé des écarts est transmis directement à la validation (plus écrit
+    // dans le champ Note du formulaire) : s'il y a échec ou abandon, rien ne reste.
+    const ok = await validerReception(uid, r.id, { noteAuto: resume ? 'Réception non conforme :\n' + resume : '' });
     if (!ok) return;
     const nc = ids.filter(lid => ecarts[lid].motif !== 'Manquant');
     if (nc.length) {
@@ -14216,7 +14225,7 @@
         return `<div style="padding:10px 0;border-bottom:1px solid #f0f0f0">
           <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
             <div style="font-size:12px;font-weight:700;color:var(--gris);min-width:0">${echapperHtmlNote(a['Designation'] || '')}${x.nouveau ? ' <span style="font-size:9px;background:#e8f5e9;color:#2e7d32;border-radius:6px;padding:1px 5px">NOUVEAU</span>' : ''}
-              <div style="font-size:10px;color:#999;font-weight:400">${echapperHtmlNote(codeBarreArticle(a))} · +${fmtQte(x.quantite)} ${echapperHtmlNote(a['Unite'] || '')}</div></div>
+              <div style="font-size:10px;color:#999;font-weight:400">${echapperHtmlNote(codeBarreArticle(a))} · +${fmtQte(x.quantite)} ${echapperHtmlNote(uniteApresQte(a['Unite']))}</div></div>
             <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--gris-moyen);white-space:nowrap;cursor:pointer">
               <input type="checkbox" id="mes-etiq-${i}" ${x.nouveau && aCodeEbp(a) ? 'checked' : ''} ${aCodeEbp(a) ? '' : 'disabled title="Pas de code EBP : pas d\'étiquette QR"'} /> 🏷️</label>
           </div>
@@ -14403,7 +14412,7 @@
         <div style="min-width:0">
           <div onclick="ouvrirFicheArticleModal(null, '${codeJs}')" style="font-size:13px;font-weight:700;color:var(--gris-moyen);cursor:pointer;text-decoration:underline;text-decoration-color:#ddd;text-underline-offset:3px">${echapperHtmlNote(x.designation || x.code)}</div>
           ${sous ? `<div style="font-size:10px;color:#999;margin-top:2px">${sous}</div>` : ''}
-          ${estProfilPrix() && Number(x.prix) > 0 ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(x.prix)} HT / ${echapperHtmlNote(x.unite || 'u')}</div>` : ''}
+          ${estProfilPrix() && Number(x.prix) > 0 ? `<div style="font-size:10px;color:#2e7d32;margin-top:3px;font-weight:700">💶 PA ${fmtEur(x.prix)} HT / ${echapperHtmlNote(libUnite(x.unite || 'u'))}</div>` : ''}
         </div>
         ${(() => { const q = totalEnCommande(enCommandeArticle(x.code, null)); return q > 0
           ? `<span title="Commandé, pas encore réceptionné" style="flex-shrink:0;font-size:9px;font-weight:800;background:#fff3e0;border:1px solid #f0c27a;color:#a2560f;border-radius:8px;padding:2px 7px">🚚 ${fmtQte(q)} en commande</span>`
@@ -14569,7 +14578,7 @@
     el.innerHTML = _retourLignes.map((l, i) => !visible(l) ? '' : `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f2f2f2">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l.article['Designation'] || '?')}</div>
-          <div style="color:#999;font-size:11px">${echapperHtmlNote(l.article['Code EBP'] || (l.articleId ? codeBarreArticle(l.article) : 'sans code EBP'))} · ${l.surplus ? `<b style="color:#a35a00">${l.origine || 'surplus (non sorti du stock)'}</b>${l.aCreer ? ' · <span style="color:#2e7d32">nouvel article au stock</span>' : ''}` : `sorti : <b>${fmtQte(l.solde)}</b>`} ${echapperHtmlNote(l.article['Unite'] || '')}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
+          <div style="color:#999;font-size:11px">${echapperHtmlNote(l.article['Code EBP'] || (l.articleId ? codeBarreArticle(l.article) : 'sans code EBP'))} · ${l.surplus ? `<b style="color:#a35a00">${l.origine || 'surplus (non sorti du stock)'}</b>${l.aCreer ? ' · <span style="color:#2e7d32">nouvel article au stock</span>' : ''}` : `sorti : <b>${fmtQte(l.solde)}</b>`} ${echapperHtmlNote(uniteApresQte(l.article['Unite']))}${libelleEmplacement(l.article) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(l.article)) : ''}</div>
         </div>
         ${l.surplus ? '' : `<button onclick="majQteRetour(${i}, ${l.solde})" title="Tout" style="background:var(--beige-clair);border:none;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:700;cursor:pointer">Tout</button>`}
         <input type="number" id="retour-qte-${i}" min="0" step="any" value="" placeholder="0" inputmode="decimal" onchange="majQteRetour(${i}, this.value)" style="width:70px;padding:7px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-weight:700;text-align:right" />
@@ -14616,7 +14625,7 @@
       items.slice(0, 80).map(({ r, l, revenu, max }) => `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eee;font-size:12px">
         <div style="flex:1;min-width:0">
           <div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${echapperHtmlNote(l['Description'] || '?')}</div>
-          <div style="color:#999;font-size:11px">${echapperHtmlNote(r['Numero commande'] || '')}${codeArticleLigne(l) ? ' · ' + echapperHtmlNote(codeArticleLigne(l)) : ''} · commandé : ${fmtQte(l['Quantite'])} ${echapperHtmlNote(l['Unite'] || '')}${revenu > 0 ? ` · déjà revenu : ${fmtQte(revenu)}` : ''} · <b>max ${fmtQte(max)}</b></div>
+          <div style="color:#999;font-size:11px">${echapperHtmlNote(r['Numero commande'] || '')}${codeArticleLigne(l) ? ' · ' + echapperHtmlNote(codeArticleLigne(l)) : ''} · commandé : ${fmtQte(l['Quantite'])} ${echapperHtmlNote(uniteApresQte(l['Unite']))}${revenu > 0 ? ` · déjà revenu : ${fmtQte(revenu)}` : ''} · <b>max ${fmtQte(max)}</b></div>
         </div>
         <button onclick="ajouterSurplusLigneCommande(${l.id})" style="background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">↩️ Remettre en stock</button>
       </div>`).join('');
@@ -14929,7 +14938,7 @@
           ${g.lignes.sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(l => `<tr style="border-top:1px solid #f2f2f2">
             <td style="padding:3px 4px;color:#999;white-space:nowrap">${echapperHtmlNote((l.date || '').split('-').reverse().join('/'))}</td>
             <td style="padding:3px 4px">${echapperHtmlNote(l.article)}${l.type === 'Retour' ? ' <i style="color:#999">(retour)</i>' : ''}</td>
-            <td style="padding:3px 4px;text-align:right;white-space:nowrap">${fmtQte(-l.qte)} ${echapperHtmlNote(l.unite)}</td>
+            <td style="padding:3px 4px;text-align:right;white-space:nowrap">${fmtQte(-l.qte)} ${echapperHtmlNote(uniteApresQte(l.unite))}</td>
             <td style="padding:3px 4px;text-align:right;white-space:nowrap">${l.cout === null ? '<span style="color:#c62828">—</span>' : (l.estime ? '~ ' : '') + fmtEur(l.cout)}</td>
           </tr>`).join('')}
         </table>
@@ -14960,7 +14969,7 @@
     const qte = _stockParArticle[id] || 0;
     const titres = { 'Entrée': '➕ Entrée en stock (manuelle)', 'Sortie': '➖ Sortie de stock', 'Retour': '↩️ Retour en stock', 'Inventaire': '📋 Inventaire' };
     document.getElementById('mvt-stock-titre').textContent = titres[type] || type;
-    document.getElementById('mvt-stock-article').innerHTML = `<b>${echapperHtmlNote(a['Designation'] || '')}</b><br><span style="color:#999">Stock actuel : ${fmtQte(qte)} ${echapperHtmlNote(a['Unite'] || 'u')}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span>${estProfilPrix() && prixArticle(a) ? `<br><span style="color:#2e7d32;font-weight:700">💶 PA ${fmtEur(prixArticle(a))} HT / ${echapperHtmlNote(a['Unite'] || 'u')}</span>` : ''}`;
+    document.getElementById('mvt-stock-article').innerHTML = `<b>${echapperHtmlNote(a['Designation'] || '')}</b><br><span style="color:#999">Stock actuel : ${fmtQte(qte)} ${echapperHtmlNote(uniteApresQte(a['Unite'] || 'u'))}${libelleEmplacement(a) ? ' · 📍 ' + echapperHtmlNote(libelleEmplacement(a)) : ''}</span>${estProfilPrix() && prixArticle(a) ? `<br><span style="color:#2e7d32;font-weight:700">💶 PA ${fmtEur(prixArticle(a))} HT / ${echapperHtmlNote(libUnite(a['Unite'] || 'u'))}</span>` : ''}`;
     document.getElementById('mvt-stock-qte-label').textContent = type === 'Inventaire' ? 'Quantité comptée' : 'Quantité';
     document.getElementById('mvt-stock-qte').value = type === 'Inventaire' ? fmtQte(qte) : '';
     document.getElementById('mvt-stock-chantier-bloc').style.display = (type === 'Inventaire' || type === 'Entrée') ? 'none' : 'block';
@@ -15415,7 +15424,7 @@
       return `<tr>
         <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;color:#999">${l['Reference'] || ''}</td>
         <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px">${l['Description'] || ''}</td>
-        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;text-align:right;white-space:nowrap">${qte}${l['Unite'] ? ' ' + l['Unite'] : ''}</td>
+        <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;text-align:right;white-space:nowrap">${qte}${l['Unite'] ? ' ' + uniteApresQte(l['Unite']) : ''}</td>
         <td style="padding:3px 4px;border-bottom:1px dotted #eee;font-size:11px;text-align:right;white-space:nowrap;font-weight:700;color:var(--vert)">${montant}</td>
       </tr>`;
     }).join('');
@@ -15937,7 +15946,7 @@
           <input type="checkbox" ${q > 0 ? 'checked' : ''} onchange="departCocher('${uid}', ${l.id}, this.checked ? ${reste} : 0)" style="width:20px;height:20px;accent-color:var(--vert);flex-shrink:0" />
           <div style="flex:1;min-width:0;font-size:12px">
             <div style="font-weight:700;color:var(--gris)">${esc(l['Description'] || '?')}</div>
-            <div style="color:#999;font-size:11px">${code ? esc(code) + ' · ' : ''}à l'atelier : <b>${fmtQte(reste)}</b> ${esc(l['Unite'] || '')}${qteEnvoyee(l) > 0 ? ` · déjà parti : ${fmtQte(qteEnvoyee(l))}` : ''}</div>
+            <div style="color:#999;font-size:11px">${code ? esc(code) + ' · ' : ''}à l'atelier : <b>${fmtQte(reste)}</b> ${esc(uniteApresQte(l['Unite']))}${qteEnvoyee(l) > 0 ? ` · déjà parti : ${fmtQte(qteEnvoyee(l))}` : ''}</div>
           </div>
           <input type="number" min="0" step="any" inputmode="decimal" value="${q || ''}" placeholder="0" onchange="departCocher('${uid}', ${l.id}, this.value)" style="width:64px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:800;text-align:right" />
         </div>`;
@@ -16060,7 +16069,7 @@
     if (manquantsDiv) manquantsDiv.style.display = partielle ? 'block' : 'none';
   }
 
-  async function validerReception(uid, id) {
+  async function validerReception(uid, id, opts = {}) {
     const div = document.getElementById('reception-form-' + uid);
     const type = div?.dataset.type;
     // Statut de la commande juste avant cette action : permet de distinguer
@@ -16076,7 +16085,8 @@
     if (!lieu && planX === null) { alert("Merci d'indiquer un emplacement (texte) ou de placer un point sur le plan."); return; }
     const partielle = document.getElementById('reception-partielle-' + uid)?.checked;
     const noteInput = document.getElementById('reception-note-' + uid);
-    const note = noteInput ? noteInput.value.trim() : '';
+    const noteSaisie = noteInput ? noteInput.value.trim() : '';
+    const note = [opts.noteAuto || '', noteSaisie].filter(Boolean).join('\n');
     const lignes = _commandesLignesCache[id] || [];
     const checksManquants = document.querySelectorAll('.manquant-ligne-check-' + uid);
     const nbCocheManquant = [...checksManquants].filter(cb => cb.checked).length;
@@ -16115,7 +16125,13 @@
       payload['1ere reception par'] = connectedCollab || '';
       payload['1ere reception date'] = dateAujourdhui;
     }
-    if (note) payload['Note statut'] = note;
+    // Note horodatée et signée, ajoutée à l'historique (n'écrase plus la note
+    // de validation de l'AR ni celle des arrivages précédents).
+    const cmdAvant = (_commandesCache || []).find(c => c.id === id) || (_modalCommandesCache || []).find(c => c.id === id) || {};
+    if (note) {
+      const entete = `📦 Réception du ${dateAujourdhui.split('-').reverse().join('/')} par ${connectedCollab || '?'}`;
+      payload['Note statut'] = [String(cmdAvant['Note statut'] || '').trim(), entete + ' — ' + note].filter(Boolean).join('\n');
+    }
     // Stock atelier : ce qui entre réellement en stock lors de CET arrivage,
     // calculé avant que l'état des lignes ne soit modifié ci-dessous.
     const commandeRecue = (_commandesCache || []).find(c => c.id === id) || (_modalCommandesCache || []).find(c => c.id === id);
@@ -20057,9 +20073,9 @@
           ${c.cmds.length ? `<div style="font-weight:700;margin:8px 0 4px">📦 Commandes fournisseurs (${c.cmds.length})</div>
             ${c.cmds.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.fournisseur)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
           ${c.retoursCmd.length ? `<div style="font-weight:700;margin:8px 0 4px">↩️ Surplus des commandes remis en stock (${eurRenta(c.retourCommandes)})</div>
-            ${c.retoursCmd.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(-x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(x.unite)}${x.commande ? ' · ' + escRenta(x.commande) : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
+            ${c.retoursCmd.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(-x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(uniteApresQte(x.unite))}${x.commande ? ' · ' + escRenta(x.commande) : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.sorties.length ? `<div style="font-weight:700;margin:8px 0 4px">🗄️ Sorties du stock atelier (${c.sorties.length})</div>
-            ${c.sorties.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(x.unite)}${x.type === 'Retour' ? ' (retour)' : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
+            ${c.sorties.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(uniteApresQte(x.unite))}${x.type === 'Retour' ? ' (retour)' : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.cmdClients.length ? `<div style="font-weight:700;margin:8px 0 4px">🧾 Commandes clients EBP (${c.cmdClients.length})</div>
             ${c.cmdClients.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.client)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
         </div>` : '';
