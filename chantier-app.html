@@ -728,7 +728,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V18';
+  const APP_VERSION = 'V19';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15823,12 +15823,17 @@
     if (statut === 'En attente AR') {
       actionsHTML = `
         <button onclick="toggleValiderARForm('${uid}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider (AR reçu)</button>
-        <div id="ar-form-${uid}" style="display:none;margin-top:8px">
-          <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:12px;color:var(--gris-moyen);margin-bottom:6px">
-            📎 Joindre l'accusé de réception (facultatif)
+        <div id="ar-form-${uid}" data-ar-existant="${fichierAR ? '1' : ''}" style="display:none;margin-top:8px">
+          ${fichierAR ? `<div style="font-size:11px;color:var(--vert);font-weight:700;margin-bottom:6px">✅ AR déjà joint : ${echapperHtmlNote(fichierAR.visible_name || fichierAR.name)}</div>` : ''}
+          <label id="ar-fichier-label-${uid}" style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:12px;color:var(--gris-moyen);margin-bottom:6px">
+            📎 ${fichierAR ? 'Remplacer l\'accusé de réception (facultatif)' : 'Joindre l\'accusé de réception <span style="color:#c0392b">*</span>'}
             <input type="file" id="ar-fichier-${uid}" accept="image/*,.pdf" style="display:none" onchange="previewFichierAR('${uid}')" />
           </label>
           <div id="ar-fichier-preview-${uid}" style="font-size:11px;color:var(--vert);margin-bottom:6px"></div>
+          ${fichierAR ? '' : `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gris);margin-bottom:6px;cursor:pointer">
+            <input type="checkbox" id="ar-sans-${uid}" onchange="toggleSansAR('${uid}')" style="width:16px;height:16px" /> Pas d'AR fourni par le fournisseur
+          </label>
+          <textarea id="ar-sans-motif-${uid}" placeholder="Indication obligatoire : pourquoi pas d'AR ? (ex. confirmé par téléphone le…, AR promis par mail…)" style="display:none;width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #f0c27a;background:#fffaf0;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>`}
           <label style="display:block;font-size:11px;color:var(--gris-moyen);margin-bottom:4px">Date de réception prévue (facultatif)</label>
           <input type="date" id="ar-date-${uid}" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px" />
           <textarea id="ar-note-${uid}" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;margin-bottom:6px;resize:vertical;min-height:44px;font-family:inherit"></textarea>
@@ -16299,16 +16304,43 @@
     if (input.files.length && preview) preview.textContent = '📎 ' + input.files[0].name;
   }
 
+  function toggleSansAR(uid) {
+    const coche = document.getElementById('ar-sans-' + uid)?.checked;
+    const motif = document.getElementById('ar-sans-motif-' + uid);
+    const label = document.getElementById('ar-fichier-label-' + uid);
+    if (motif) { motif.style.display = coche ? 'block' : 'none'; if (coche) motif.focus(); }
+    if (label) label.style.opacity = coche ? .45 : 1;
+  }
+
   async function validerAR(uid, id) {
     const input = document.getElementById('ar-fichier-' + uid);
     const noteInput = document.getElementById('ar-note-' + uid);
     const dateInput = document.getElementById('ar-date-' + uid);
     const btn = document.getElementById('ar-btn-valider-' + uid);
+    // AR obligatoire : fichier déjà joint, fichier joint maintenant, ou « pas d'AR » justifié
+    const arExistant = document.getElementById('ar-form-' + uid)?.dataset.arExistant === '1';
+    const fichierJoint = !!(input && input.files.length);
+    const sansAR = !!document.getElementById('ar-sans-' + uid)?.checked;
+    const motifSansAR = (document.getElementById('ar-sans-motif-' + uid)?.value || '').trim();
+    if (!arExistant && !fichierJoint && !sansAR) {
+      alert('⚠️ Joignez l\'accusé de réception du fournisseur.\nS\'il n\'y en a pas, cochez « Pas d\'AR fourni par le fournisseur » et indiquez pourquoi.');
+      return;
+    }
+    if (!arExistant && !fichierJoint && sansAR && motifSansAR.length < 5) {
+      alert('⚠️ Indiquez pourquoi il n\'y a pas d\'AR (ex. confirmé par téléphone le…).');
+      document.getElementById('ar-sans-motif-' + uid)?.focus();
+      return;
+    }
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
     try {
       const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '', 'Date validation AR': dateYMD(new Date()) };
       const note = noteInput ? noteInput.value.trim() : '';
-      if (note) payload['Note statut'] = note;
+      // Note de validation ajoutée à l'historique (n'écrase plus les notes précédentes)
+      const cmdAvant = (_commandesCache || []).find(c => c.id === id) || {};
+      const lignesNote = [];
+      if (!arExistant && !fichierJoint && sansAR) lignesNote.push(`⚠️ AR non fourni (${connectedCollab || '?'}, ${new Date().toLocaleDateString('fr-FR')}) : ${motifSansAR}`);
+      if (note) lignesNote.push(note);
+      if (lignesNote.length) payload['Note statut'] = [String(cmdAvant['Note statut'] || '').trim(), ...lignesNote].filter(Boolean).join('\n');
       if (dateInput && dateInput.value) payload['Date reception prevue'] = dateInput.value;
       if (input && input.files.length) {
         const fd = new FormData();
@@ -16317,7 +16349,7 @@
           method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd
         });
         if (!rUpload.ok) throw new Error('Échec de l\'envoi du fichier');
-        payload['Accusé de réception'] = [{ name: (await rUpload.json()).name }];
+        payload['Accusé de réception'] = [{ name: (await rUpload.json()).name, visible_name: input.files[0].name }];
       }
 
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
