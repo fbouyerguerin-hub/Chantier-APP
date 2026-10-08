@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V52';
+  const APP_VERSION = 'V53';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -11990,6 +11990,19 @@
   // hors EBP), recherche instantanée sur le catalogue local ; un appui ouvre la
   // fiche article (infos EBP, stock, commandes avec prix payés, mouvements).
   let _timerArticlesOnglet = null, _articlesOngletLimite = 100, _articlesOngletQ = null;
+  let _articlesOngletType = 'tous'; // 'tous' | 'ouvrages'
+  function setTypeArticlesOnglet(t) {
+    _articlesOngletType = t;
+    _articlesOngletLimite = 100;
+    document.querySelectorAll('.art-type-btn').forEach(b => {
+      const actif = b.dataset.type === t;
+      b.style.background = actif ? (t === 'ouvrages' ? '#5e35b1' : 'var(--vert)') : '#fff';
+      b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    const rech = document.getElementById('commandes-articles-recherche');
+    if (rech) rech.placeholder = t === 'ouvrages' ? '🔍 Rechercher un ouvrage (désignation, code EBP)…' : '🔍 Rechercher un article (désignation, code EBP, référence, fournisseur)…';
+    renderCommandesArticles();
+  }
   function plusArticlesOnglet() { _articlesOngletLimite += 100; renderCommandesArticles(true); }
   function renderCommandesArticles(garderLimite) {
     const listeEl = document.getElementById('commandes-articles-liste');
@@ -12014,21 +12027,22 @@
       const source = tout
         ? [..._catLocal.items].sort((p1, p2) => String(p1.designation || '').localeCompare(String(p2.designation || ''), 'fr'))
         : rechercherCatalogueLocal(q, 5000);
-      const res = source.map(x => ({ x, a: parCodeStock.get(normRef(x.code)) || null }));
+      const ouvragesSeuls = _articlesOngletType === 'ouvrages';
+      const res = source.filter(x => !ouvragesSeuls || x.ouvrage).map(x => ({ x, a: parCodeStock.get(normRef(x.code)) || null }));
       const mots = normCatLocal(q).split(' ').filter(Boolean);
-      (_articlesCache || []).filter(a => !a['Code EBP']).forEach(a => {
+      if (!ouvragesSeuls) (_articlesCache || []).filter(a => !a['Code EBP']).forEach(a => {
         const t = normCatLocal(`${a['Designation']} ${a['Reference fournisseur']} ${a['Fournisseur']}`);
         if (tout || mots.every(m => t.includes(m))) res.push({ x: null, a });
       });
       // Commandes EN COURS uniquement (non réceptionnées) : nombre de commandes et quantité attendue
       if (!_lignesEnCoursDate && !_lignesEnCoursPromesse) chargerLignesEnCours().then(() => renderCommandesArticles(true));
       if (!res.length) {
-        listeEl.innerHTML = `<div style="background:#f6f6f6;border-radius:10px;padding:14px;text-align:center;color:#666"><div style="font-size:22px">🔍</div><div style="font-size:13px;font-weight:800;margin:4px 0">Aucun article trouvé pour « ${esc(q)} »</div><div style="font-size:11px">Ni dans le catalogue EBP (articles actifs), ni dans le stock. Essayez le code EBP ou la référence fournisseur.</div></div>`;
+        listeEl.innerHTML = `<div style="background:#f6f6f6;border-radius:10px;padding:14px;text-align:center;color:#666"><div style="font-size:22px">🔍</div><div style="font-size:13px;font-weight:800;margin:4px 0">${ouvragesSeuls ? (q ? `Aucun ouvrage trouvé pour « ${esc(q)} »` : 'Aucun ouvrage dans le catalogue EBP') : `Aucun article trouvé pour « ${esc(q)} »`}</div><div style="font-size:11px">Ni dans le catalogue EBP (articles actifs), ni dans le stock. Essayez le code EBP ou la référence fournisseur.</div></div>`;
         return;
       }
       const prive = estProfilPrix();
       const total = res.length, affiches = res.slice(0, _articlesOngletLimite);
-      listeEl.innerHTML = `<div style="font-size:11px;color:#999;margin-bottom:6px">${tout ? `📚 ${total} articles (catalogue EBP${(_articlesCache || []).some(a => !a['Code EBP']) ? ' + hors EBP' : ''}) — tapez un mot pour filtrer` : `${total} article(s) pour « ${esc(q)} »`} · touchez un article pour ouvrir sa fiche</div>` + affiches.map(({ x, a }) => {
+      listeEl.innerHTML = `<div style="font-size:11px;color:#999;margin-bottom:6px">${ouvragesSeuls ? (tout ? `🧩 ${total} ouvrage(s) EBP — tapez un mot pour filtrer` : `${total} ouvrage(s) pour « ${esc(q)} »`) + ' · touchez un ouvrage pour sa nomenclature' : (tout ? `📚 ${total} articles (catalogue EBP${(_articlesCache || []).some(a => !a['Code EBP']) ? ' + hors EBP' : ''}) — tapez un mot pour filtrer` : `${total} article(s) pour « ${esc(q)} »`) + ' · touchez un article pour ouvrir sa fiche'}</div>` + affiches.map(({ x, a }) => {
         const code = (x && x.code) || '';
         const designation = (x && x.designation) || (a && a['Designation']) || code;
         const qte = a ? (_stockParArticle[a.id] || 0) : null;
@@ -12049,6 +12063,7 @@
           </div>
           <div style="text-align:right;flex-shrink:0">
             ${prive && prix ? `<div style="font-size:12px;font-weight:800;color:#2e7d32">${fmtEur(prix)}</div><div style="font-size:9px;color:#999">PA HT / ${esc(libUnite((x && x.unite) || (a && a['Unite']) || 'u'))}</div>` : ''}
+            ${x && x.ouvrage ? `<button onclick="event.stopPropagation(); imprimerNomenclatureOuvrage('${String(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="Imprimer la nomenclature" style="background:#ede7f6;border:none;border-radius:8px;padding:5px 8px;font-size:13px;cursor:pointer;margin-bottom:2px">🖨️</button>` : ''}
             <div style="font-size:16px;color:#ccc">›</div>
           </div>
         </div>`;
@@ -22594,6 +22609,10 @@
   <div id="commandes-vue-articles" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (désignation, code EBP, référence, fournisseur)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="art-type-btn" data-type="tous" onclick="setTypeArticlesOnglet('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">📚 Tous les articles</button>
+        <button class="art-type-btn" data-type="ouvrages" onclick="setTypeArticlesOnglet('ouvrages')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🧩 Ouvrages</button>
+      </div>
     </div>
     <div id="commandes-articles-liste" style="padding:8px 16px 80px"></div>
   </div>
