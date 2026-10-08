@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V48';
+  const APP_VERSION = 'V49';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -785,6 +785,17 @@
   //  - uniteApresQte('100') → « × 100 pcs » (après une quantité : « 5 × 100 pcs »)
   function estUniteConditionnement(u) { return /^\d+(?:[.,]\d+)?$/.test(String(u ?? '').trim()); }
   function libUnite(u) { const s = String(u ?? '').trim(); return estUniteConditionnement(s) ? s + ' pcs' : s; }
+  // Quantité lisible avec son unité : « 1 × 100 pcs », « 12 m », « 5 u ».
+  // Conditionnement entamé (0,25 × 100) → affiché en pièces : « 25 pcs ».
+  function fmtQteUnite(q, u) {
+    const n = Number(q) || 0, s = String(u ?? '').trim();
+    const f = (v) => (Math.round(v * 1000) / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 3 });
+    if (estUniteConditionnement(s)) {
+      const cond = Number(s.replace(',', '.')) || 1;
+      return Number.isInteger(Math.round(n * 1000) / 1000) ? `${f(n)} × ${s} pcs` : `${f(n * cond)} pcs`;
+    }
+    return `${f(n)}${s ? ' ' + s : ''}`;
+  }
   function uniteApresQte(u) { const s = String(u ?? '').trim(); return estUniteConditionnement(s) ? '× ' + s + ' pcs' : s; }
   function lireQteRecue(l) {
     const v = l[CHAMP_QTE_RECUE];
@@ -12719,28 +12730,27 @@
       return;
     }
     listeEl.innerHTML = liste.map(({ a, f, qteCond, qte, mini, manque, enCmd, attenduCond, attendu, couvert }) => {
-      const uMini = esc(uniteMini(a));
-      const detailCond = f !== 1 ? `${fmtQte(qteCond)} ${esc(uniteApresQte(a['Unite']))} en stock` : 'stock / mini';
-      const manqueCond = f !== 1 && manque > 0 ? ` (≈ ${fmtQte(Math.ceil(manque / f))} ${esc(uniteApresQte(a['Unite']))})` : '';
+      const u = a['Unite'] || 'u';
+      const Q = v => esc(fmtQteUnite(v, u));
       const emp = libelleEmplacement(a);
       const rupture = qte <= 0;
+      const nbCde = new Set(enCmd.map(e => e.r.id)).size;
       const statut = couvert
-        ? `<span style="background:#fff3e0;color:#a2560f;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🚚 ${fmtQte(attendu)} ${uMini} en commande (${new Set(enCmd.map(e => e.r.id)).size} cde)</span>`
-        : `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🛒 À commander${attendu > 0 ? ' · ' + fmtQte(attendu) + ' ' + uMini + ' déjà en cde, insuffisant' : ''}</span>`;
+        ? `<span style="background:#fff3e0;color:#a2560f;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🚚 Déjà en commande : ${Q(attendu)}${nbCde > 1 ? ' (' + nbCde + ' cdes)' : ''}</span>`
+        : `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🛒 À commander${attendu > 0 ? ' · en commande : ' + Q(attendu) + ' (insuffisant)' : ''}</span>`;
+      const ligne = (lib, val, coul) => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px"><span style="color:#999">${lib}</span><b style="color:${coul || 'var(--gris)'}">${val}</b></div>`;
       return `<div onclick="ouvrirFicheArticleModal(${a.id}, ${JSON.stringify(a['Code EBP'] || '').replace(/"/g, '&quot;')})" style="cursor:pointer;background:#fff;border:1px solid ${couvert ? '#f0d9a8' : '#f5c6c0'};border-left:4px solid ${couvert ? '#f0a030' : '#c0392b'};border-radius:10px;padding:10px 12px;margin-bottom:8px">
-        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
-          <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap">
+          <div style="flex:1;min-width:180px">
             <div style="font-size:13px;font-weight:800;color:var(--gris)">${esc(a['Designation'] || a['Code EBP'] || 'Article')}</div>
             <div style="font-size:11px;color:#999;margin-top:2px">${[a['Code EBP'] ? 'EBP ' + esc(a['Code EBP']) : '', emp ? '📍 ' + esc(emp) : '📍 sans emplacement'].filter(Boolean).join(' · ')}</div>
+            <div style="margin-top:8px">${statut}</div>
           </div>
-          <div style="text-align:right;flex:0 0 auto">
-            <div style="font-size:18px;font-weight:800;color:${rupture ? '#999' : '#c0392b'}">${fmtQte(qte)} <span style="font-size:11px;font-weight:600">/ ${fmtQte(mini)} ${uMini}</span></div>
-            <div style="font-size:10px;color:#777">${detailCond}</div>
+          <div style="flex:0 0 190px;display:flex;flex-direction:column;gap:2px">
+            ${ligne('En stock', (rupture ? '⛔ ' : '') + Q(qte), rupture ? '#c0392b' : '#c0392b')}
+            ${ligne('Mini', Q(mini))}
+            ${ligne('Manque', Q(manque), '#c0392b')}
           </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
-          ${statut}
-          <span style="font-size:11px;font-weight:700;color:${rupture ? '#c0392b' : 'var(--gris-moyen)'}">${rupture ? '⛔ Rupture · ' : ''}manque ${fmtQte(manque)} ${uMini}${manqueCond} pour le mini</span>
         </div>
       </div>`;
     }).join('');
