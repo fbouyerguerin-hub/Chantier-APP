@@ -1,4 +1,4 @@
-const CACHE_NAME = 'chantier-app-V45'; // ⚠️ à aligner sur APP_VERSION de chantier-app.html à chaque version
+const CACHE_NAME = 'chantier-app-V48'; // ⚠️ à aligner sur APP_VERSION de chantier-app.html à chaque version
 const ASSETS = [
   '/Chantier-APP/chantier-app.html',
   '/Chantier-APP/manifest.json',

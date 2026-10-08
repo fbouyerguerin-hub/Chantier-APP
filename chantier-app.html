@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V45';
+  const APP_VERSION = 'V48';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1015,6 +1015,7 @@
     connectedViewId = viewId;
     connectedDroit = droit || '';
     connectedAccesCharge = !!accesChargeSupp;
+    _peutVoirPrixActuel = estProfilPrix(); // jamais hérité du profil précédent (tablette partagée)
     activerGardeSortie();
     filtrerChantiersSelonDroit();
     // Chercher dans les données déjà chargées (case-insensitive)
@@ -2500,6 +2501,7 @@
 
   function seDeconnecter() {
     _gardeSortieActive = false; // sortie volontaire : plus d'alerte
+    _peutVoirPrixActuel = false; // droits prix / ARC retirés à la déconnexion
     const wValidation = document.getElementById('widget-validation-heures');
     if (wValidation) wValidation.style.display = 'none';
     const mValidation = document.getElementById('modal-validation-heures');
@@ -4564,7 +4566,7 @@
       const cible = commandes.filter(r => r.id === _modalCommandeFocusId);
       if (cible.length) {
         content.innerHTML = `<a href="#" onclick="event.preventDefault();quitterFocusCommande()" style="display:inline-block;margin-bottom:10px;font-size:13px;font-weight:700;color:var(--vert);text-decoration:underline">‹ Toutes les commandes du chantier (${commandes.length})</a>`
-          + cible.map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
+          + cible.map(r => renderCarteCommande(r, estProfilPrix(), 'modal')).join('');
         return;
       }
     }
@@ -4586,8 +4588,8 @@
     const receptionnees = commandes.filter(r => !estCommandePartielle(r) && estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
 
     const trier = (liste) => [...liste].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
-    const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
-    const htmlReceptionnees = trier(receptionnees).map(r => renderCarteCommande(r, _peutVoirPrixActuel, 'modal')).join('');
+    const htmlEnCours = trier(enCours).map(r => renderCarteCommande(r, estProfilPrix(), 'modal')).join('');
+    const htmlReceptionnees = trier(receptionnees).map(r => renderCarteCommande(r, estProfilPrix(), 'modal')).join('');
 
     content.innerHTML =
       (htmlEnCours || (receptionnees.length ? '' : '<div class="feuille-empty">Aucune commande trouvée.</div>')) +
@@ -4994,6 +4996,7 @@
   }
 
   async function chargerBonCommandeAffaire(chantierId) {
+    if (!estProfilPrix()) return; // document chiffré : Administrateur / Gestionnaire uniquement
     const zone = () => document.getElementById('modal-affectation-detail-bdc');
     try {
       const res = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/' + chantierId + '/?user_field_names=true', { headers: HEADERS });
@@ -5071,7 +5074,7 @@
     content.innerHTML = `
       <div class="bloc-detail-aff"><div class="label-detail-aff">📝 Commentaire</div><div style="font-size:14px;white-space:pre-wrap">${r.notes ? linkifierTexteNote(r.notes) : '—'}</div></div>
       ${(r.taches && r.taches.length) ? `<div class="bloc-detail-aff"><div class="label-detail-aff">☑️ Tâches du chantier — cochez quand c'est fait</div><div id="modal-affectation-detail-taches"></div></div>` : ''}
-      <div class="bloc-detail-aff"><div class="label-detail-aff">📄 Bon de commande de l'affaire</div><div id="modal-affectation-detail-bdc" style="font-size:13px;color:#aaa">${r.chantierId ? 'Chargement…' : '—'}</div></div>
+      ${estProfilPrix() ? `<div class="bloc-detail-aff"><div class="label-detail-aff">📄 Bon de commande de l'affaire</div><div id="modal-affectation-detail-bdc" style="font-size:13px;color:#aaa">${r.chantierId ? 'Chargement…' : '—'}</div></div>` : ''}
       <div class="bloc-detail-aff"><div class="label-detail-aff">📎 Fichiers</div>${fichiersHTML}</div>
       <div class="bloc-detail-aff"><div class="label-detail-aff" style="display:flex;justify-content:space-between;align-items:center;gap:8px">📦 Commandes${r.chantierId ? `<a href="#" onclick="event.preventDefault();ouvrirCommandesChantier(${r.chantierId}, ${JSON.stringify(r.chantier).replace(/"/g, '&quot;')})" style="text-transform:none;letter-spacing:0;font-size:12px;color:var(--vert);text-decoration:underline">Toutes les commandes ›</a>` : ''}</div><div id="modal-affectation-detail-commandes" style="font-size:13px;color:#aaa">Chargement…</div></div>
     `;
@@ -5087,7 +5090,7 @@
 
     // Bon de commande de l'affaire Guérin = pièces jointes de la fiche chantier
     // (champ "Fichiers" de TABLE_CHANTIERS_ADMIN), accessibles à tous les rôles.
-    if (r.chantierId) chargerBonCommandeAffaire(r.chantierId);
+    if (r.chantierId && estProfilPrix()) chargerBonCommandeAffaire(r.chantierId);
 
     if (r.chantierId) {
       try {
@@ -11557,6 +11560,8 @@
   function estProfilPrix() {
     return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
   }
+  // RÈGLE : tout document ou montant chiffré (PDF de commande, ARC, bon de commande client,
+  // prix, coûts, exports) est réservé aux profils Administrateur et Gestionnaire.
   async function peutVoirPrixCommandes() {
     return estProfilPrix();
   }
@@ -11903,7 +11908,7 @@
   function imprimerCommandesListe(format) {
     document.getElementById('modal-commandes-impression').classList.remove('open');
     const label = LABELS_ONGLETS_COMMANDES[_commandesVueActuelle] || '';
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
     const commandes = _commandesTrieesActuelles;
 
     document.getElementById('print-title-commandes').textContent =
@@ -12043,7 +12048,7 @@
   function renderCommandesReceptionnees() {
     const listeEl = document.getElementById('commandes-receptionnees-liste');
     const recherche = (document.getElementById('commandes-receptionnees-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
 
     let filtrees = _commandesCache.filter(r => !estCommandePartielle(r) && estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')));
     if (recherche) {
@@ -12069,7 +12074,7 @@
     const container = document.getElementById('commandes-par-chantier');
     if (!container) return;
     const recherche = (document.getElementById('commandes-chantier-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
 
     const parChantier = {};
     _commandesCache.forEach(r => {
@@ -12226,7 +12231,7 @@
 
   function renderCarteRetourCommande(r) {
     const uid = r.id + '-retour';
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
     const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
     const chantierNom = (r['Chantier'] || [])[0]?.value || '—';
     const lignes = _commandesLignesCache[r.id] || [];
@@ -12239,10 +12244,10 @@
     const documents = r['Documents'] || [];
 
     const pjHTML = `
-      ${(pdf && peutVoirPrix) ? `<div style="margin-top:4px"><a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a></div>` : ''}
-      ${(pdfSansPrix && !peutVoirPrix) ? `<div style="margin-top:4px"><a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a></div>` : ''}
-      ${(fichierAR && peutVoirPrix) ? `<div style="margin-top:4px"><a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a></div>` : ''}
-      ${documents.map(f => `<div style="margin-top:4px"><a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a></div>`).join('')}
+      ${(pdf && peutVoirPrix && estProfilPrix()) ? `<div style="margin-top:4px"><a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a></div>` : ''}
+      ${(pdfSansPrix && !(peutVoirPrix && estProfilPrix())) ? `<div style="margin-top:4px"><a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a></div>` : ''}
+      ${(fichierAR && peutVoirPrix && estProfilPrix()) ? `<div style="margin-top:4px"><a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a></div>` : ''}
+      ${documents.filter(f => estProfilPrix() || !estNomFichierAR(f.visible_name || f.name)).map(f => `<div style="margin-top:4px"><a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 ${f.visible_name || f.name}</a></div>`).join('')}
     `;
 
     return `<div style="background:#fff;border:1px solid ${nbFlagged ? '#e5b8b8' : '#eee'};border-radius:10px;padding:12px;margin-bottom:10px">
@@ -12329,7 +12334,7 @@
     zoneResultats.style.display = 'block';
 
     const recherche = texte.toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
     const filtrees = _commandesCache.filter(r => {
       const chantierNom = ((r['Chantier'] || [])[0]?.value || '').toLowerCase();
       const fournisseur = (r['Fournisseur'] || '').toLowerCase();
@@ -12348,7 +12353,7 @@
     const resumeEl = document.getElementById('commandes-resume');
     const listeEl = document.getElementById('commandes-liste');
     const recherche = (document.getElementById('commandes-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
 
     let filtrees = _commandesCache.filter(r =>
       !estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], 'En attente AR')) &&
@@ -12386,7 +12391,7 @@
   function renderCommandesEnAttenteAR() {
     const listeEl = document.getElementById('commandes-ar-liste');
     const recherche = (document.getElementById('commandes-ar-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
 
     let filtrees = _commandesCache.filter(r => extraireValeurChamp(r['Statut'], 'En attente AR') === 'En attente AR');
     if (recherche) {
@@ -12416,7 +12421,7 @@
   function renderCommandesPartielles() {
     const listeEl = document.getElementById('commandes-partielle-liste');
     const recherche = (document.getElementById('commandes-partielle-recherche')?.value || '').trim().toLowerCase();
-    const peutVoirPrix = _peutVoirPrixActuel;
+    const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
 
     let filtrees = _commandesCache.filter(r => estCommandePartielle(r));
     if (recherche) {
@@ -14270,7 +14275,7 @@
     setMessageScan('⏳ Préparation…', '#999');
     try {
       if (!(_commandesCache || []).length) await chargerCommandesPage();
-      if (!_peutVoirPrixActuel) { try { _peutVoirPrixActuel = await peutVoirPrixCommandes(); } catch (e) {} }
+      _peutVoirPrixActuel = estProfilPrix();
       if (stockTablesConfigurees()) { try { await chargerStock(); } catch (e) {} }
       await demarrerCameraSiActive();
     } catch (e) {
@@ -14299,7 +14304,7 @@
       // Colis qui arrive : panneau « réception express » (conforme / non conforme)
       // au-dessus de la fiche ; le formulaire détaillé reste accessible dessous.
       _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', ecarts: {}, selection: null } : null;
-      el.innerHTML = r ? `<div id="rx-panel"></div>${renderCarteCommande(r, _peutVoirPrixActuel, 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
+      el.innerHTML = r ? `<div id="rx-panel"></div>${renderCarteCommande(r, estProfilPrix(), 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
       if (receptionPossible) renderRecExpress();
       _departScanUid = null;
       if (r && statut === 'Réceptionné en atelier' && !estCommandeStockAtelier(r) && !fiche.sansFormulaire) {
@@ -16518,6 +16523,7 @@
   }
 
   function renderCarteCommande(r, peutVoirPrix, contexte) {
+    peutVoirPrix = !!peutVoirPrix && estProfilPrix(); // contrôle en direct du profil connecté
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
     const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
@@ -16558,7 +16564,7 @@
       actionsHTML = `
         <button onclick="toggleValiderARForm('${uid}')" style="width:100%;margin-top:8px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px;font-size:11px;font-weight:700;cursor:pointer">✅ Valider (AR reçu)</button>
         <div id="ar-form-${uid}" data-ar-existant="${fichierAR ? '1' : ''}" style="display:none;margin-top:8px">
-          ${fichierAR ? `<div style="font-size:11px;color:var(--vert);font-weight:700;margin-bottom:6px">✅ AR déjà joint : ${echapperHtmlNote(fichierAR.visible_name || fichierAR.name)}</div>` : ''}
+          ${fichierAR ? `<div style="font-size:11px;color:var(--vert);font-weight:700;margin-bottom:6px">✅ AR déjà joint${estProfilPrix() ? ' : ' + echapperHtmlNote(fichierAR.visible_name || fichierAR.name) : ' (consultable par l\'Administrateur / Gestionnaire)'}</div>` : ''}
           <label id="ar-fichier-label-${uid}" style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:11px 13px;cursor:pointer;font-size:12px;color:var(--gris-moyen);margin-bottom:6px">
             📎 ${fichierAR ? 'Remplacer l\'accusé de réception (facultatif)' : 'Joindre l\'accusé de réception <span style="color:#c0392b">*</span>'}
             <input type="file" id="ar-fichier-${uid}" accept="image/*,.pdf" style="display:none" onchange="previewFichierAR('${uid}')" />
@@ -16784,11 +16790,20 @@
   };
   function peutGererNotesDocs(type) { return type === 'public' || estProfilPrix(); }
   function peutDeposerDoc(type) { return peutGererNotesDocs(type); }
-  // Un fichier dont le nom évoque un accusé de réception (AR, ARC, accusé…) part
-  // toujours en Privé, même s'il est déposé dans la colonne Partagé.
-  function estNomFichierAR(nom) {
+  // Un fichier dont le NOM contient l'un de ces mots part toujours en Privé (document chiffré),
+  // même s'il est déposé dans la colonne Partagé, et reste masqué aux profils Utilisateur.
+  // Mot entier, majuscules/accents ignorés, chiffres collés acceptés (« CC1234 », « devis_25-118 »).
+  // ➜ Liste modifiable ici.
+  const MOTS_FICHIERS_PRIVES = [
+    'ar', 'arc', 'accuse', 'accuses', 'acknowledgement', 'acknowledgment', 'confirmation de commande', 'order confirmation',
+    'devis', 'cc', 'commande', 'commandes', 'cde', 'cdes', 'bdc', 'bon de commande',
+    'facture', 'factures', 'fact', 'proforma', 'pro forma', 'tarif', 'tarifs', 'chiffrage', 'prix'
+  ];
+  const _reFichiersPrives = new RegExp('(^|[^a-z])(' + MOTS_FICHIERS_PRIVES
+    .map(m => m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '[\\s_.-]*')).join('|') + ')(?=[^a-z]|$)');
+  function estNomFichierAR(nom) { // (nom historique) : tout document chiffré, pas seulement les ARC
     const n = String(nom || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    return /(^|[^a-z])(arc?|accuses?|acknowledg[a-z]*|confirmation de commande|order confirmation)([^a-z]|$)/.test(n);
+    return _reFichiersPrives.test(n);
   }
 
   function blocNotesDocumentsCommande(r, uid) {
@@ -16797,7 +16812,8 @@
     const colonne = type => {
       const c = CHAMPS_NOTES_DOCS[type];
       const champsAbsents = [c.docs, c.notes].filter(f => !(f in r));
-      const docs = r[c.docs] || [];
+      // Anciens ARC déposés en Partagé : masqués aux profils sans droit (le Gestionnaire les voit pour les supprimer)
+      const docs = (r[c.docs] || []).filter(f => gestion || !estNomFichierAR(f.visible_name || f.name));
       const notes = String(r[c.notes] || '').split('\n').map(t => t.trim()).filter(Boolean);
       const noteHtml = t => {
         const m = t.match(/^(\d{2}\/\d{2}\/\d{4}(?: \d{2}:\d{2})?) · ([^:]+?) : ([\s\S]*)$/);
@@ -16809,7 +16825,7 @@
         <div style="font-size:11px;font-weight:800;color:var(--gris);margin-bottom:4px">${c.titre}</div>
         ${champsAbsents.length && gestion ? `<div style="font-size:10px;color:#c0392b;margin-bottom:4px">⚠️ Champ(s) à créer dans Baserow (table Commandes Fournisseurs) : ${champsAbsents.map(f => '« ' + f + ' »').join(', ')}</div>` : ''}
         ${(() => { // Accusé de réception (ARC) validé : toujours dans la colonne Privé
-          const ar = type === 'prive' ? (r['Accusé de réception'] || [])[0] : null;
+          const ar = (type === 'prive' && estProfilPrix()) ? (r['Accusé de réception'] || [])[0] : null;
           return ar ? `<div style="display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0">
             <a href="${ar.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ARC — ${esc(ar.visible_name || ar.name)}</a>
             ${gestion ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer l'ARC">✕</span>` : ''}
@@ -16922,7 +16938,7 @@
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
       if (type === 'prive' && (redirigeAR || !estProfilPrix())) {
-        alert(`🔒 « ${nomFichier} » a été enregistré en Privé${redirigeAR ? ' (accusé de réception)' : ''}.\nIl est visible uniquement par l'Administrateur et le Gestionnaire.`);
+        alert(`🔒 « ${nomFichier} » a été enregistré en Privé${redirigeAR ? ' (document chiffré : ARC, devis, commande, facture…)' : ''}.\nIl est visible uniquement par l'Administrateur et le Gestionnaire.`);
       }
     } catch (e) {
       console.error('Erreur ajout document commande', e);
