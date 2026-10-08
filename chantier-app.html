@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V37';
+  const APP_VERSION = 'V39';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1060,6 +1060,9 @@
       if (tabCommandesArticles) tabCommandesArticles.style.display = 'block'; } // liste des articles : tous (prix réservés)
     { const tabDispo = document.getElementById('tab-commandes-dispo');
       if (tabDispo) tabDispo.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none'; } // besoins nets
+    { const tabMini = document.getElementById('tab-commandes-mini');
+      if (tabMini) tabMini.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
+      if (tabMini && (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') && typeof majBadgeStockMini === 'function') setTimeout(() => majBadgeStockMini(true), 1500); } // articles sous le mini
     chargerMessage();
     updateBadgeMessages();
     demarrerVeilleMessages();
@@ -11642,6 +11645,9 @@
     document.getElementById('commandes-vue-retour').style.display = vue === 'retour' ? 'block' : 'none';
     document.getElementById('commandes-vue-stock').style.display = vue === 'stock' ? 'block' : 'none';
     document.getElementById('commandes-vue-dispo').style.display = vue === 'dispo' ? 'block' : 'none';
+    document.getElementById('commandes-vue-mini').style.display = vue === 'mini' ? 'block' : 'none';
+    document.getElementById('tab-commandes-mini').style.background = vue === 'mini' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-mini').style.color = vue === 'mini' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-dispo').style.background = vue === 'dispo' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-dispo').style.color = vue === 'dispo' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-stock').style.background = vue === 'stock' ? 'var(--vert)' : 'none';
@@ -11667,6 +11673,7 @@
     if (vue === 'retour') renderCommandesRetour();
     if (vue === 'stock') ouvrirVueStock();
     if (vue === 'dispo') renderCommandesDispoStock();
+    if (vue === 'mini') ouvrirVueStockMini();
   }
 
   // ── IMPRESSION DES COMMANDES ──
@@ -12582,6 +12589,106 @@
     }
   }
 
+  // ── ONGLET STOCK MINI ──
+  // Articles du stock atelier dont la quantité est inférieure ou égale au « Stock mini ».
+  // Indique pour chacun le manque, et si une commande STOCK ATELIER est déjà en cours.
+  let _filtreMini = 'tous';
+  function miniArticle(a) {
+    const m = a ? a['Stock mini'] : null;
+    return (m === null || m === '' || m === undefined || isNaN(Number(m))) ? null : Number(m);
+  }
+  function articlesSousMini() {
+    return (_articlesCache || []).filter(a => { const m = miniArticle(a); return m !== null && (_stockParArticle[a.id] || 0) <= m; })
+      .map(a => {
+        const qte = _stockParArticle[a.id] || 0, mini = miniArticle(a);
+        let enCmd = []; try { enCmd = enCommandeArticle(a['Code EBP'], a); } catch (e) {}
+        const attendu = totalEnCommande(enCmd);
+        return { a, qte, mini, manque: Math.max(0, mini - qte), enCmd, attendu, couvert: attendu > 0 && qte + attendu > mini };
+      });
+  }
+  function majBadgeStockMini(charger) {
+    const badge = document.getElementById('badge-stock-mini');
+    if (!badge) return;
+    const afficher = () => {
+      const n = articlesSousMini().filter(x => !x.couvert).length; // à commander
+      badge.textContent = n; badge.style.display = n ? 'inline-block' : 'none';
+    };
+    if (charger && !_stockCharge && stockTablesConfigurees()) chargerStock().then(() => chargerLignesEnCours()).then(afficher).catch(() => {});
+    else afficher();
+  }
+  function setFiltreMini(f) {
+    _filtreMini = f;
+    document.querySelectorAll('.mini-filtre-btn').forEach(b => {
+      const actif = b.dataset.filtre === f;
+      b.style.background = actif ? 'var(--vert)' : '#fff';
+      b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    renderStockMini();
+  }
+  async function ouvrirVueStockMini() {
+    const listeEl = document.getElementById('stock-mini-liste');
+    if (!stockTablesConfigurees()) { listeEl.innerHTML = '<div class="feuille-empty">⚙️ Module stock non configuré.</div>'; return; }
+    if (_stockCharge) { try { renderStockMini(); } catch (e) {} }
+    else listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement du stock…</div>';
+    try {
+      await Promise.all([chargerStock(true), chargerLignesEnCours()]);
+      renderStockMini();
+    } catch (e) {
+      console.error('Erreur stock mini', e);
+      listeEl.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement du stock.</div>';
+    }
+  }
+  function renderStockMini() {
+    const listeEl = document.getElementById('stock-mini-liste');
+    if (!listeEl) return;
+    const esc = echapperHtmlNote;
+    let liste = articlesSousMini();
+    const nbACommander = liste.filter(x => !x.couvert).length;
+    const nbEnCommande = liste.length - nbACommander;
+    const resume = document.getElementById('stock-mini-resume');
+    if (resume) resume.innerHTML = liste.length
+      ? `⚠️ <b style="color:#c0392b">${liste.length}</b> article(s) au mini ou en dessous · 🛒 <b>${nbACommander}</b> à commander · 🚚 ${nbEnCommande} déjà en commande`
+      : '';
+    majBadgeStockMini();
+    if (_filtreMini === 'acommander') liste = liste.filter(x => !x.couvert);
+    if (_filtreMini === 'encommande') liste = liste.filter(x => x.couvert);
+    const mots = normTexte(document.getElementById('stock-mini-recherche')?.value || '').split(/\s+/).filter(Boolean);
+    if (mots.length) liste = liste.filter(({ a }) => {
+      const t = normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur'], a['Fournisseur'], a['Zone'], a['Rayon']].filter(Boolean).join(' '));
+      return mots.every(m => t.includes(m));
+    });
+    // À commander d'abord, puis ruptures, puis du plus critique au moins critique
+    liste.sort((x, y) => (x.couvert - y.couvert) || ((y.qte <= 0) - (x.qte <= 0)) || ((x.qte / (x.mini || 1)) - (y.qte / (y.mini || 1))));
+    if (!liste.length) {
+      listeEl.innerHTML = `<div class="feuille-empty">${(_articlesCache || []).some(a => miniArticle(a) !== null) ? '✅ Aucun article sous le stock mini.' : 'ℹ️ Aucun « Stock mini » renseigné : ouvrez un article dans Stock atelier pour le définir.'}</div>`;
+      return;
+    }
+    listeEl.innerHTML = liste.map(({ a, qte, mini, manque, enCmd, attendu, couvert }) => {
+      const unite = esc(uniteApresQte(a['Unite'] || 'u'));
+      const emp = libelleEmplacement(a);
+      const rupture = qte <= 0;
+      const statut = couvert
+        ? `<span style="background:#fff3e0;color:#a2560f;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🚚 ${fmtQte(attendu)} en commande (${new Set(enCmd.map(e => e.r.id)).size} cde)</span>`
+        : `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🛒 À commander${attendu > 0 ? ' · ' + fmtQte(attendu) + ' déjà en cde, insuffisant' : ''}</span>`;
+      return `<div onclick="ouvrirFicheArticleModal(${a.id}, ${JSON.stringify(a['Code EBP'] || '').replace(/"/g, '&quot;')})" style="cursor:pointer;background:#fff;border:1px solid ${couvert ? '#f0d9a8' : '#f5c6c0'};border-left:4px solid ${couvert ? '#f0a030' : '#c0392b'};border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:800;color:var(--gris)">${esc(a['Designation'] || a['Code EBP'] || 'Article')}</div>
+            <div style="font-size:11px;color:#999;margin-top:2px">${[a['Code EBP'] ? 'EBP ' + esc(a['Code EBP']) : '', emp ? '📍 ' + esc(emp) : '📍 sans emplacement'].filter(Boolean).join(' · ')}</div>
+          </div>
+          <div style="text-align:right;flex:0 0 auto">
+            <div style="font-size:18px;font-weight:800;color:${rupture ? '#999' : '#c0392b'}">${fmtQte(qte)} <span style="font-size:11px;font-weight:600">/ ${fmtQte(mini)}</span></div>
+            <div style="font-size:10px;color:#777">${unite} · stock / mini</div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+          ${statut}
+          <span style="font-size:11px;font-weight:700;color:${rupture ? '#c0392b' : 'var(--gris-moyen)'}">${rupture ? '⛔ Rupture · ' : ''}manque ${fmtQte(manque)} pour le mini</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
   // Accès direct : onglet Stock atelier filtré sur le matériel revenu des chantiers
   function ouvrirReemploi() {
     _stockFiltre = 'reemploi';
@@ -12686,6 +12793,7 @@
     const total = articles.length;
     const affiches = articles.slice(0, 150);
 
+    try { majBadgeStockMini(); } catch (e) {}
     const resume = document.getElementById('stock-resume');
     if (resume) {
       const nbEnStock = Object.values(_stockParArticle).filter(q => q > 0).length;
@@ -13612,6 +13720,7 @@
         <button onclick="modifierQtePanier(${i},-1)" style="width:34px;height:34px;border:none;border-radius:8px;background:#f1f5f9;font-size:18px;cursor:pointer">−</button>
         <input type="text" inputmode="decimal" value="${fmtQte(p.quantite)}" onchange="saisirQtePanier(${i},this.value)" style="width:52px;text-align:center;padding:7px 4px;border:1px solid #ddd;border-radius:8px;font-size:14px;font-weight:700" />
         <button onclick="modifierQtePanier(${i},1)" style="width:34px;height:34px;border:none;border-radius:8px;background:#f1f5f9;font-size:18px;cursor:pointer">+</button>
+        ${a['Unite'] ? `<span style="font-size:11px;font-weight:700;color:var(--gris-moyen);white-space:nowrap">${echapperHtmlNote(uniteApresQte(a['Unite']))}</span>` : ''}
       </div>`;
     }).join('');
   }
@@ -15655,7 +15764,7 @@
             ${qrGlobal ? `<div style="text-align:center"><img src="${qrGlobal}" style="width:38mm;height:38mm"><div style="font-size:8pt;font-weight:bold">Scanner ici pour valider<br>TOUTE la sortie${aScanner.length < lignes.length ? '<br>(lignes restantes)' : ''}</div></div>` : `<div style="text-align:center;font-size:11pt;font-weight:bold;border:2px solid #2e7d32;color:#2e7d32;padding:6mm 4mm">✅ Bon entièrement<br>sorti du stock</div>`}
           </div>
           <table><tr><th>Emplacement</th><th>Article</th><th>Qté</th><th>QR ligne</th><th>✔</th></tr>
-          ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span class="code">${esc(x.a?.['Code EBP'] || '')}</span></td><td class="q">${fmtQte(x.p.qte)} ${esc(libUnite(x.a?.['Unite']))}</td><td class="qr">${x.p.statut === 'Sorti' ? `<span style="font-size:8pt;font-weight:bold;color:#2e7d32">✅ Sorti${x.p.sortiLe ? '<br>le ' + esc(x.p.sortiLe) : ''}${x.p.sortiPar ? '<br>' + esc(x.p.sortiPar) : ''}</span>` : `<img src="${qrDe('BS-' + x.p.mvt.id, 140)}">`}</td><td class="ok"></td></tr>`).join('')}
+          ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span class="code">${esc(x.a?.['Code EBP'] || '')}</span></td><td class="q">${fmtQte(x.p.qte)} ${esc(uniteApresQte(x.a?.['Unite']))}</td><td class="qr">${x.p.statut === 'Sorti' ? `<span style="font-size:8pt;font-weight:bold;color:#2e7d32">✅ Sorti${x.p.sortiLe ? '<br>le ' + esc(x.p.sortiLe) : ''}${x.p.sortiPar ? '<br>' + esc(x.p.sortiPar) : ''}</span>` : `<img src="${qrDe('BS-' + x.p.mvt.id, 140)}">`}</td><td class="ok"></td></tr>`).join('')}
           </table>
           <div class="pied">La sortie du stock n'est enregistrée qu'au <b>scan</b> de ce bon (QR global ou QR de chaque ligne) avec l'appli. Bon sans effet s'il a été annulé.</div>
         </section>`;
@@ -15690,6 +15799,7 @@
       else aSortir.push({ m, n, q: Number(n.qte) || 0 });
     });
     const nomArt = m => (_articlesCache.find(x => x.id === (m['Article'] || [])[0]?.id)?.['Designation']) || 'article';
+    const uniteArt = m => uniteApresQte(_articlesCache.find(x => x.id === (m['Article'] || [])[0]?.id)?.['Unite'] || '');
     if (!aSortir.length) {
       bipScan(false);
       setMessageScan(annules.length ? '⛔ Bon de sortie annulé : ne rien sortir.' : `ℹ️ Déjà sorti${deja[0] ? ' (' + (lireNotePrise(deja[0]['Note']).sorti_par || '') + ' ' + (lireNotePrise(deja[0]['Note']).sorti_le || '') + ')' : ''}.`, annules.length ? '#c0392b' : '#a5761f');
@@ -15697,7 +15807,7 @@
     }
     bipScan(true);
     const insuffisant = aSortir.filter(x => (_stockParArticle[(x.m['Article'] || [])[0]?.id] || 0) < x.q - 0.0005);
-    const texte = aSortir.map(x => `• ${fmtQte(x.q)} × ${nomArt(x.m)}`).join('\n');
+    const texte = aSortir.map(x => `• ${fmtQte(x.q)}${uniteArt(x.m) ? ' ' + uniteArt(x.m) : ''} — ${nomArt(x.m)}`).join('\n');
     if (!confirm(`Valider la sortie du stock pour ${aSortir[0].m['Chantier'] || 'le chantier'} (${aSortir[0].m['Commande'] || ''}) ?\n\n${texte}${deja.length ? `\n\n(${deja.length} ligne(s) déjà sortie(s), ignorée(s))` : ''}${insuffisant.length ? '\n\n⚠️ Stock théorique insuffisant pour : ' + insuffisant.map(x => nomArt(x.m)).join(', ') : ''}`)) {
       setMessageScan('Sortie non validée.', 'var(--gris-moyen)'); return;
     }
@@ -15723,7 +15833,7 @@
     Object.entries(prises).forEach(([lid, ps]) => ps.filter(p => p.statut === 'À préparer').forEach(p => {
       const a = _articlesCache.find(x => x.id === (p.mvt['Article'] || [])[0]?.id);
       lignes.push({ empl: a ? libelleEmplacement(a) : '', art: a ? (a['Designation'] || '') : '', code: a ? (a['Code EBP'] || '') : '',
-                    qte: p.qte, unite: libUnite(a?.['Unite']), chantier: p.mvt['Chantier'] || '', cmd: p.mvt['Commande'] || '', par: p.par });
+                    qte: p.qte, unite: uniteApresQte(a?.['Unite']), chantier: p.mvt['Chantier'] || '', cmd: p.mvt['Commande'] || '', par: p.par });
     }));
     if (!lignes.length) { alert('Aucune prise en stock à préparer.'); return; }
     lignes.sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz') || x.chantier.localeCompare(y.chantier));
@@ -22209,6 +22319,7 @@
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
       <button id="tab-commandes-dispo" onclick="switchCommandesVue('dispo')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔁 Dispo. stock</button>
+      <button id="tab-commandes-mini" onclick="switchCommandesVue('mini')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">⚠️ Stock mini <span id="badge-stock-mini" style="display:none;background:#c0392b;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800;margin-left:2px"></span></button>
       <button id="tab-commandes-stock" onclick="switchCommandesVue('stock')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📚 Stock atelier</button>
     </div>
   </div>
@@ -22288,6 +22399,20 @@
       <input type="text" id="commandes-dispo-recherche" placeholder="🔍 Rechercher (chantier, fournisseur, n° commande, article)…" oninput="renderCommandesDispoStock()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;background:#fff" />
     </div>
     <div id="commandes-dispo-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue Stock mini : articles du stock atelier à ou sous leur stock minimum (Administrateur / Gestionnaire) -->
+  <div id="commandes-vue-mini" style="display:none">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
+      <div id="stock-mini-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
+      <input type="text" id="stock-mini-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon…" oninput="renderStockMini()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:6px" />
+      <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:4px">
+        <button class="mini-filtre-btn" data-filtre="tous" onclick="setFiltreMini('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
+        <button class="mini-filtre-btn" data-filtre="acommander" onclick="setFiltreMini('acommander')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🛒 À commander</button>
+        <button class="mini-filtre-btn" data-filtre="encommande" onclick="setFiltreMini('encommande')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🚚 Déjà en commande</button>
+      </div>
+    </div>
+    <div id="stock-mini-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Stock atelier : bibliothèque d'articles (EBP), quantités, emplacements -->
