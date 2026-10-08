@@ -32,16 +32,19 @@
     .header-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; }
     .header-logo { height: 78px; width: auto; filter: brightness(1.1); }
     .header-title { font-size: 13px; font-weight: 700; color: #fff; text-align: right; letter-spacing: 0.3px; }
-    /* Bandeaux figés (titre, onglets, recherche, dates, filtres) : restent visibles au défilement.
-       --h-header = hauteur de l'en-tête de l'appli, --h-bandeau = hauteur du bandeau de la page affichée
-       (mis à jour automatiquement par caleBandeaux()). */
-    .bandeau-fige { position: sticky; top: var(--h-header, 0px); z-index: 9; background: var(--gris-clair); box-shadow: 0 6px 8px -8px rgba(0,0,0,0.25); }
-    .filtre-fige { position: sticky; top: calc(var(--h-header, 0px) + var(--h-bandeau, 0px)); z-index: 8; background: var(--gris-clair); padding-top: 6px; padding-bottom: 6px; box-shadow: 0 6px 8px -8px rgba(0,0,0,0.18); }
-    /* En-tête compacte dès que l'on fait défiler : laisse plus de place au contenu */
-    .header.header-compact .header-logo { height: 34px; }
-    .header.header-compact .header-top { padding: 6px 16px; }
-    .header-logo, .header-top { transition: height .15s, padding .15s; }
-    @media print { .bandeau-fige, .filtre-fige { position: static; box-shadow: none; } }
+    /* Bandeaux figés, comme le Planning collectif : la page occupe la hauteur de l'écran sous
+       l'en-tête, le bandeau (.bandeau-fige) reste en haut et seule la partie basse
+       (.zone-defilement, créée au démarrage) défile. Les filtres de sous-onglets (.filtre-fige)
+       restent collés en haut de cette zone. --h-header = hauteur de l'en-tête (caleBandeaux()). */
+    .page.page-figee.active { display: flex !important; flex-direction: column; height: calc(100vh - var(--h-header, 0px) - 70px); height: calc(100dvh - var(--h-header, 0px) - 70px); /* 70px = marge basse du body réservée à la barre de navigation */ overflow: hidden; }
+    .page-figee > .bandeau-fige { flex: 0 0 auto; background: var(--gris-clair); box-shadow: 0 6px 8px -8px rgba(0,0,0,0.25); position: relative; z-index: 9; }
+    .page-figee > .zone-defilement { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+    .zone-defilement .filtre-fige { position: sticky; top: 0; z-index: 8; background: var(--gris-clair); padding-top: 6px; padding-bottom: 6px; box-shadow: 0 6px 8px -8px rgba(0,0,0,0.18); }
+    @media print {
+      .page.page-figee.active { display: block !important; height: auto; overflow: visible; }
+      .page-figee > .zone-defilement { overflow: visible; }
+      .bandeau-fige, .filtre-fige { position: static; box-shadow: none; }
+    }
     .header-bar { height: 4px; background: linear-gradient(90deg, #c8a96e 0%, #4a7c3f 50%, #c8a96e 100%); }
 
     /* SECTIONS */
@@ -738,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V22';
+  const APP_VERSION = 'V24';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1397,33 +1400,38 @@
     document.getElementById(id).classList.add('active');
     window.scrollTo(0, 0);
     caleBandeaux();
+    const zone = document.getElementById(id)?.querySelector(':scope > .zone-defilement');
+    if (zone) zone.scrollTop = 0;
   }
 
-  // Bandeaux figés : cale les bandeaux (.bandeau-fige) sous l'en-tête de l'appli et les
-  // filtres de sous-onglets (.filtre-fige) sous le bandeau de la page affichée.
+  // Bandeaux figés (comme le Planning collectif) : au démarrage, chaque page qui a un
+  // .bandeau-fige reçoit une zone de défilement qui regroupe tout ce qui suit le bandeau.
+  // La page prend la hauteur de l'écran sous l'en-tête : en-tête + bandeau restent affichés,
+  // seule la partie basse défile.
+  function preparerPagesFigees() {
+    document.querySelectorAll('.page').forEach(page => {
+      const bandeau = page.querySelector(':scope > .bandeau-fige');
+      if (!bandeau || page.querySelector(':scope > .zone-defilement')) return;
+      const zone = document.createElement('div');
+      zone.className = 'zone-defilement';
+      let n = bandeau.nextSibling;
+      while (n) { const suivant = n.nextSibling; zone.appendChild(n); n = suivant; }
+      page.appendChild(zone);
+      page.classList.add('page-figee');
+    });
+  }
   function caleBandeaux() {
     const header = document.querySelector('.header');
     const hHeader = header && getComputedStyle(header).display !== 'none' ? header.offsetHeight : 0;
-    const page = document.querySelector('.page.active');
-    const bandeau = page ? page.querySelector('.bandeau-fige') : null;
-    const racine = document.documentElement.style;
-    racine.setProperty('--h-header', hHeader + 'px');
-    racine.setProperty('--h-bandeau', (bandeau ? bandeau.offsetHeight : 0) + 'px');
+    document.documentElement.style.setProperty('--h-header', hHeader + 'px');
   }
   function caleBandeauCommandes() { caleBandeaux(); } // compatibilité anciens appels
   window.addEventListener('resize', caleBandeaux);
-  window.addEventListener('scroll', () => {
-    const header = document.querySelector('.header');
-    if (!header) return;
-    const compact = window.scrollY > 40;
-    if (header.classList.contains('header-compact') !== compact) header.classList.toggle('header-compact', compact);
-  }, { passive: true });
   document.addEventListener('DOMContentLoaded', () => {
-    // Recalcul automatique dès qu'un bandeau ou l'en-tête change de hauteur
-    // (message de synchro, onglets masqués, en-tête compacte…)
+    preparerPagesFigees();
     if ('ResizeObserver' in window) {
-      const ro = new ResizeObserver(() => caleBandeaux());
-      document.querySelectorAll('.header, .bandeau-fige').forEach(el => ro.observe(el));
+      const header = document.querySelector('.header');
+      if (header) new ResizeObserver(() => caleBandeaux()).observe(header);
     }
     caleBandeaux();
   });
@@ -12289,7 +12297,15 @@
       });
     }
 
-    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    // AR attendus depuis plus de 3 jours en tête (les plus anciens d'abord), puis par date de commande
+    const triees = [...filtrees].sort((a, b) => (joursAttenteAR(b) - joursAttenteAR(a)) || (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    const resumeAR = document.getElementById('commandes-ar-resume');
+    if (resumeAR) {
+      const nbRetardAR = filtrees.filter(r => joursAttenteAR(r) > 0).length;
+      resumeAR.innerHTML = filtrees.length
+        ? `${filtrees.length} commande(s) en attente d'AR${nbRetardAR ? ` · <span style="color:#c0392b;font-weight:800">⏰ ${nbRetardAR} sans AR depuis plus de ${DELAI_AR_JOURS} j</span>` : ''}`
+        : '';
+    }
     if (_commandesVueActuelle === 'ar') _commandesTrieesActuelles = triees;
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'ar')).join('') ||
       '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande en attente d\'AR.</div>';
@@ -15827,6 +15843,18 @@
     return j > 0 ? j : 0;
   }
 
+  // Commande « En attente AR » : en retard quand l'AR n'est pas validé plus de 3 jours
+  // après la date de commande. Retourne le nombre de jours écoulés depuis la commande
+  // (0 = pas en retard).
+  const DELAI_AR_JOURS = 3;
+  function joursAttenteAR(r) {
+    const dateCmd = r['Date commande'];
+    if (!dateCmd || estCommandePartielle(r) || extraireValeurChamp(r['Statut'], 'En attente AR') !== 'En attente AR') return 0;
+    const auj = new Date(); auj.setHours(12, 0, 0, 0);
+    const j = Math.round((auj - new Date(String(dateCmd).slice(0, 10) + 'T12:00:00')) / 86400000);
+    return j > DELAI_AR_JOURS ? j : 0;
+  }
+
   function renderCarteCommande(r, peutVoirPrix, contexte) {
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
@@ -15994,7 +16022,8 @@
       <div id="details-${uidRetour}" style="display:none">${renderFormRetourArticles(r, uidRetour)}</div>
     ` : '';
 
-    const retard = joursRetardReception(r);
+    const retardAR = joursAttenteAR(r);
+    const retard = joursRetardReception(r) || retardAR;
     return `<div style="background:${retard ? '#fff6f5' : '#fff'};border:${retard ? '1.5px solid #e8a39b' : '1px solid #eee'};${retard ? 'border-left:5px solid #c0392b;' : ''}border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700;color:var(--gris)">
         <span>${r['Fournisseur'] || ''}${r['Numero commande'] ? ` <span style="font-weight:400;color:#aaa">· ${r['Numero commande']}</span>` : ''}</span>
@@ -16002,6 +16031,7 @@
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
+      ${retardAR ? `<div style="font-size:11px;color:#c0392b;font-weight:700;margin-bottom:2px"><span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ AR en attente depuis ${retardAR} j</span>commandé le ${dateLabel}</div>` : ''}
       ${(dateReceptionPrevue && statut !== 'En attente AR' && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:${retard ? '#c0392b' : '#8a5fc2'};${retard ? 'font-weight:700;' : ''}margin-bottom:2px">${retard ? `<span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ En retard de ${retard} j</span>` : ''}📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="display:flex;align-items:center;gap:6px">
@@ -21646,6 +21676,7 @@
   <!-- Vue En attente AR -->
   <div id="commandes-vue-ar" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
+      <div id="commandes-ar-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
       <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
