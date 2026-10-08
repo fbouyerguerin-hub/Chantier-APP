@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V28';
+  const APP_VERSION = 'V31';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -3122,6 +3122,7 @@
     const autres = (_absencesRttParCollab.get(collabId) || []).filter(r => estApprouvee(r) && r['Type de demande']?.value !== 'RTT');
     const joursAutres = new Set(autres.flatMap(r => joursOuvresDemande(r)));
     jours.forEach(js => { if (estJourFerie(js) || joursAutres.has(js)) justifie += HEURES_JOUR_JUSTIFIEES; });
+    if (typeof heuresAvantEntree === 'function') justifie += heuresAvantEntree(collabId, lundiStr); // nouveau profil : jours avant l'arrivée
     const reel = Math.max(0, Math.round((HEURES_BASE_RTT - justifie) * 100) / 100);
     _memoRegulRtt.set(cle, reel);
     return reel;
@@ -3318,6 +3319,39 @@
   // Un jour ouvré sans saisie et sans absence enregistrée n'est pas traité à part : c'est uniquement le
   // cumul réel d'heures de la semaine qui détermine le nombre d'heures de RTT acquises (seuil : 35h).
   // Pour les postes apprentis (POSTES_RTT_MAJOREE_25), la RTT (36h→40h) est majorée de 25%.
+  // Date d'entrée d'un collaborateur (table Collaborateurs, champ « Date d'entrée ») :
+  // pour un nouveau profil, le calcul RTT / heures sup / manque sous 35h commence à sa
+  // date d'entrée. Les semaines d'avant ne comptent pas ; dans la semaine d'entrée, les
+  // jours ouvrés d'avant l'arrivée sont justifiés à 7h (comme une absence approuvée) :
+  // pas de manque sur ces jours, et le seuil des 35h est ramené aux jours présents.
+  const _dateEntreeParCollab = new Map();
+  const CHAMPS_DATE_ENTREE = ["Date d'entrée", "Date d'entree", 'Date entrée', 'Date entree', "Date d'embauche", 'Date de démarrage', 'Date de demarrage'];
+  function memoriserDateEntree(row) {
+    if (!row || row.id == null) return;
+    const champ = CHAMPS_DATE_ENTREE.find(k => row[k]);
+    if (champ) _dateEntreeParCollab.set(Number(row.id), String(row[champ]).slice(0, 10));
+  }
+  function lundiDebutCalculRtt(collabId) {
+    const d = _dateEntreeParCollab.get(Number(collabId));
+    if (!d) return null;
+    const x = new Date(d + 'T12:00:00');
+    if (isNaN(x)) return null;
+    while (x.getDay() !== 1) x.setDate(x.getDate() - 1); // lundi de la semaine d'entrée
+    return dateYMD(x);
+  }
+  // Heures justifiées pour les jours ouvrés (hors fériés) d'avant l'entrée, dans la semaine d'entrée
+  function heuresAvantEntree(collabId, lundiStr) {
+    const entree = _dateEntreeParCollab.get(Number(collabId));
+    if (!entree || lundiDebutCalculRtt(collabId) !== lundiStr) return 0;
+    let h = 0;
+    for (let k = 0; k < 5; k++) {
+      const d = new Date(lundiStr + 'T12:00:00'); d.setDate(d.getDate() + k);
+      const js = dateYMD(d);
+      if (js < entree && !estJourFerie(js)) h += HEURES_JOUR_JUSTIFIEES;
+    }
+    return h;
+  }
+
   function calculerRttEtHeuresSup(saisies, absencesBloquantes, collabId, inclureSemainesVides = false, poste = '', demandesRttApprouvees = [], absencesApprouvees = []) {
     const majorationRtt = POSTES_RTT_MAJOREE_25.includes(poste) ? 1.25 : 1;
     const annee = new Date().getFullYear();
@@ -3416,16 +3450,18 @@
 
     let semainesCompletes = 0, heuresSupTotal = 0, rttTotal = 0, deficitTotal = 0;
     const detail = [];
+    const lundiEntreeStr = lundiDebutCalculRtt(collabId); // nouveau profil : rien avant son arrivée
     const semainesRtt = new Map(); // lundiStr -> heures de RTT réellement acquises cette semaine
     while (lundi.getFullYear() === annee) {
       const vendredi = new Date(lundi); vendredi.setDate(lundi.getDate() + 4);
       const vendrediStr = dateYMD(vendredi);
       if (vendrediStr > aujourdHuiStr) break; // semaine pas encore terminée
       const lundiStr = dateYMD(lundi);
+      if (lundiEntreeStr && lundiStr < lundiEntreeStr) { lundi.setDate(lundi.getDate() + 7); continue; } // avant l'entrée
       const horsPeriode = lundiPivotStr !== null && lundiStr < lundiPivotStr;
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
       const heuresFormation = heuresFormationSemaine(lundiStr);
-      const totalHeuresTravaillees = (totauxSemaine[lundiStr] || 0) + heuresFormation;
+      const totalHeuresTravaillees = (totauxSemaine[lundiStr] || 0) + heuresFormation + heuresAvantEntree(collabId, lundiStr);
       // Calcul réel (écrase la valeur déclarée dans la demande) : le nombre d'heures de
       // RTT pris comble exactement l'écart jusqu'à 35h, sans jamais générer de surplus.
       // Semaines régularisées (depuis le 31/08/2026) : toute semaine avec un RTT
@@ -3743,6 +3779,7 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
       const posteCollabConnecte = collabRow['Poste / Métier'] || '';
+      memoriserDateEntree(collabRow);
       const HEURES_RTT_PAR_SEMAINE_EFF = POSTES_RTT_MAJOREE_25.includes(posteCollabConnecte) ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
 
       const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, feuilleCollab.id, true, posteCollabConnecte, demandesRtt.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'), congesCollab.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'));
@@ -3997,6 +4034,7 @@
             const statut = r['Statut']?.value || 'En attente';
             return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
+          memoriserDateEntree(c);
           const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id, false, c['Poste / Métier'] || '', demandesRtt.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'), congesCollab.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'));
           const acquisSemaines = rttEtSup.rttAcquis;
 
@@ -4094,6 +4132,7 @@
       const soldeDeBasePrevisionnel = parseFloat(collabRow['Solde de base prévisionnel (h)']) || 0;
       const reliquatAnneePrecedente = parseFloat(collabRow['Reliquat année précédente (h)']) || 0;
       const posteCollabModal = collabRow['Poste / Métier'] || '';
+      memoriserDateEntree(collabRow);
       const HEURES_RTT_PAR_SEMAINE_EFF = POSTES_RTT_MAJOREE_25.includes(posteCollabModal) ? HEURES_RTT_PAR_SEMAINE * 1.25 : HEURES_RTT_PAR_SEMAINE;
 
       const rttEtSup = calculerRttEtHeuresSup(saisiesCollab, absencesBloquantes, collabId, true, posteCollabModal, demandesRtt.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'), congesCollab.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'));
@@ -13455,6 +13494,8 @@
     const now = Date.now();
     if (code === _dernierScan.code && now - _dernierScan.t < 1500) return;
     _dernierScan = { code, t: now };
+    // Bon de sortie de stock (prise en stock d'une commande) : le scan valide la sortie
+    if (/^BS-\d+(\.\d+)*$/i.test(code)) { validerBonSortieScan(code); return; }
     // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
     if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
     if (_scanMode === 'info' && _departScanUid && selectionDepartParCode(code)) { bipScan(true); return; }
@@ -14383,12 +14424,12 @@
   }
   function resoudreCodeScanne(brut) {
     const c = extraireCodeScan(brut);
-    const connu = x => /^LIG-\d+$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
+    const connu = x => /^LIG-\d+$/i.test(x) || /^BS-\d+(\.\d+)*$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
     if (!c || connu(c)) return c;
     // Disposition clavier différente : on retraduit le texte BRUT (adresse comprise),
     // puis on en extrait le code (…?scan=CODE).
     const t = extraireCodeScan(retraduireAzerty(String(brut || '').trim()));
-    return (t && t !== c && (connu(t) || /^(CMD|LIG|ART)-\d+$/i.test(t))) ? t : c;
+    return (t && t !== c && (connu(t) || /^(CMD|LIG|ART)-\d+$/i.test(t) || /^BS-\d+(\.\d+)*$/i.test(t))) ? t : c;
   }
 
   let _bufDouchette = '', _tDouchette = 0, _debutDouchette = 0;
@@ -15279,12 +15320,17 @@
     const res = {};
     (_mouvementsCache || []).forEach(m => {
       if (!String(m['Libelle'] || '').startsWith(PREFIXE_PRISE_STOCK)) return;
-      const q = -(Number(m['Quantite']) || 0);
-      if (q <= 0) return;
       const lid = Number(m['Ligne commande']) || 0;
       if (!lid) return;
       const n = lireNotePrise(m['Note']);
-      (res[lid] = res[lid] || []).push({ mvt: m, qte: q, qteEBP: Number(n.qteEBP) || 0, statut: n.statut || 'À préparer', par: n.par || m['Par'] || '' });
+      if (n.statut === 'Annulé') return;
+      // Réservation (bon de sortie imprimé, pas encore scanné) : quantité 0 dans le
+      // journal, quantité réservée dans la note. Sortie validée par scan : quantité < 0.
+      const sortie = -(Number(m['Quantite']) || 0);
+      const statut = sortie > 0 ? 'Sorti' : 'À sortir';
+      const q = sortie > 0 ? sortie : (Number(n.qte) || 0);
+      if (q <= 0) return;
+      (res[lid] = res[lid] || []).push({ mvt: m, qte: q, qteEBP: Number(n.qteEBP) || 0, statut, par: n.par || m['Par'] || '', sortiPar: n.sorti_par || '', sortiLe: n.sorti_le || '' });
     });
     return res;
   }
@@ -15312,7 +15358,17 @@
     const attendu = Math.max(0, Math.round((qteInit - pris) * 1000) / 1000);
     const actuel = Number(l['Quantite']) || 0;
     return { prises: p, pris, qteInit, attendu, actuel, aReduire: actuel > attendu + 0.0005,
-             aPreparer: p.some(x => x.statut === 'À préparer') };
+             aSortir: p.some(x => x.statut === 'À sortir') };
+  }
+  // Quantités réservées (bons de sortie pas encore scannés), par article
+  function reservationsParArticle() {
+    const res = {};
+    Object.values(prisesStockParLigne()).flat().forEach(p => {
+      if (p.statut !== 'À sortir') return;
+      const aid = (p.mvt['Article'] || [])[0]?.id;
+      if (aid) res[aid] = (res[aid] || 0) + p.qte;
+    });
+    return res;
   }
   // Commande dont une ligne prise en stock n'est pas encore réduite dans EBP
   function lignesAReduireCommande(commandeId) {
@@ -15340,7 +15396,8 @@
     const prises = prisesStockParLigne();
     const ecartes = ecartesStockParLigne();
     const blocs = [];
-    let nbDispo = 0, nbAReduire = 0, nbAPreparer = 0, nbEcartes = 0;
+    let nbDispo = 0, nbAReduire = 0, nbASortir = 0, nbEcartes = 0;
+    const reserves = reservationsParArticle();
 
     const commandes = (_commandesCache || [])
       // Propositions : commandes « En attente AR » et « En attente réception ». Après l'AR,
@@ -15368,22 +15425,22 @@
         const a = trouverArticlePourLigne(l);
         if (etat) {
           if (etat.aReduire) nbAReduire++;
-          if (etat.aPreparer) nbAPreparer++;
+          if (etat.aSortir) nbASortir++;
           lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
             <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px">🔒 <b>Pris en stock : ${fmtQte(etat.pris)} ${esc(unite)}</b> ${etat.prises.map(x => `<span style="color:#999">(${esc(x.par)} · ${x.statut === 'Préparé' ? '✅ préparé' : '📦 à préparer'})</span>`).join(' ')}${a && libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px">🔒 <b>Pris en stock : ${fmtQte(etat.pris)} ${esc(unite)}</b> ${etat.prises.map(x => `<span style="color:#999">(${esc(x.par)} · ${x.statut === 'Sorti' ? `✅ sorti${x.sortiPar ? ' par ' + esc(x.sortiPar) : ''}${x.sortiLe ? ' le ' + esc(x.sortiLe) : ''}` : '🖨️ bon de sortie à scanner'})</span>`).join(' ')}${a && libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
             ${etat.aReduire
               ? `<div style="margin-top:4px;font-size:11px;font-weight:800;color:#c0392b;background:#fff6f5;border:1px solid #e8a39b;border-radius:6px;padding:4px 8px;display:inline-block">⚠️ À réduire dans EBP : quantité ${fmtQte(etat.actuel)} → ${fmtQte(etat.attendu)} ${esc(unite)}${etat.attendu === 0 ? ' (supprimer la ligne)' : ''}</div>`
               : `<div style="margin-top:4px;font-size:11px;font-weight:700;color:var(--vert)">✅ Commande EBP corrigée</div>`}
             <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-              ${etat.prises.filter(x => x.statut === 'À préparer').map(x => `<button onclick="marquerPriseStock(${x.mvt.id}, 'Préparé')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">✅ Préparé (${fmtQte(x.qte)})</button>`).join('')}
+              ${etat.prises.some(x => x.statut === 'À sortir') ? `<button onclick="imprimerBonsSortie(${r.id})" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon de sortie</button>` : ''}
               ${etat.prises.map(x => `<button onclick="annulerPriseStock(${x.mvt.id})" style="background:#fff;color:#c0392b;border:1px solid #e8a39b;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">↩️ Annuler (${fmtQte(x.qte)})</button>`).join('')}
             </div>
           </div>`);
           continue;
         }
         if (!ouverte || !a || qCmd <= 0) continue;
-        const dispo = _stockParArticle[a.id] || 0;
+        const dispo = Math.round(((_stockParArticle[a.id] || 0) - (reserves[a.id] || 0)) * 1000) / 1000; // net des bons de sortie en attente
         if (dispo <= 0) continue;
         const ec = ecartes[l.id];
         if (ec) {
@@ -15426,7 +15483,7 @@
 
     if (resumeEl) resumeEl.innerHTML = [
       `💡 ${nbDispo} ligne(s) disponible(s) en stock`,
-      nbAPreparer ? `📦 ${nbAPreparer} à préparer` : '',
+      nbASortir ? `🖨️ ${nbASortir} bon(s) de sortie à scanner` : '',
       nbAReduire ? `<span style="color:#c0392b;font-weight:800">⚠️ ${nbAReduire} à réduire dans EBP</span>` : '',
       nbEcartes ? `<a href="#" onclick="event.preventDefault(); _dispoVoirEcartees = !_dispoVoirEcartees; renderCommandesDispoStock();" style="color:#888">🚫 ${nbEcartes} traitée(s) sans prise${_dispoVoirEcartees ? ' (masquer)' : ' (afficher)'}</a>` : ''
     ].filter(Boolean).join(' · ');
@@ -15442,7 +15499,7 @@
     const a = _articlesCache.find(x => x.id === articleId);
     if (!r || !l || !a) { alert('Commande ou article introuvable : rechargez la page.'); return; }
     const q = Math.round((parseFloat(String(document.getElementById(inputId)?.value || '').replace(',', '.')) || 0) * 1000) / 1000;
-    const dispo = _stockParArticle[a.id] || 0;
+    const dispo = (_stockParArticle[a.id] || 0) - (reservationsParArticle()[a.id] || 0);
     const qCmd = Number(l['Quantite']) || 0;
     if (q <= 0) { alert('Indiquez une quantité.'); return; }
     if (q > dispo + 0.0005) { alert(`Stock insuffisant : ${fmtQte(dispo)} disponible(s).`); return; }
@@ -15450,13 +15507,13 @@
     const num = r['Numero commande'] || '';
     const reste = Math.round((qCmd - q) * 1000) / 1000;
     const avertAR = statutCommandeDispo(r) === 'En attente AR' ? '' : '⚠️ L\'AR de cette commande est déjà validé : contactez le fournisseur AVANT, pour vérifier qu\'il peut encore réduire la commande.\n\n';
-    if (!confirm(avertAR + `Prendre ${fmtQte(q)} « ${l['Description'] || ''} » dans le stock atelier pour ${(r['Chantier'] || [])[0]?.value || 'le chantier'} ?\n\nÀ faire ensuite dans EBP : commande ${num}, passer cette ligne de ${fmtQte(qCmd)} à ${fmtQte(reste)}${reste === 0 ? ' (supprimer la ligne)' : ''}, et prévenir le fournisseur si la commande est déjà envoyée.`)) return;
+    if (!confirm(avertAR + `Prendre ${fmtQte(q)} « ${l['Description'] || ''} » dans le stock atelier pour ${(r['Chantier'] || [])[0]?.value || 'le chantier'} ?\n\nLe stock est réservé ; imprimez ensuite le bon de sortie : c'est le scan du bon à l'atelier qui validera la sortie du stock.\n\nÀ faire dans EBP : commande ${num}, passer cette ligne de ${fmtQte(qCmd)} à ${fmtQte(reste)}${reste === 0 ? ' (supprimer la ligne)' : ''}, et prévenir le fournisseur si la commande est déjà envoyée.`)) return;
     try {
       await creerMouvementsStock([{
-        articleId: a.id, type: 'Sortie', quantite: -q,
+        articleId: a.id, type: 'Réservation', quantite: 0,
         chantier: (r['Chantier'] || [])[0]?.value || '', commande: num, ligneId: l.id,
         libelle: `${PREFIXE_PRISE_STOCK} ${num}`.trim(),
-        note: ecrireNotePrise({ qteEBP: qCmd, statut: 'À préparer', par: connectedCollab || '' })
+        note: ecrireNotePrise({ qteEBP: qCmd, qte: q, statut: 'À sortir', par: connectedCollab || '', le: new Date().toLocaleDateString('fr-FR') })
       }]);
       renderCommandesDispoStock();
       if (typeof renderStock === 'function') try { renderStock(); } catch (e) {}
@@ -15517,8 +15574,10 @@
   async function annulerPriseStock(mvtId) {
     if (!peutGererStock()) return;
     const m = _mouvementsCache.find(x => x.id === mvtId); if (!m) return;
-    const q = -(Number(m['Quantite']) || 0);
-    if (!confirm(`Annuler la prise en stock de ${fmtQte(q)} ? Le stock est restitué.\n\nSi la commande a déjà été réduite dans EBP, pensez à remettre la quantité.`)) return;
+    const n = lireNotePrise(m['Note']);
+    const sortie = -(Number(m['Quantite']) || 0);
+    const q = sortie > 0 ? sortie : (Number(n.qte) || 0);
+    if (!confirm(`Annuler la prise en stock de ${fmtQte(q)} ?${sortie > 0 ? ' La sortie a déjà été scannée : le stock est restitué (remettez l\'article en rayon).' : ' La réservation est libérée (le bon de sortie imprimé devient sans effet).'}\n\nSi la commande a déjà été réduite dans EBP, pensez à remettre la quantité.`)) return;
     try {
       const champs = { 'Quantite': 0, 'Note': ecrireNotePrise({ ...lireNotePrise(m['Note']), statut: 'Annulé', annule_par: connectedCollab || '', annule_le: new Date().toLocaleDateString('fr-FR') }) };
       if (m['Valeur HT'] !== undefined) champs['Valeur HT'] = 0;
@@ -15526,6 +15585,113 @@
       renderCommandesDispoStock();
       if (typeof renderStock === 'function') try { renderStock(); } catch (e) {}
     } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  // 🖨️ Bons de sortie : un bon par commande, réservations « À sortir », triées par
+  // emplacement. QR « BS-<id> » par ligne, et QR global « BS-<id>.<id>… » pour valider
+  // tout le bon d'un coup. C'est le SCAN qui enregistre la sortie du stock.
+  async function imprimerBonsSortie(commandeId) {
+    const toutes = Object.values(prisesStockParLigne()).flat().filter(p => p.statut === 'À sortir');
+    const parCmd = {};
+    toutes.forEach(p => {
+      const num = p.mvt['Commande'] || '';
+      const r = (_commandesCache || []).find(c => (c['Numero commande'] || '') === num);
+      if (commandeId != null && (!r || r.id !== commandeId)) return;
+      (parCmd[num] = parCmd[num] || { r, lignes: [] }).lignes.push(p);
+    });
+    const groupes = Object.entries(parCmd);
+    if (!groupes.length) { alert('Aucun bon de sortie à imprimer (aucune réservation en attente de scan).'); return; }
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Génération des bons de sortie…</p>');
+    try {
+      await chargerLibScan('qrcode');
+      const tmp = document.createElement('div');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(tmp);
+      const qrDe = (texte, px) => {
+        tmp.innerHTML = '';
+        new QRCode(tmp, { text: texte, width: px, height: px, correctLevel: QRCode.CorrectLevel.L });
+        const c = tmp.querySelector('canvas');
+        return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      };
+      const esc = echapperHtmlNote;
+      const pages = groupes.map(([num, g]) => {
+        const lignes = g.lignes.map(p => {
+          const a = _articlesCache.find(x => x.id === (p.mvt['Article'] || [])[0]?.id);
+          return { p, a, empl: a ? libelleEmplacement(a) : '' };
+        }).sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz'));
+        const qrGlobal = qrDe('BS-' + lignes.map(x => x.p.mvt.id).join('.'), 220);
+        return `<section class="page">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8mm">
+            <div>
+              <h1>📦 BON DE SORTIE DE STOCK</h1>
+              <div class="info"><b>Chantier :</b> ${esc(g.lignes[0].mvt['Chantier'] || (g.r?.['Chantier'] || [])[0]?.value || '—')}</div>
+              <div class="info"><b>Commande :</b> ${esc(num)}${g.r ? ' · ' + esc(g.r['Fournisseur'] || '') : ''}</div>
+              <div class="info"><b>Réservé par :</b> ${esc([...new Set(g.lignes.map(p => p.par).filter(Boolean))].join(', ') || '—')} · <b>Édité le :</b> ${new Date().toLocaleString('fr-FR')}</div>
+            </div>
+            <div style="text-align:center"><img src="${qrGlobal}" style="width:38mm;height:38mm"><div style="font-size:8pt;font-weight:bold">Scanner ici pour valider<br>TOUTE la sortie</div></div>
+          </div>
+          <table><tr><th>Emplacement</th><th>Article</th><th>Qté</th><th>QR ligne</th><th>✔</th></tr>
+          ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span class="code">${esc(x.a?.['Code EBP'] || '')}</span></td><td class="q">${fmtQte(x.p.qte)} ${esc(libUnite(x.a?.['Unite']))}</td><td class="qr"><img src="${qrDe('BS-' + x.p.mvt.id, 140)}"></td><td class="ok"></td></tr>`).join('')}
+          </table>
+          <div class="pied">La sortie du stock n'est enregistrée qu'au <b>scan</b> de ce bon (QR global ou QR de chaque ligne) avec l'appli. Bon sans effet s'il a été annulé.</div>
+        </section>`;
+      });
+      tmp.remove();
+      fen.document.open();
+      fen.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Bons de sortie</title>
+        <style>body{font-family:Arial,sans-serif;margin:0}.page{padding:12mm;page-break-after:always}.page:last-child{page-break-after:auto}
+        h1{font-size:16pt;margin:0 0 3mm}.info{font-size:10pt;margin:1mm 0}table{width:100%;border-collapse:collapse;margin-top:5mm}
+        th,td{border:1px solid #999;padding:4px 6px;text-align:left;vertical-align:middle;font-size:10pt}th{background:#eee;font-size:9pt}
+        td.q{text-align:right;font-weight:bold;white-space:nowrap;font-size:12pt}td.qr{width:24mm;text-align:center}td.qr img{width:20mm;height:20mm}
+        td.ok{width:10mm}.code{font-size:8pt;color:#666}.pied{margin-top:5mm;font-size:8pt;color:#555}</style></head><body>
+        ${pages.join('')}<script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) {
+      fen.close();
+      alert('Erreur lors de la génération des bons de sortie : ' + e.message);
+    }
+  }
+
+  // Scan d'un bon de sortie (« BS-12 » ou « BS-12.13.14 ») : enregistre la sortie du stock
+  async function validerBonSortieScan(code) {
+    const ids = String(code).replace(/^BS-/i, '').split('.').map(Number).filter(Boolean);
+    if (stockTablesConfigurees() && !_stockCharge) { try { await chargerStock(); } catch (e) {} }
+    const mvts = ids.map(id => (_mouvementsCache || []).find(m => m.id === id)).filter(Boolean);
+    if (!mvts.length) { bipScan(false); setMessageScan('❌ Bon de sortie inconnu (rechargez le stock ?) : ' + code, '#c0392b'); return; }
+    const aSortir = [], deja = [], annules = [];
+    mvts.forEach(m => {
+      const n = lireNotePrise(m['Note']);
+      if (n.statut === 'Annulé') annules.push(m);
+      else if ((Number(m['Quantite']) || 0) < 0) deja.push(m);
+      else aSortir.push({ m, n, q: Number(n.qte) || 0 });
+    });
+    const nomArt = m => (_articlesCache.find(x => x.id === (m['Article'] || [])[0]?.id)?.['Designation']) || 'article';
+    if (!aSortir.length) {
+      bipScan(false);
+      setMessageScan(annules.length ? '⛔ Bon de sortie annulé : ne rien sortir.' : `ℹ️ Déjà sorti${deja[0] ? ' (' + (lireNotePrise(deja[0]['Note']).sorti_par || '') + ' ' + (lireNotePrise(deja[0]['Note']).sorti_le || '') + ')' : ''}.`, annules.length ? '#c0392b' : '#a5761f');
+      return;
+    }
+    bipScan(true);
+    const insuffisant = aSortir.filter(x => (_stockParArticle[(x.m['Article'] || [])[0]?.id] || 0) < x.q - 0.0005);
+    const texte = aSortir.map(x => `• ${fmtQte(x.q)} × ${nomArt(x.m)}`).join('\n');
+    if (!confirm(`Valider la sortie du stock pour ${aSortir[0].m['Chantier'] || 'le chantier'} (${aSortir[0].m['Commande'] || ''}) ?\n\n${texte}${deja.length ? `\n\n(${deja.length} ligne(s) déjà sortie(s), ignorée(s))` : ''}${insuffisant.length ? '\n\n⚠️ Stock théorique insuffisant pour : ' + insuffisant.map(x => nomArt(x.m)).join(', ') : ''}`)) {
+      setMessageScan('Sortie non validée.', 'var(--gris-moyen)'); return;
+    }
+    let ok = 0;
+    for (const x of aSortir) {
+      try {
+        await majMouvementPrise(x.m.id, {
+          'Type': 'Sortie', 'Quantite': -x.q, 'Date': dateYMD(new Date()), 'Par': connectedCollab || '',
+          'Article': [(x.m['Article'] || [])[0]?.id].filter(Boolean),
+          'Note': ecrireNotePrise({ ...x.n, statut: 'Sorti', sorti_par: connectedCollab || '', sorti_le: new Date().toLocaleDateString('fr-FR') })
+        });
+        ok++;
+      } catch (e) { console.error('Sortie bon', e); }
+    }
+    setMessageScan(ok === aSortir.length ? `✅ Sortie validée : ${ok} ligne(s) sortie(s) du stock.` : `⚠️ ${ok}/${aSortir.length} ligne(s) enregistrée(s) : réessayez le scan.`, ok === aSortir.length ? 'var(--vert)' : '#c0392b');
+    if (document.getElementById('commandes-vue-dispo')?.style.display === 'block') renderCommandesDispoStock();
   }
 
   // Liste de préparation imprimable (prises « à préparer »), triée par emplacement
@@ -19521,6 +19687,7 @@
             const statut = r['Statut']?.value || 'En attente';
             return TYPES_ABSENCE_BLOQUANTS_RTT.includes(type) && statut === 'Approuvé';
           });
+          memoriserDateEntree(c);
           const rttEtSup = calculerRttEtHeuresSup(toutesLesSaisies, absencesBloquantes, c.id, false, c['Poste / Métier'] || '', demandesRtt.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'), congesCollab.filter(r => (r['Statut']?.value || 'En attente') === 'Approuvé'));
           const acquisSemaines = rttEtSup.rttAcquis;
           const rttSoldeInitial = parseFloat(c['RTT solde initial (h)']) || 0;
@@ -22042,7 +22209,7 @@
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
         <div id="commandes-dispo-resume" style="font-size:12px;color:var(--gris-moyen)"></div>
-        <button onclick="imprimerListePreparation()" style="flex:0 0 auto;background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🖨️ Liste de préparation</button>
+        <button onclick="imprimerBonsSortie(null)" style="flex:0 0 auto;background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🖨️ Bons de sortie</button>
       </div>
       <input type="text" id="commandes-dispo-recherche" placeholder="🔍 Rechercher (chantier, fournisseur, n° commande, article)…" oninput="renderCommandesDispoStock()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;background:#fff" />
     </div>
