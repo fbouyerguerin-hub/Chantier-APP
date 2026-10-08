@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V27';
+  const APP_VERSION = 'V28';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15288,6 +15288,21 @@
     });
     return res;
   }
+  // Propositions écartées (« Traité : pas de prise en stock ») : mouvement de quantité 0,
+  // Libelle « Proposition stock écartée <n° commande> », Note « ECARTE;statut=Écarté|Rétabli;… ».
+  const PREFIXE_ECARTE_STOCK = 'Proposition stock écartée';
+  let _dispoVoirEcartees = false;
+  function ecartesStockParLigne() {
+    const res = {};
+    (_mouvementsCache || []).forEach(m => {
+      if (!String(m['Libelle'] || '').startsWith(PREFIXE_ECARTE_STOCK)) return;
+      const lid = Number(m['Ligne commande']) || 0; if (!lid) return;
+      const n = lireNotePrise(m['Note']);
+      if ((n.statut || 'Écarté') === 'Écarté') res[lid] = { mvt: m, par: n.par || m['Par'] || '', motif: n.motif || '', le: n.le || '' };
+    });
+    return res;
+  }
+
   // État d'une ligne prise en stock : quantité prise, quantité EBP attendue, à réduire ?
   function etatPriseLigne(l, prises) {
     const p = (prises || prisesStockParLigne())[l.id];
@@ -15323,8 +15338,9 @@
     const recherche = normTexte(document.getElementById('commandes-dispo-recherche')?.value || '');
     const mots = recherche.split(' ').filter(Boolean);
     const prises = prisesStockParLigne();
+    const ecartes = ecartesStockParLigne();
     const blocs = [];
-    let nbDispo = 0, nbAReduire = 0, nbAPreparer = 0;
+    let nbDispo = 0, nbAReduire = 0, nbAPreparer = 0, nbEcartes = 0;
 
     const commandes = (_commandesCache || [])
       // Propositions : commandes « En attente AR » et « En attente réception ». Après l'AR,
@@ -15369,6 +15385,17 @@
         if (!ouverte || !a || qCmd <= 0) continue;
         const dispo = _stockParArticle[a.id] || 0;
         if (dispo <= 0) continue;
+        const ec = ecartes[l.id];
+        if (ec) {
+          nbEcartes++;
+          if (!_dispoVoirEcartees) continue;
+          lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0;opacity:.75">
+            <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+            <div style="font-size:11px;color:#777;margin-top:2px">🚫 Traité sans prise en stock${ec.par ? ` par ${esc(ec.par)}` : ''}${ec.le ? ` le ${esc(ec.le)}` : ''}${ec.motif ? ` — ${esc(ec.motif)}` : ''} · En stock : ${fmtQte(dispo)}</div>
+            <button onclick="retablirPropositionStock(${ec.mvt.id})" style="margin-top:6px;background:#fff;color:var(--gris);border:1px solid #ddd;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">↺ Rétablir la proposition</button>
+          </div>`);
+          continue;
+        }
         nbDispo++;
         const re = reemploiDisponible(a);
         const propose = Math.min(qCmd, dispo);
@@ -15380,6 +15407,7 @@
             <input id="${idIn}" type="number" min="0" step="any" value="${propose}" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px" />
             <span style="font-size:11px;color:#888">${esc(unite)}</span>
             <button onclick="prendreEnStock(${r.id}, ${l.id}, ${a.id}, '${idIn}')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">📦 Prendre en stock</button>
+            <button onclick="ecarterPropositionStock(${r.id}, ${l.id}, ${a.id})" title="Traité : pas de prise en stock (la proposition disparaît)" style="margin-left:auto;background:#fff;color:#888;border:1px solid #ddd;border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer">🚫</button>
           </div>
         </div>`);
       }
@@ -15399,7 +15427,8 @@
     if (resumeEl) resumeEl.innerHTML = [
       `💡 ${nbDispo} ligne(s) disponible(s) en stock`,
       nbAPreparer ? `📦 ${nbAPreparer} à préparer` : '',
-      nbAReduire ? `<span style="color:#c0392b;font-weight:800">⚠️ ${nbAReduire} à réduire dans EBP</span>` : ''
+      nbAReduire ? `<span style="color:#c0392b;font-weight:800">⚠️ ${nbAReduire} à réduire dans EBP</span>` : '',
+      nbEcartes ? `<a href="#" onclick="event.preventDefault(); _dispoVoirEcartees = !_dispoVoirEcartees; renderCommandesDispoStock();" style="color:#888">🚫 ${nbEcartes} traitée(s) sans prise${_dispoVoirEcartees ? ' (masquer)' : ' (afficher)'}</a>` : ''
     ].filter(Boolean).join(' · ');
     const tab = document.getElementById('tab-commandes-dispo');
     if (tab) tab.textContent = `🔁 Dispo. stock${nbDispo + nbAReduire ? ` (${nbDispo + nbAReduire})` : ''}`;
@@ -15435,6 +15464,34 @@
       console.error('Prise en stock', e);
       alert('Erreur lors de la prise en stock : ' + e.message);
     }
+  }
+
+  // 🚫 Proposition traitée sans prise en stock : elle disparaît de la liste (pour tous)
+  async function ecarterPropositionStock(commandeId, ligneId, articleId) {
+    if (!peutGererStock()) return;
+    const r = (_commandesCache || []).find(c => c.id === commandeId);
+    const l = (_commandesLignesCache[commandeId] || []).find(x => x.id === ligneId);
+    if (!r || !l) return;
+    const motif = prompt(`Proposition traitée sans prise en stock :\n« ${l['Description'] || ''} »\n\nMotif (facultatif, ex. stock réservé à un autre chantier, qualité différente…) :`, '');
+    if (motif === null) return; // annulé
+    const num = r['Numero commande'] || '';
+    try {
+      await creerMouvementsStock([{
+        articleId, type: 'Sortie', quantite: 0,
+        chantier: (r['Chantier'] || [])[0]?.value || '', commande: num, ligneId: l.id,
+        libelle: `${PREFIXE_ECARTE_STOCK} ${num}`.trim(),
+        note: ['ECARTE', `statut=Écarté`, `par=${connectedCollab || ''}`, `le=${new Date().toLocaleDateString('fr-FR')}`, `motif=${String(motif).replace(/[;=\n]/g, ' ').trim()}`].join(';')
+      }]);
+      renderCommandesDispoStock();
+    } catch (e) { alert('Erreur : ' + e.message); }
+  }
+  async function retablirPropositionStock(mvtId) {
+    if (!peutGererStock()) return;
+    const m = _mouvementsCache.find(x => x.id === mvtId); if (!m) return;
+    try {
+      await majMouvementPrise(mvtId, { 'Note': ['ECARTE', ...Object.entries({ ...lireNotePrise(m['Note']), statut: 'Rétabli', retabli_par: connectedCollab || '' }).filter(([k]) => k !== 'ECARTE').map(([k, v]) => `${k}=${v}`)].join(';') });
+      renderCommandesDispoStock();
+    } catch (e) { alert('Erreur : ' + e.message); }
   }
 
   async function majMouvementPrise(mvtId, champs) {
