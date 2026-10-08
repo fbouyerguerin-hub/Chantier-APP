@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V50';
+  const APP_VERSION = 'V52';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13499,6 +13499,7 @@
         ${gestion ? `<button onclick="desactiverKit(${kit.id})" style="width:100%;margin-top:6px;background:none;border:1px solid #e0d6f0;color:#8e7cc3;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">Retirer de la gestion kit</button>` : ''}`;
       else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
+      html += `<button onclick="imprimerNomenclatureOuvrage('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 8px;background:#ede7f6;color:#5e35b1;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la nomenclature (QR + composants)</button>`;
       html += renderNomenclatureFiche(code);
     }
     // Commande en cours (passée, pas encore réceptionnée)
@@ -13864,6 +13865,105 @@
     if (objets.length === 1 && typeof estKit === 'function' && estKit(objets[0])) return imprimerEtiquetteKit(objets[0].id);
     return imprimerEtiquettesArticlesObjets(objets.filter(a => !(typeof estKit === 'function' && estKit(a))));
   }
+  // ── FICHE NOMENCLATURE D'UN OUVRAGE : A4 portrait, QR de l'ouvrage + détail des composants
+  // (désignation, code EBP, réf. fournisseur, quantité, emplacement et stock atelier).
+  // Prix et coûts uniquement pour Administrateur / Gestionnaire, et sur demande.
+  async function imprimerNomenclatureOuvrage(code) {
+    code = String(code || '').trim();
+    if (!code) return;
+    const avecPrix = estProfilPrix() && confirm('Imprimer avec les prix des composants ?\n\nOK = avec prix · Annuler = sans prix');
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Préparation de la nomenclature…</p>');
+    try {
+      await Promise.all([chargerCatalogueLocal().catch(() => {}), (stockTablesConfigurees() && !_stockCharge) ? chargerStock().catch(() => {}) : null]);
+      const n = await chargerNomenclatureAsync(code);
+      const comps = (n && n.composants) || [];
+      const x = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(normRef(code)) : null;
+      const designation = (x && x.designation) || code;
+      const parCodeStock = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
+      await chargerLibScan('qrcode');
+      const tmp = document.createElement('div');
+      tmp.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(tmp);
+      new QRCode(tmp, { text: urlScan(code), width: 320, height: 320, correctLevel: QRCode.CorrectLevel.M });
+      const cv = tmp.querySelector('canvas');
+      const qr = cv ? cv.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+      tmp.remove();
+      const esc = t => echapperHtmlNote(t == null ? '' : String(t));
+      let total = 0;
+      const lignes = comps.map((c, i) => {
+        const cat = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(normRef(c.code)) : null;
+        const a = parCodeStock.get(normRef(c.code));
+        const stock = a ? (_stockParArticle[a.id] || 0) : null;
+        const manque = a && c.quantite > 0 && stock < c.quantite;
+        if (avecPrix && Number(c.cout) > 0 && !c.non_inclus) total += Number(c.cout);
+        const nature = c.ouvrage ? 'sous-ouvrage' : (!c.catalogue ? 'hors catalogue' : '');
+        return `<tr class="${c.non_inclus ? 'ni' : ''}">
+          <td class="n">${i + 1}</td>
+          <td><b>${esc(c.designation)}</b>${nature || c.non_inclus ? `<div class="pt">${[nature, c.non_inclus ? 'non inclus' : '', c.quantite_fixe ? 'quantité fixe' : ''].filter(Boolean).join(' · ')}</div>` : ''}</td>
+          <td class="c">${esc(c.code)}</td>
+          <td class="c">${esc((cat && cat.ref) || (a && a['Reference fournisseur']) || '')}${(cat && cat.fournisseur) ? `<div class="pt">${esc(cat.fournisseur)}</div>` : ''}</td>
+          <td class="q">${esc(fmtQteUnite(c.quantite, c.unite))}</td>
+          <td>${a ? esc(libelleEmplacement(a) || '—') : '<span class="pt">non suivi</span>'}</td>
+          <td class="q${manque ? ' ko' : ''}">${stock === null ? '' : esc(fmtQteUnite(stock, (a && a['Unite']) || c.unite))}</td>
+          ${avecPrix ? `<td class="q">${Number(c.cout) > 0 ? fmtEur(c.cout) : ''}</td>` : ''}
+          <td class="ok"></td>
+        </tr>`;
+      }).join('');
+      const coutTotal = avecPrix ? (Number(n && n.cout_composants) > 0 ? Number(n.cout_composants) : total) : 0;
+      fen.document.open();
+      fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Nomenclature ${esc(code)}</title><style>
+        @page { size: A4 portrait; margin: 10mm; }
+        body { margin: 0; font-family: Arial, sans-serif; color: #000; font-size: 9.5pt; }
+        .hd { display: flex; gap: 6mm; align-items: flex-start; border-bottom: 0.6mm solid #000; padding-bottom: 3mm; margin-bottom: 4mm; }
+        .lg { width: 62mm; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: flex-start; padding-top: 1mm; }
+        .lg img { width: 62mm; max-height: 46mm; object-fit: contain; object-position: left top; }
+        .qc { width: 38mm; flex-shrink: 0; text-align: center; font-family: monospace; font-size: 9pt; }
+        .qc img { width: 38mm; height: 38mm; image-rendering: pixelated; display: block; }
+        .qc .hint { font-family: Arial, sans-serif; font-size: 7.5pt; color: #555; }
+        .ti { flex: 1; min-width: 0; }
+        .ki { font-size: 10pt; font-weight: 700; color: #555; letter-spacing: .3mm; text-transform: uppercase; }
+        .no { font-size: 18pt; font-weight: 800; line-height: 1.15; margin: 1.5mm 0; }
+        .co { font-size: 11pt; font-family: monospace; font-weight: 700; }
+        .mo { font-size: 8.5pt; color: #555; margin-top: 1.5mm; }
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; font-size: 8pt; color: #444; border-bottom: 0.4mm solid #000; padding: 1mm; }
+        td { border-bottom: 0.2mm solid #ccc; padding: 1.2mm 1mm; vertical-align: top; }
+        tr { break-inside: avoid; }
+        .n { color: #888; width: 6mm; }
+        .c { font-family: monospace; font-size: 8.5pt; white-space: nowrap; }
+        .q { text-align: right; white-space: nowrap; font-weight: 700; }
+        .ko { color: #c0392b; }
+        .pt { font-size: 7.5pt; color: #777; font-weight: 400; font-family: Arial, sans-serif; }
+        .ni td { color: #999; }
+        .ok { width: 8mm; border-left: 0.2mm solid #ccc; }
+        .tot { text-align: right; font-weight: 800; padding-top: 3mm; font-size: 10.5pt; }
+        .pied { margin-top: 6mm; font-size: 8pt; color: #777; display: flex; justify-content: space-between; }
+        @media screen { body { background: #eee; padding: 10px; } .page { background: #fff; padding: 10mm; max-width: 190mm; margin: 0 auto; } }
+      </style></head><body><div class="page">
+        <div class="hd">
+          <div class="lg"><img src="${LOGO_URL}" alt="Guérin Bâtiments" onerror="this.outerHTML='<b style=&quot;font-size:13pt;line-height:1.1&quot;>GUÉRIN<br>BÂTIMENTS</b>'" /></div>
+          <div class="ti">
+            <div class="ki">Nomenclature d'ouvrage</div>
+            <div class="no">${esc(designation)}</div>
+            <div class="co">${esc(code)} · ${comps.length} composant(s)</div>
+          </div>
+          <div class="qc"><img src="${qr}" /><div>${esc(code)}</div><div class="hint">Scanner : fiche ouvrage</div></div>
+        </div>
+        ${comps.length ? `<table><thead><tr><th>#</th><th>Composant</th><th>Code EBP</th><th>Réf. / fournisseur</th><th style="text-align:right">Qté</th><th>Emplacement</th><th style="text-align:right">Stock</th>${avecPrix ? '<th style="text-align:right">Coût</th>' : ''}<th>✓</th></tr></thead><tbody>${lignes}</tbody></table>
+          ${avecPrix && coutTotal ? `<div class="tot">Coût des composants : ${fmtEur(coutTotal)} HT</div>` : ''}`
+          : '<div style="padding:6mm;color:#777">Nomenclature indisponible.</div>'}
+        <div class="pied"><span>GUÉRIN BÂTIMENTS · Stock atelier</span><span>Imprimé le ${new Date().toLocaleDateString('fr-FR')} par ${esc(connectedCollab || '')}</span></div>
+      </div>
+      <script>window.onload = () => setTimeout(() => window.print(), 400);<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) {
+      console.error('Impression nomenclature', e);
+      try { fen.document.body.innerHTML = '<p style="font-family:sans-serif;color:#c0392b">❌ Impression impossible : ' + echapperHtmlNote(e.message) + '</p>'; } catch (_) {}
+    }
+  }
+
   // ── Étiquette KIT INTERNE : A4, 2 étiquettes 199,6 × 143,5 mm (type Avery L7168),
   // QR du kit + liste complète des composants (désignation, code, quantité).
   async function imprimerEtiquetteKit(articleId) {
