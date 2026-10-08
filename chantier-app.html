@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V34';
+  const APP_VERSION = 'V35';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -11459,11 +11459,14 @@
     _idxEnCmd = { date: _lignesEnCoursDate, nbArt, parCode, parArticle };
     return _idxEnCmd;
   }
-  function enCommandeArticle(code, a) {
+  // Par défaut, seules les commandes destinées au STOCK ATELIER comptent : une commande
+  // affectée à un chantier part sur ce chantier, elle n'entrera jamais en stock (pas de
+  // « future dispo »). chantiers = true : uniquement les commandes affectées à un chantier.
+  function enCommandeArticle(code, a, { chantiers = false } = {}) {
     if (!_lignesEnCours.length) return [];
     const idx = indexEnCommande();
     const res = new Set([...(code ? idx.parCode.get(normRef(code)) || [] : []), ...(a ? idx.parArticle.get(a.id) || [] : [])]);
-    return [...res];
+    return [...res].filter(x => chantiers ? !estCommandeStockAtelier(x.r) : estCommandeStockAtelier(x.r));
   }
   function totalEnCommande(liste) { return liste.reduce((t, x) => t + x.qte, 0); }
   // Résultat mis en cache de peutVoirPrixCommandes() pour ce chargement, afin
@@ -13295,6 +13298,7 @@
     }
     // Commande en cours (passée, pas encore réceptionnée)
     const enCmd = estOuvrage ? [] : enCommandeArticle(code, a);
+    const enCmdChantiers = estOuvrage ? [] : enCommandeArticle(code, a, { chantiers: true });
     const blocEnCommande = enCmd.length ? `<div style="background:#fff3e0;border:1.5px solid #f0c27a;border-radius:10px;padding:10px 12px;margin:8px 0">
         <div style="font-size:13px;font-weight:800;color:#a2560f">🚚 Commande en cours : ${fmtQte(totalEnCommande(enCmd))} ${esc(uniteApresQte(unite))} attendu(s)</div>
         ${enCmd.slice(0, 6).map(({ r, qte, partielle }) => {
@@ -13303,6 +13307,11 @@
           return `<div onclick="fermerFicheArticle(); ouvrirScanInfo('CMD-${r.id}')" style="cursor:pointer;font-size:11px;color:#7c4a12;padding:3px 0;border-top:1px dashed #f0d9a8;margin-top:3px">
             <b>${fmtQte(qte)}</b> · <span style="text-decoration:underline">${esc(r['Numero commande'] || 'Commande')}</span> · ${esc(r['Fournisseur'] || '')} · ${esc((r['Chantier'] || [])[0]?.value || 'stock')}<br><span style="color:#a5761f">${esc(statut)}${prevue}</span></div>`;
         }).join('')}
+      </div>` : '';
+    // Commandes affectées à des chantiers : information seulement (n'entreront pas en stock)
+    const blocEnCmdChantiers = enCmdChantiers.length ? `<div style="font-size:11px;color:#888;margin:4px 0 8px;padding:6px 10px;background:#f7f7f7;border-radius:8px">
+        🏗 Également commandé pour ${new Set(enCmdChantiers.map(x => x.r.id)).size} chantier(s) : ${fmtQte(totalEnCommande(enCmdChantiers))} ${esc(uniteApresQte(unite))} — part sur chantier, <b>n'entre pas en stock</b>
+        ${enCmdChantiers.slice(0, 4).map(({ r, qte }) => `<div onclick="fermerFicheArticle(); ouvrirScanInfo('CMD-${r.id}')" style="cursor:pointer;padding-top:2px"><b>${fmtQte(qte)}</b> · <span style="text-decoration:underline">${esc(r['Numero commande'] || '')}</span> · ${esc((r['Chantier'] || [])[0]?.value || '')}</div>`).join('')}
       </div>` : '';
     // Stock atelier
     if (!estOuvrage) html += titreSection('Stock atelier');
@@ -13320,7 +13329,7 @@
             <div style="font-size:10px;color:#777">${esc(uniteApresQte(unite))} en stock${sousMini ? ' · ⚠️ sous le mini' : ''}</div></div>
           ${prive && prix ? `<div style="flex:1;background:#f6f6f6;border-radius:10px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--gris)">${fmtEur(Math.max(0, qte) * prix)}</div><div style="font-size:10px;color:#777">valeur du stock</div></div>` : ''}
         </div>`
-        + blocEnCommande
+        + blocEnCommande + blocEnCmdChantiers
         + champ('Emplacement', libelleEmplacement(a) ? '📍 ' + esc(libelleEmplacement(a)) : '<span style="color:#c0392b">non renseigné</span>')
         + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteApresQte(unite)) : '—')
         + (re ? champ('Réemploi', `<span style="color:#7c5200">↩️ ${fmtQte(re.qte)} revenu(s) de ${esc(re.chantiers.slice(0, 2).join(', '))}</span>`) : '')
@@ -13335,7 +13344,7 @@
           ${gestion && aCodeEbp(a) ? b('🏷️ Étiquette', `imprimerEtiquettesArticles([${a.id}])`) : ''}
         </div>`;
     } else {
-      html += `<div style="font-size:12px;color:#777;padding:4px 0 8px">Cet article n'est pas encore suivi au stock atelier.</div>` + blocEnCommande
+      html += `<div style="font-size:12px;color:#777;padding:4px 0 8px">Cet article n'est pas encore suivi au stock atelier.</div>` + blocEnCommande + blocEnCmdChantiers
         + (gestion && code ? `<div style="display:flex;gap:6px">
             <button onclick="fermerFicheArticle(); creerArticleDepuisCatalogue('${esc(code).replace(/'/g, "\\'")}', 'entree')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer">➕ Entrée en stock</button>
             <button onclick="fermerFicheArticle(); creerArticleDepuisCatalogue('${esc(code).replace(/'/g, "\\'")}')" style="flex:1;background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer">📍 Définir emplacement</button>
