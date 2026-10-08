@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V53';
+  const APP_VERSION = 'V55';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1073,6 +1073,8 @@
       if (tabCommandesArticles) tabCommandesArticles.style.display = 'block'; } // liste des articles : tous (prix réservés)
     { const tabDispo = document.getElementById('tab-commandes-dispo');
       if (tabDispo) tabDispo.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none'; } // besoins nets
+    { const bCap = document.getElementById('btn-collabs-capacite');
+      if (bCap) bCap.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // fictifs hors capacité
     { const tabMini = document.getElementById('tab-commandes-mini');
       if (tabMini) tabMini.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
       if (tabMini && (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') && typeof majBadgeStockMini === 'function') setTimeout(() => majBadgeStockMini(true), 1500); } // articles sous le mini
@@ -5689,6 +5691,76 @@
   let chargeTabActif = 'affaires';
   let chargeVueAnnuelle = true;
 
+  // ── COLLABORATEURS HORS CAPACITÉ (fictifs) ──
+  // Case à cocher « Hors capacite » de la table Collaborateurs : le collaborateur reste
+  // utilisable (affectations, planning…) mais n'est PAS compté dans la capacité du
+  // plan de charge (heures disponibles, présents, conflits, exports).
+  const CHAMPS_HORS_CAPACITE = ['Hors capacite', 'Hors capacité', 'Fictif'];
+  function estHorsCapacite(c) {
+    if (!c) return false;
+    return CHAMPS_HORS_CAPACITE.some(k => c[k] === true || c[k] === 'true' || c[k] === 1);
+  }
+  async function ouvrirCollabsCapacite() {
+    if (connectedDroit !== 'Administrateur' && connectedDroit !== 'Gestionnaire') return;
+    const modal = document.getElementById('modal-collabs-capacite');
+    const el = document.getElementById('collabs-capacite-contenu');
+    modal.style.display = 'flex';
+    el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const [resCollabs, resUsers] = await Promise.all([
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_USERS + '/?user_field_names=true&size=200', { headers: HEADERS }),
+      ]);
+      const allCollabs = (await resCollabs.json()).results || [];
+      const inactifs = getInactifsCollabIds((await resUsers.json()).results || [], allCollabs);
+      const collabs = allCollabs.filter(c => !inactifs.has(String(c.id)));
+      const champ = CHAMPS_HORS_CAPACITE.find(k => allCollabs.some(c => k in c));
+      if (!champ) {
+        el.innerHTML = `<div style="background:#fff3e0;border-radius:10px;padding:12px;font-size:12px;line-height:1.5;color:#7c4a12">⚙️ Créez d'abord dans Baserow, table <b>Collaborateurs</b>, un champ <b>case à cocher</b> nommé <b>« Hors capacite »</b>, puis rouvrez cette fenêtre.</div>`;
+        return;
+      }
+      const esc = echapperHtmlNote;
+      const postes = POSTES_CHARGE.map(p => ({ p, liste: collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab) })).filter(g => g.liste.length);
+      el.innerHTML = `<div style="font-size:11px;color:#777;margin-bottom:10px">Décochez les collaborateurs <b>fictifs</b> : ils restent utilisables dans l'appli mais ne comptent plus dans la capacité du plan de charge.</div>`
+        + postes.map(({ p, liste }) => `<div style="font-size:11px;font-weight:800;color:${p.color};text-transform:uppercase;margin:12px 0 4px">${esc(p.label || p.key)} · ${liste.filter(c => !estHorsCapacite(c)).length} compté(s)</div>`
+          + liste.sort((a, b) => String(a['Nom Complet'] || a['Nom complet'] || '').localeCompare(String(b['Nom Complet'] || b['Nom complet'] || ''), 'fr')).map(c => {
+            const nom = c['Nom Complet'] || c['Nom complet'] || '?';
+            const hors = estHorsCapacite(c);
+            return `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:4px;border-radius:8px;background:${hors ? '#f6f6f6' : '#f0f7ee'};cursor:pointer">
+              <input type="checkbox" ${hors ? '' : 'checked'} onchange="basculerHorsCapacite(${c.id}, !this.checked, '${champ.replace(/'/g, "\\'")}', this)" style="width:18px;height:18px" />
+              <span style="flex:1;font-size:13px;font-weight:700;color:${hors ? '#999' : 'var(--gris)'}">${esc(nom)}</span>
+              <span style="font-size:10px;font-weight:700;color:${hors ? '#a5761f' : 'var(--vert)'}">${hors ? '👻 fictif · hors capacité' : '✅ compté'}</span>
+            </label>`;
+          }).join('')).join('');
+    } catch (e) {
+      console.error('Collaborateurs capacité', e);
+      el.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement.</div>';
+    }
+  }
+  async function basculerHorsCapacite(collabId, hors, champ, input) {
+    if (input) input.disabled = true;
+    try {
+      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/${collabId}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [champ]: !!hors })
+      });
+      if (!res.ok) throw new Error('Baserow ' + res.status + ' : ' + (await res.text()).slice(0, 150));
+      _capaciteModifiee = true;
+      await ouvrirCollabsCapacite();
+    } catch (e) {
+      alert('Enregistrement impossible : ' + e.message);
+      if (input) { input.disabled = false; input.checked = !input.checked; }
+    }
+  }
+  let _capaciteModifiee = false;
+  function fermerCollabsCapacite() {
+    document.getElementById('modal-collabs-capacite').style.display = 'none';
+    if (_capaciteModifiee) {
+      _capaciteModifiee = false;
+      try { _collabsChargeCache = []; } catch (e) {}
+      if (chargeVueAnnuelle) chargerCapaciteAnnuelle(); else loadPlanCharge();
+    }
+  }
+
   function toggleVueCapacite() {
     chargeVueAnnuelle = !chargeVueAnnuelle;
     const btn = document.getElementById('btn-toggle-vue-capacite');
@@ -5717,7 +5789,7 @@
       const p = POSTES_CHARGE.find(pp => pp.key === posteKey);
       const personnes = parseFloat(a[p.personnesField]) || 0;
       if (personnes > 0) return personnes * 8;
-      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
       return (collabsPoste.length * 8) || 8;
     };
     const nbJours = (posteKey) => {
@@ -5921,7 +5993,7 @@
       // Capacité et charge par poste et par jour, sur toute l'année
       const capJour = {}, consJour = {}, presentsJour = {};
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         capJour[p.key] = {}; consJour[p.key] = {}; presentsJour[p.key] = {};
         jourColonnes.forEach(jc => {
           let capSem = 0;
@@ -5964,7 +6036,7 @@
 
       let html = '';
       postesAffiches.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         const affairesPosteAnnee = affaires.filter(a => {
           if (!(parseFloat(a[p.field]) > 0)) return false;
@@ -6138,7 +6210,7 @@
       // Capacité et consommation par poste avec détail par collaborateur
       const capacites = {}, consommes = {}, detailsCollabs = {};
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         let joursAbsentTotal = 0;
         const detail = collabsPoste.map(c => {
           const absences = congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id));
@@ -6197,7 +6269,7 @@
       const capJour = {}, presentsJour = {}; // capJour[posteKey][dateStr]
       POSTES_CHARGE.forEach(p => {
         capJour[p.key] = {}; presentsJour[p.key] = {};
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         jourColonnes.forEach(jc => {
           let joursAbs = 0;
           const presentsSet = new Set();
@@ -6580,7 +6652,7 @@
         }
 
         // ── Capacité / Charge / Disponible par jour ──
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         const capJourExp = {}, consJourExp = {};
         jourColonnesExp.forEach(jc => {
           let joursAbs = 0;
@@ -6728,7 +6800,7 @@
         const ws = wb.addWorksheet(p.key);
         const NB_COLS = 1 + semainesAnnee.length;
         const posteArgb = 'FF' + p.color.replace('#', '');
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         ws.getColumn(1).width = 32;
         semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 7; });
@@ -7113,7 +7185,7 @@
       row++;
 
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         const posteArgb = 'FF' + p.color.replace('#', '');
 
         ws.getRow(row).height = 15;
@@ -7257,7 +7329,7 @@
         const ws = wb.addWorksheet(p.key);
         const NB_COLS = 1 + semainesAnnee.length;
         const posteArgb = 'FF' + p.color.replace('#', '');
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         ws.getColumn(1).width = 32;
         semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 6.5; });
@@ -7677,7 +7749,7 @@
       if (!p.jours) return `<div style="color:#ccc">${k} : —</div>`;
 
       // Détection de conflit de capacité pour ce poste sur sa période
-      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === poste.posteCollab);
+      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === poste.posteCollab && !estHorsCapacite(c)); // fictifs exclus
       const heuresNouvelleAffaire = parseFloat(aFictif[poste.field]) || 0;
       const hParJourNouvelle = heuresNouvelleAffaire / p.jours;
       let joursEnConflit = [];
@@ -18689,6 +18761,18 @@
     return true;
   }
 
+  // Collaborateur fictif (hors capacité du plan de charge) — champ case à cocher « Hors capacite »
+  async function enregistrerHorsCapaciteCollab(collabId, valeur, champ) {
+    if (!collabId) return true;
+    const r = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [champ || CHAMPS_HORS_CAPACITE[0]]: !!valeur }) });
+    if (!r.ok) {
+      alert("⚠️ Le choix « collaborateur fictif » n'a pas pu être enregistré.\nCréez dans Baserow, table Collaborateurs, un champ case à cocher nommé « Hors capacite ».\n\n" + (await r.text()).slice(0, 200));
+      return false;
+    }
+    return true;
+  }
+
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
     document.getElementById('user-id').value = '';
@@ -18697,7 +18781,8 @@
     document.getElementById('user-actif').value = 'true';
     document.getElementById('user-save-info').style.display = 'none';
     ['user-date-entree', 'user-date-entree-modif'].forEach(i => { const el = document.getElementById(i); if (el) el.value = ''; });
-    _userCollabEdition = { id: null, champDate: null };
+    ['user-hors-capacite', 'user-hors-capacite-modif'].forEach(i => { const el = document.getElementById(i); if (el) el.checked = false; });
+    _userCollabEdition = { id: null, champDate: null, champHorsCap: null, horsCap: false };
 
     const isCreation = !rowId;
     document.getElementById('modal-user-titre').textContent = isCreation ? '➕ Nouveau collaborateur' : '✏️ Modifier utilisateur';
@@ -18749,6 +18834,9 @@
             // Date d'entrée (champ de la table Collaborateurs, nom toléré : voir CHAMPS_DATE_ENTREE)
             _userCollabEdition = { id: collabFound.collabId, champDate: CHAMPS_DATE_ENTREE.find(k => k in col) || null };
             document.getElementById('user-date-entree-modif').value = _userCollabEdition.champDate ? String(col[_userCollabEdition.champDate] || '').slice(0, 10) : '';
+            _userCollabEdition.champHorsCap = CHAMPS_HORS_CAPACITE.find(k => k in col) || null;
+            _userCollabEdition.horsCap = estHorsCapacite(col);
+            document.getElementById('user-hors-capacite-modif').checked = _userCollabEdition.horsCap;
           } catch(e) {}
         }
       } catch(e) {}
@@ -18793,7 +18881,8 @@
           const collabCree = await resCollab.json();
           const dateEntree = document.getElementById('user-date-entree').value;
           if (dateEntree && collabCree?.id) await enregistrerDateEntreeCollab(collabCree.id, dateEntree, CHAMPS_DATE_ENTREE.find(k => k in collabCree) || null);
-        } catch (e) { console.warn("Date d'entrée non enregistrée", e); }
+          if (document.getElementById('user-hors-capacite')?.checked && collabCree?.id) await enregistrerHorsCapaciteCollab(collabCree.id, true, CHAMPS_HORS_CAPACITE.find(k => k in collabCree) || null);
+        } catch (e) { console.warn("Date d'entrée / hors capacité non enregistrés", e); }
 
         // Étape 2 : créer le compte utilisateur
         btn.textContent = '🔑 Création du compte…';
@@ -18858,6 +18947,8 @@
           const collabIdDate = _userCollabEdition.id || COLLABORATEURS_ADMIN.find(c => c.nom === nomComplet)?.collabId;
           const dateModif = document.getElementById('user-date-entree-modif').value;
           if (collabIdDate && (dateModif || _userCollabEdition.champDate)) await enregistrerDateEntreeCollab(collabIdDate, dateModif, _userCollabEdition.champDate);
+          const horsCapModif = !!document.getElementById('user-hors-capacite-modif')?.checked;
+          if (collabIdDate && horsCapModif !== !!_userCollabEdition.horsCap) await enregistrerHorsCapaciteCollab(collabIdDate, horsCapModif, _userCollabEdition.champHorsCap);
         }
       }
 
@@ -21852,6 +21943,12 @@
           <label>Date d'entrée <span style="font-weight:400;color:#999;font-size:11px">(début du calcul des RTT)</span></label>
           <input type="date" id="user-date-entree" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 13px;font-size:15px;color:var(--gris);outline:none" />
         </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:#f6f6f6;border-radius:10px;padding:10px 13px">
+            <input type="checkbox" id="user-hors-capacite" style="width:18px;height:18px" />
+            <span style="font-size:13px;color:var(--gris)"><b>👻 Collaborateur fictif — hors capacité</b><br><span style="font-size:11px;color:#999">Non compté dans la capacité du plan de charge</span></span>
+          </label>
+        </div>
         <div style="background:#f5f0eb;border-left:3px solid var(--beige);border-radius:8px;padding:10px 14px;margin:0 0 14px;font-size:12px;font-weight:700;color:var(--gris)">
           🔑 2 — Accès à l'application
         </div>
@@ -21881,6 +21978,12 @@
         <div class="field">
           <label>Date d'entrée <span style="font-weight:400;color:#999;font-size:11px">(début du calcul des RTT)</span></label>
           <input type="date" id="user-date-entree-modif" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 13px;font-size:15px;color:var(--gris);outline:none" />
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;background:#f6f6f6;border-radius:10px;padding:10px 13px">
+            <input type="checkbox" id="user-hors-capacite-modif" style="width:18px;height:18px" />
+            <span style="font-size:13px;color:var(--gris)"><b>👻 Collaborateur fictif — hors capacité</b><br><span style="font-size:11px;color:#999">Non compté dans la capacité du plan de charge</span></span>
+          </label>
         </div>
       </div>div>
 
@@ -22323,6 +22426,7 @@
       <button onclick="chargeVueAnnuelle ? changerAnneeCharge(-1) : changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
       <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris);min-width:120px"></div>
       <button onclick="chargeVueAnnuelle ? changerAnneeCharge(1) : changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
+      <button id="btn-collabs-capacite" onclick="ouvrirCollabsCapacite()" title="Collaborateurs comptés dans la capacité (exclure les fictifs)" style="background:#fff;color:var(--gris);border:1.5px solid #ddd;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">👥 Collaborateurs</button>
       <button id="btn-toggle-vue-capacite" onclick="toggleVueCapacite()" style="background:#494949;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🗓 Vue mensuelle</button>
       <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Mois</button>
       <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
@@ -23333,5 +23437,15 @@ function pvResetZoom(){_pvScale=1;_pvOX=0;_pvOY=0;_pvCtrl&&_pvCtrl.applyT();}
 function fermerPlanViewer(){document.getElementById('modal-plan-viewer').style.display='none';}
 </script>
 
+<!-- Modale : collaborateurs comptés dans la capacité du plan de charge -->
+<div id="modal-collabs-capacite" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)fermerCollabsCapacite()">
+  <div style="background:#fff;border-radius:14px;width:100%;max-width:480px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #eee">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">👥 Collaborateurs en capacité</div>
+      <button onclick="fermerCollabsCapacite()" style="background:#f0f0f0;border:none;border-radius:50%;width:30px;height:30px;font-size:14px;cursor:pointer">✕</button>
+    </div>
+    <div id="collabs-capacite-contenu" style="padding:12px 16px 18px;overflow-y:auto"></div>
+  </div>
+</div>
 </body>
 </html>
