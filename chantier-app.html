@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V31';
+  const APP_VERSION = 'V32';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15433,7 +15433,9 @@
               ? `<div style="margin-top:4px;font-size:11px;font-weight:800;color:#c0392b;background:#fff6f5;border:1px solid #e8a39b;border-radius:6px;padding:4px 8px;display:inline-block">⚠️ À réduire dans EBP : quantité ${fmtQte(etat.actuel)} → ${fmtQte(etat.attendu)} ${esc(unite)}${etat.attendu === 0 ? ' (supprimer la ligne)' : ''}</div>`
               : `<div style="margin-top:4px;font-size:11px;font-weight:700;color:var(--vert)">✅ Commande EBP corrigée</div>`}
             <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-              ${etat.prises.some(x => x.statut === 'À sortir') ? `<button onclick="imprimerBonsSortie(${r.id})" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon de sortie</button>` : ''}
+              ${etat.prises.some(x => x.statut === 'À sortir')
+                ? `<button onclick="imprimerBonsSortie(${r.id})" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon de sortie</button>`
+                : `<button onclick="imprimerBonsSortie(${r.id}, true)" style="background:#fff;color:var(--gris);border:1px solid #ddd;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Réimprimer le bon</button>`}
               ${etat.prises.map(x => `<button onclick="annulerPriseStock(${x.mvt.id})" style="background:#fff;color:#c0392b;border:1px solid #e8a39b;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">↩️ Annuler (${fmtQte(x.qte)})</button>`).join('')}
             </div>
           </div>`);
@@ -15590,8 +15592,11 @@
   // 🖨️ Bons de sortie : un bon par commande, réservations « À sortir », triées par
   // emplacement. QR « BS-<id> » par ligne, et QR global « BS-<id>.<id>… » pour valider
   // tout le bon d'un coup. C'est le SCAN qui enregistre la sortie du stock.
-  async function imprimerBonsSortie(commandeId) {
-    const toutes = Object.values(prisesStockParLigne()).flat().filter(p => p.statut === 'À sortir');
+  // reimpression = true : toutes les prises de la commande (y compris déjà sorties, marquées
+  // « ✅ Sorti » sans QR) — duplicata du bon, accessible depuis la commande et l'onglet.
+  async function imprimerBonsSortie(commandeId, reimpression = false) {
+    if (stockTablesConfigurees() && !_stockCharge) { try { await chargerStock(); } catch (e) {} }
+    const toutes = Object.values(prisesStockParLigne()).flat().filter(p => reimpression || p.statut === 'À sortir');
     const parCmd = {};
     toutes.forEach(p => {
       const num = p.mvt['Commande'] || '';
@@ -15600,7 +15605,7 @@
       (parCmd[num] = parCmd[num] || { r, lignes: [] }).lignes.push(p);
     });
     const groupes = Object.entries(parCmd);
-    if (!groupes.length) { alert('Aucun bon de sortie à imprimer (aucune réservation en attente de scan).'); return; }
+    if (!groupes.length) { alert(reimpression ? 'Aucune prise en stock sur cette commande.' : 'Aucun bon de sortie à imprimer (aucune réservation en attente de scan).'); return; }
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
     fen.document.write('<p style="font-family:sans-serif">⏳ Génération des bons de sortie…</p>');
@@ -15621,19 +15626,20 @@
           const a = _articlesCache.find(x => x.id === (p.mvt['Article'] || [])[0]?.id);
           return { p, a, empl: a ? libelleEmplacement(a) : '' };
         }).sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz'));
-        const qrGlobal = qrDe('BS-' + lignes.map(x => x.p.mvt.id).join('.'), 220);
+        const aScanner = lignes.filter(x => x.p.statut === 'À sortir');
+        const qrGlobal = aScanner.length ? qrDe('BS-' + aScanner.map(x => x.p.mvt.id).join('.'), 220) : '';
         return `<section class="page">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8mm">
             <div>
-              <h1>📦 BON DE SORTIE DE STOCK</h1>
+              <h1>📦 BON DE SORTIE DE STOCK${reimpression ? ' <span style="font-size:10pt;border:1px solid #333;padding:1px 6px">RÉIMPRESSION</span>' : ''}</h1>
               <div class="info"><b>Chantier :</b> ${esc(g.lignes[0].mvt['Chantier'] || (g.r?.['Chantier'] || [])[0]?.value || '—')}</div>
               <div class="info"><b>Commande :</b> ${esc(num)}${g.r ? ' · ' + esc(g.r['Fournisseur'] || '') : ''}</div>
               <div class="info"><b>Réservé par :</b> ${esc([...new Set(g.lignes.map(p => p.par).filter(Boolean))].join(', ') || '—')} · <b>Édité le :</b> ${new Date().toLocaleString('fr-FR')}</div>
             </div>
-            <div style="text-align:center"><img src="${qrGlobal}" style="width:38mm;height:38mm"><div style="font-size:8pt;font-weight:bold">Scanner ici pour valider<br>TOUTE la sortie</div></div>
+            ${qrGlobal ? `<div style="text-align:center"><img src="${qrGlobal}" style="width:38mm;height:38mm"><div style="font-size:8pt;font-weight:bold">Scanner ici pour valider<br>TOUTE la sortie${aScanner.length < lignes.length ? '<br>(lignes restantes)' : ''}</div></div>` : `<div style="text-align:center;font-size:11pt;font-weight:bold;border:2px solid #2e7d32;color:#2e7d32;padding:6mm 4mm">✅ Bon entièrement<br>sorti du stock</div>`}
           </div>
           <table><tr><th>Emplacement</th><th>Article</th><th>Qté</th><th>QR ligne</th><th>✔</th></tr>
-          ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span class="code">${esc(x.a?.['Code EBP'] || '')}</span></td><td class="q">${fmtQte(x.p.qte)} ${esc(libUnite(x.a?.['Unite']))}</td><td class="qr"><img src="${qrDe('BS-' + x.p.mvt.id, 140)}"></td><td class="ok"></td></tr>`).join('')}
+          ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span class="code">${esc(x.a?.['Code EBP'] || '')}</span></td><td class="q">${fmtQte(x.p.qte)} ${esc(libUnite(x.a?.['Unite']))}</td><td class="qr">${x.p.statut === 'Sorti' ? `<span style="font-size:8pt;font-weight:bold;color:#2e7d32">✅ Sorti${x.p.sortiLe ? '<br>le ' + esc(x.p.sortiLe) : ''}${x.p.sortiPar ? '<br>' + esc(x.p.sortiPar) : ''}</span>` : `<img src="${qrDe('BS-' + x.p.mvt.id, 140)}">`}</td><td class="ok"></td></tr>`).join('')}
           </table>
           <div class="pied">La sortie du stock n'est enregistrée qu'au <b>scan</b> de ce bon (QR global ou QR de chaque ligne) avec l'appli. Bon sans effet s'il a été annulé.</div>
         </section>`;
@@ -16475,6 +16481,17 @@
         <a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>
         ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
       </div>` : ''}
+      ${(() => {
+        if (!_stockCharge || typeof prisesStockParLigne !== 'function') return '';
+        const ps = prisesStockParLigne();
+        const liste = (_commandesLignesCache[r.id] || []).flatMap(l => ps[l.id] || []);
+        if (!liste.length) return '';
+        const aScanner = liste.filter(x => x.statut === 'À sortir').length;
+        return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:#eef4ec;border:1px solid #cfe0ca;border-radius:10px;font-size:11px;color:var(--gris)">
+          <span style="flex:1">📦 ${liste.length} article(s) pris en stock${aScanner ? ` · <b style="color:#a5761f">${aScanner} à sortir (scan du bon)</b>` : ' · ✅ sortis'}</span>
+          <button onclick="imprimerBonsSortie(${r.id}, true)" style="flex:0 0 auto;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ ${aScanner ? 'Bon de sortie' : 'Réimprimer le bon'}</button>
+        </div>`;
+      })()}
       ${blocNotesDocumentsCommande(r, uid)}
       ${(estCommandeStockAtelier(r) && nbArticles) ? `<button onclick="imprimerEtiquettesRayonnageCommande(${r.id})" style="width:100%;margin-top:8px;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">🗄️ Étiquettes rayonnage des articles</button>` : ''}
       ${actionsHTML}
