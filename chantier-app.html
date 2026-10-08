@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V42';
+  const APP_VERSION = 'V45';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -16656,10 +16656,6 @@
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
       ${(pdfSansPrix && !peutVoirPrix) ? `<a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a>` : ''}
-      ${(fichierAR && peutVoirPrix) ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-        <a href="${fichierAR.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 Accusé de réception</a>
-        ${(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
-      </div>` : ''}
       ${(() => {
         if (!_stockCharge || typeof prisesStockParLigne !== 'function') return '';
         const ps = prisesStockParLigne();
@@ -16787,6 +16783,13 @@
     prive:  { docs: 'Documents prives', notes: 'Notes privees', titre: '🔒 Privé — Administrateur / Gestionnaire', fond: '#f6f0f8', bord: '#e0cfe8' }
   };
   function peutGererNotesDocs(type) { return type === 'public' || estProfilPrix(); }
+  function peutDeposerDoc(type) { return peutGererNotesDocs(type); }
+  // Un fichier dont le nom évoque un accusé de réception (AR, ARC, accusé…) part
+  // toujours en Privé, même s'il est déposé dans la colonne Partagé.
+  function estNomFichierAR(nom) {
+    const n = String(nom || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return /(^|[^a-z])(arc?|accuses?|acknowledg[a-z]*|confirmation de commande|order confirmation)([^a-z]|$)/.test(n);
+  }
 
   function blocNotesDocumentsCommande(r, uid) {
     const esc = echapperHtmlNote;
@@ -16805,11 +16808,18 @@
       return `<div style="background:${c.fond};border:1px solid ${c.bord};border-radius:10px;padding:8px 10px;min-width:0">
         <div style="font-size:11px;font-weight:800;color:var(--gris);margin-bottom:4px">${c.titre}</div>
         ${champsAbsents.length && gestion ? `<div style="font-size:10px;color:#c0392b;margin-bottom:4px">⚠️ Champ(s) à créer dans Baserow (table Commandes Fournisseurs) : ${champsAbsents.map(f => '« ' + f + ' »').join(', ')}</div>` : ''}
+        ${(() => { // Accusé de réception (ARC) validé : toujours dans la colonne Privé
+          const ar = type === 'prive' ? (r['Accusé de réception'] || [])[0] : null;
+          return ar ? `<div style="display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0">
+            <a href="${ar.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ARC — ${esc(ar.visible_name || ar.name)}</a>
+            ${gestion ? `<span onclick="supprimerAccuseReception(${r.id}, '${uid}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer l'ARC">✕</span>` : ''}
+          </div>` : '';
+        })()}
         ${docs.map((f, i) => `<div style="display:flex;align-items:center;gap:6px;margin-top:3px;min-width:0">
           <a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${esc(f.visible_name || f.name)}</a>
           ${gestion ? `<span onclick="supprimerDocumentCommande(${r.id}, ${i}, '${uid}', '${type}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
         </div>`).join('')}
-        ${notes.length ? `<div style="margin-top:4px">${notes.map(noteHtml).join('')}</div>` : (docs.length ? '' : '<div style="font-size:11px;color:#aaa;font-style:italic">Aucune note ni pièce jointe.</div>')}
+        ${notes.length ? `<div style="margin-top:4px">${notes.map(noteHtml).join('')}</div>` : ((docs.length || (type === 'prive' && (r['Accusé de réception'] || []).length)) ? '' : '<div style="font-size:11px;color:#aaa;font-style:italic">Aucune note ni pièce jointe.</div>')}
         ${champsAbsents.length ? '' : `
         <div style="display:flex;gap:6px;margin-top:6px">
           <textarea id="note-${type}-${uid}" rows="1" placeholder="Ajouter une note…" style="flex:1;min-width:0;resize:vertical;border:1px solid #ddd;border-radius:8px;padding:6px 8px;font-size:11px;font-family:inherit"></textarea>
@@ -16884,9 +16894,11 @@
   }
 
   async function ajouterDocumentCommande(id, input, uid, type = 'public') {
-    if (!input.files.length || !peutGererNotesDocs(type)) return;
+    if (!input.files.length || !peutDeposerDoc(type)) return;
+    let redirigeAR = false;
+    if (type === 'public' && estNomFichierAR(input.files[0].name)) { type = 'prive'; redirigeAR = true; } // ARC → toujours privé
     const c = CHAMPS_NOTES_DOCS[type];
-    const statutEl = document.getElementById(`doc-statut-${type}-${uid}`) || document.getElementById('doc-statut-' + uid);
+    const statutEl = document.getElementById(`doc-statut-${type}-${uid}`) || document.getElementById(`doc-statut-public-${uid}`) || document.getElementById('doc-statut-' + uid);
     if (statutEl) statutEl.textContent = '⏳ Envoi…';
     try {
       const fd = new FormData();
@@ -16909,6 +16921,9 @@
       });
       if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
       await rafraichirApresActionCommande();
+      if (type === 'prive' && (redirigeAR || !estProfilPrix())) {
+        alert(`🔒 « ${nomFichier} » a été enregistré en Privé${redirigeAR ? ' (accusé de réception)' : ''}.\nIl est visible uniquement par l'Administrateur et le Gestionnaire.`);
+      }
     } catch (e) {
       console.error('Erreur ajout document commande', e);
       alert('Erreur lors de l\'envoi du document : ' + e.message);
