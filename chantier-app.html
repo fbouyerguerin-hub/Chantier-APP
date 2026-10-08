@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V49';
+  const APP_VERSION = 'V50';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12956,6 +12956,29 @@
     renderStock();
   }
 
+  // Note technique d'un mouvement (« PRISE_STOCK;qteEBP=5.5;qte=5.5;statut=À sortir;… »)
+  // traduite en phrase lisible pour le journal des mouvements.
+  function noteMouvementLisible(m, a) {
+    const brut = String(m['Note'] || '');
+    const u = (a && a['Unite']) || '';
+    const Q = v => fmtQteUnite(Number(String(v).replace(',', '.')) || 0, u);
+    if (brut.startsWith('PRISE_STOCK') || brut.startsWith('ECARTE')) {
+      const n = lireNotePrise(brut);
+      if (brut.startsWith('ECARTE')) {
+        return n.statut === 'Rétabli' ? `Proposition de prise en stock rétablie${n.retabli_par ? ' par ' + n.retabli_par : ''}`
+          : `Prise en stock écartée (article commandé pour le chantier)${n.par ? ' par ' + n.par : ''}`;
+      }
+      const morceaux = [];
+      if (n.statut === 'Annulé') morceaux.push(`❌ Réservation annulée${n.annule_par ? ' par ' + n.annule_par : ''}${n.annule_le ? ' le ' + n.annule_le : ''}`);
+      else if (n.statut === 'Sorti' || (Number(m['Quantite']) || 0) < 0) morceaux.push(`✅ Sorti du stock${n.sorti_par ? ' par ' + n.sorti_par : ''}${n.sorti_le ? ' le ' + n.sorti_le : ''}`);
+      else morceaux.push(`📦 ${n.qte ? Q(n.qte) + ' ' : ''}réservé(s) pour le chantier — à sortir (scan du bon de sortie)`);
+      if (n.qteEBP && n.qte && Number(n.qteEBP) !== Number(n.qte)) morceaux.push(`commande EBP : ${Q(n.qteEBP)}`);
+      if (n.par) morceaux.push(`pris en stock par ${n.par}${n.le ? ' le ' + n.le : ''}`);
+      return morceaux.join(' · ');
+    }
+    return brut;
+  }
+
   function renderDetailArticle(a) {
     const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id)
       .sort((x, y) => (y['Date'] || '').localeCompare(x['Date'] || '') || (y.id - x.id)).slice(0, 15);
@@ -12964,11 +12987,12 @@
       const q = Number(m['Quantite']) || 0;
       const type = extraireValeurChamp(m['Type'], '');
       const d = m['Date'] ? new Date(m['Date'] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
-      const detail = [m['Chantier'], m['Commande'], m['Par'], m['Note']].filter(Boolean).map(echapperHtmlNote).join(' · ');
+      const estPrise = /^(PRISE_STOCK|ECARTE)/.test(String(m['Note'] || ''));
+      const detail = [m['Chantier'], m['Commande'], estPrise ? '' : m['Par'], noteMouvementLisible(m, a)].filter(Boolean).map(echapperHtmlNote).join(' · ');
       return `<tr>
         <td style="padding:3px 4px;font-size:10px;color:#999;white-space:nowrap;border-bottom:1px dotted #eee">${d}</td>
         <td style="padding:3px 4px;font-size:11px;font-weight:700;color:${couleurs[type] || '#555'};border-bottom:1px dotted #eee">${type}</td>
-        <td style="padding:3px 4px;font-size:11px;text-align:right;white-space:nowrap;border-bottom:1px dotted #eee">${q > 0 ? '+' : ''}${fmtQte(q)}</td>
+        <td style="padding:3px 4px;font-size:11px;text-align:right;white-space:nowrap;border-bottom:1px dotted #eee">${type === 'Réservation' && q === 0 ? '<span style="color:#a5761f" title="Réservé, pas encore sorti du stock">—</span>' : (q > 0 ? '+' : '') + fmtQte(q)}</td>
         <td style="padding:3px 4px;font-size:10px;color:#777;border-bottom:1px dotted #eee">${detail}</td>
       </tr>`;
     }).join('');
