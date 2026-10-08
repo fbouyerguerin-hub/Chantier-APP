@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V39';
+  const APP_VERSION = 'V40';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1015,6 +1015,7 @@
     connectedViewId = viewId;
     connectedDroit = droit || '';
     connectedAccesCharge = !!accesChargeSupp;
+    activerGardeSortie();
     filtrerChantiersSelonDroit();
     // Chercher dans les données déjà chargées (case-insensitive)
     const collabData = tableData['Collaborateur'] || [];
@@ -2459,7 +2460,46 @@
     if (connectedCollab) loadFeuille();
   }
 
+  // ── GARDE DE SORTIE (mobile) ──
+  // Sur téléphone / tablette, le bouton « Retour » du système ferme l'appli sans passer
+  // par 🚪 Quitter. Une entrée d'historique « tampon » intercepte ce retour et affiche
+  // une alerte : Rester (par défaut) ou Quitter (déconnexion propre puis fermeture).
+  // Le bouton Accueil / changement d'appli ne peut pas être intercepté par un navigateur.
+  let _gardeSortieActive = false, _gardeSortieInit = false;
+  function estAppareilMobile() {
+    try { return window.matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); } catch (e) { return false; }
+  }
+  function activerGardeSortie() {
+    if (!estAppareilMobile()) return;
+    _gardeSortieActive = true;
+    try { if (!history.state || !history.state.gardeSortie) history.pushState({ gardeSortie: true }, '', location.href); } catch (e) {}
+    if (_gardeSortieInit) return;
+    _gardeSortieInit = true;
+    window.addEventListener('popstate', () => {
+      if (!_gardeSortieActive || !connectedCollab) return;
+      try { history.pushState({ gardeSortie: true }, '', location.href); } catch (e) {} // on reste dans l'appli
+      afficherAlerteSortie();
+    });
+  }
+  function afficherAlerteSortie() {
+    if (document.getElementById('modal-garde-sortie')) return;
+    const m = document.createElement('div');
+    m.id = 'modal-garde-sortie';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px';
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:340px;width:100%;padding:20px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.3)">
+        <div style="font-size:34px">⚠️</div>
+        <div style="font-size:16px;font-weight:800;color:var(--gris);margin:6px 0">Vous allez quitter l'application</div>
+        <div style="font-size:13px;color:#666;line-height:1.4;margin-bottom:16px">Pour sortir, utilisez le bouton <b>🚪 Quitter</b> en bas de l'écran.<br>Vérifiez que vos heures sont bien enregistrées.</div>
+        <button id="garde-rester" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:8px">Rester dans l'application</button>
+        <button id="garde-quitter" style="width:100%;background:#fff;color:#c0392b;border:1.5px solid #c0392b;border-radius:10px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">🚪 Quitter</button>
+      </div>`;
+    document.body.appendChild(m);
+    m.querySelector('#garde-rester').onclick = () => m.remove();
+    m.querySelector('#garde-quitter').onclick = () => { m.remove(); seDeconnecter(); };
+  }
+
   function seDeconnecter() {
+    _gardeSortieActive = false; // sortie volontaire : plus d'alerte
     const wValidation = document.getElementById('widget-validation-heures');
     if (wValidation) wValidation.style.display = 'none';
     const mValidation = document.getElementById('modal-validation-heures');
