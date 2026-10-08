@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V24';
+  const APP_VERSION = 'V27';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1058,6 +1058,8 @@
     if (tabCommandesChantier) tabCommandesChantier.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
     { const tabCommandesArticles = document.getElementById('tab-commandes-articles');
       if (tabCommandesArticles) tabCommandesArticles.style.display = 'block'; } // liste des articles : tous (prix réservés)
+    { const tabDispo = document.getElementById('tab-commandes-dispo');
+      if (tabDispo) tabDispo.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none'; } // besoins nets
     chargerMessage();
     updateBadgeMessages();
     demarrerVeilleMessages();
@@ -11560,6 +11562,7 @@
       renderCommandesParChantier();
       renderCommandesReceptionnees();
       renderCommandesRetour();
+      if (peutGererStock()) { if (_stockCharge) renderCommandesDispoStock(); else chargerStock().then(() => renderCommandesDispoStock()).catch(() => {}); }
       const rechercheGlobaleEl = document.getElementById('commandes-recherche-globale');
       if (rechercheGlobaleEl && rechercheGlobaleEl.value.trim()) rechercherCommandesGlobal(rechercheGlobaleEl.value);
     } catch (e) {
@@ -11590,6 +11593,9 @@
     document.getElementById('commandes-vue-articles').style.display = vue === 'articles' ? 'block' : 'none';
     document.getElementById('commandes-vue-retour').style.display = vue === 'retour' ? 'block' : 'none';
     document.getElementById('commandes-vue-stock').style.display = vue === 'stock' ? 'block' : 'none';
+    document.getElementById('commandes-vue-dispo').style.display = vue === 'dispo' ? 'block' : 'none';
+    document.getElementById('tab-commandes-dispo').style.background = vue === 'dispo' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-dispo').style.color = vue === 'dispo' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-stock').style.background = vue === 'stock' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-stock').style.color = vue === 'stock' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-liste').style.background = vue === 'liste' ? 'var(--vert)' : 'none';
@@ -11612,6 +11618,7 @@
     if (vue === 'articles') { renderCommandesArticles(); verifierVersionCatalogue(); }
     if (vue === 'retour') renderCommandesRetour();
     if (vue === 'stock') ouvrirVueStock();
+    if (vue === 'dispo') renderCommandesDispoStock();
   }
 
   // ── IMPRESSION DES COMMANDES ──
@@ -12589,6 +12596,10 @@
   // Badge « en stock » sur une ligne de commande pas encore reçue : vérifier
   // l'atelier avant d'acheter (surtout le matériel revenu des chantiers).
   function badgeStockLigne(l, statutCommande) {
+    if (_stockCharge && peutGererStock()) {
+      const e = etatPriseLigne(l);
+      if (e) return ` <span title="Pris en stock atelier${e.aReduire ? ' — quantité à réduire dans EBP' : ''}" style="display:inline-block;padding:1px 6px;border-radius:8px;background:${e.aReduire ? '#fdecea' : '#e8f0e7'};color:${e.aReduire ? '#c0392b' : 'var(--vert)'};font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">🔒 ${fmtQte(e.pris)} pris en stock${e.aReduire ? ` · ⚠️ EBP ${fmtQte(e.actuel)} → ${fmtQte(e.attendu)}` : ''}</span>`;
+    }
     if (!_stockCharge || !['En attente AR', 'En attente réception'].includes(statutCommande)) return '';
     const a = trouverArticlePourLigne(l);
     const q = a ? (_stockParArticle[a.id] || 0) : 0;
@@ -15240,6 +15251,249 @@
     return prixArticle(_articlesCache.find(x => x.id === m.articleId));
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  // 🔁 DISPONIBLE EN STOCK — calcul des besoins nets (Administrateur / Gestionnaire)
+  // ════════════════════════════════════════════════════════════════════
+  // Chaque ligne d'une commande « En attente AR » ou « En attente réception » est
+  // rapprochée du stock atelier (code EBP, réf. fournisseur, désignation). Si l'article
+  // est disponible, le gestionnaire peut « Prendre en stock » : une SORTIE de stock est
+  // enregistrée tout de suite pour le chantier (le stock disponible baisse : un même
+  // article n'est jamais promis deux fois, et son coût est imputé au chantier).
+  // Mouvement : Libelle « Prise en stock <n° commande> », Ligne commande = id de la
+  // ligne, Note « PRISE_STOCK;qteEBP=<qté commandée au moment>;statut=À préparer ».
+  // L'API EBP ne permet pas de modifier les commandes (diagnostic /ebp-droits du
+  // 08/10/2026) : la ligne reste « ⚠️ À réduire dans EBP » tant que la quantité EBP
+  // (synchronisée toutes les 30 min) n'a pas baissé d'autant ; l'alerte disparaît seule.
+  const PREFIXE_PRISE_STOCK = 'Prise en stock';
+
+  function lireNotePrise(note) {
+    const o = {};
+    String(note || '').split(';').forEach(p => { const i = p.indexOf('='); if (i > 0) o[p.slice(0, i).trim()] = p.slice(i + 1).trim(); });
+    return o;
+  }
+  function ecrireNotePrise(o) {
+    return ['PRISE_STOCK', ...Object.entries(o).filter(([k]) => k !== 'PRISE_STOCK').map(([k, v]) => `${k}=${v}`)].join(';');
+  }
+  // Prises en stock actives (quantité non nulle), indexées par id de ligne de commande
+  function prisesStockParLigne() {
+    const res = {};
+    (_mouvementsCache || []).forEach(m => {
+      if (!String(m['Libelle'] || '').startsWith(PREFIXE_PRISE_STOCK)) return;
+      const q = -(Number(m['Quantite']) || 0);
+      if (q <= 0) return;
+      const lid = Number(m['Ligne commande']) || 0;
+      if (!lid) return;
+      const n = lireNotePrise(m['Note']);
+      (res[lid] = res[lid] || []).push({ mvt: m, qte: q, qteEBP: Number(n.qteEBP) || 0, statut: n.statut || 'À préparer', par: n.par || m['Par'] || '' });
+    });
+    return res;
+  }
+  // État d'une ligne prise en stock : quantité prise, quantité EBP attendue, à réduire ?
+  function etatPriseLigne(l, prises) {
+    const p = (prises || prisesStockParLigne())[l.id];
+    if (!p || !p.length) return null;
+    const pris = p.reduce((t, x) => t + x.qte, 0);
+    const qteInit = Math.max(...p.map(x => x.qteEBP));
+    const attendu = Math.max(0, Math.round((qteInit - pris) * 1000) / 1000);
+    const actuel = Number(l['Quantite']) || 0;
+    return { prises: p, pris, qteInit, attendu, actuel, aReduire: actuel > attendu + 0.0005,
+             aPreparer: p.some(x => x.statut === 'À préparer') };
+  }
+  // Commande dont une ligne prise en stock n'est pas encore réduite dans EBP
+  function lignesAReduireCommande(commandeId) {
+    const prises = prisesStockParLigne();
+    return (_commandesLignesCache[commandeId] || []).map(l => ({ l, e: etatPriseLigne(l, prises) })).filter(x => x.e && x.e.aReduire);
+  }
+
+  function statutCommandeDispo(r) {
+    return estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
+  }
+
+  async function renderCommandesDispoStock() {
+    const listeEl = document.getElementById('commandes-dispo-liste');
+    const resumeEl = document.getElementById('commandes-dispo-resume');
+    if (!listeEl) return;
+    if (!peutGererStock()) { listeEl.innerHTML = '<div class="feuille-empty">Réservé aux profils Administrateur et Gestionnaire.</div>'; return; }
+    if (!stockTablesConfigurees()) { listeEl.innerHTML = '<div class="feuille-empty">Module stock non configuré.</div>'; return; }
+    if (!_stockCharge) {
+      listeEl.innerHTML = '<div class="feuille-loading">⏳ Chargement du stock…</div>';
+      try { await chargerStock(true); } catch (e) { listeEl.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement du stock.</div>'; return; }
+    }
+    const esc = echapperHtmlNote;
+    const recherche = normTexte(document.getElementById('commandes-dispo-recherche')?.value || '');
+    const mots = recherche.split(' ').filter(Boolean);
+    const prises = prisesStockParLigne();
+    const blocs = [];
+    let nbDispo = 0, nbAReduire = 0, nbAPreparer = 0;
+
+    const commandes = (_commandesCache || [])
+      // Propositions : commandes « En attente AR » et « En attente réception ». Après l'AR,
+      // la réduction est à négocier avec le fournisseur (signalé sur la carte).
+      // Les prises déjà faites restent suivies quel que soit le statut.
+      .filter(r => ['En attente AR', 'En attente réception'].includes(statutCommandeDispo(r)) || (_commandesLignesCache[r.id] || []).some(l => prises[l.id]))
+      .filter(r => !estCommandeStockAtelier(r))
+      .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+
+    for (const r of commandes) {
+      const chantier = (r['Chantier'] || [])[0]?.value || '';
+      if (mots.length) {
+        const t = normTexte([r['Fournisseur'], r['Numero commande'], chantier, r['Numero devis'], ...(_commandesLignesCache[r.id] || []).map(l => l['Description'])].join(' '));
+        if (!mots.every(m => t.includes(m))) continue;
+      }
+      const statut = statutCommandeDispo(r);
+      const ouverte = ['En attente AR', 'En attente réception'].includes(statut);
+      const apresAR = statut === 'En attente réception';
+      const lignesHtml = [];
+      for (const l of (_commandesLignesCache[r.id] || [])) {
+        if (estLigneFrais(l)) continue;
+        const qCmd = Number(l['Quantite']) || 0;
+        const unite = uniteApresQte(l['Unite']);
+        const etat = etatPriseLigne(l, prises);
+        const a = trouverArticlePourLigne(l);
+        if (etat) {
+          if (etat.aReduire) nbAReduire++;
+          if (etat.aPreparer) nbAPreparer++;
+          lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
+            <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px">🔒 <b>Pris en stock : ${fmtQte(etat.pris)} ${esc(unite)}</b> ${etat.prises.map(x => `<span style="color:#999">(${esc(x.par)} · ${x.statut === 'Préparé' ? '✅ préparé' : '📦 à préparer'})</span>`).join(' ')}${a && libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
+            ${etat.aReduire
+              ? `<div style="margin-top:4px;font-size:11px;font-weight:800;color:#c0392b;background:#fff6f5;border:1px solid #e8a39b;border-radius:6px;padding:4px 8px;display:inline-block">⚠️ À réduire dans EBP : quantité ${fmtQte(etat.actuel)} → ${fmtQte(etat.attendu)} ${esc(unite)}${etat.attendu === 0 ? ' (supprimer la ligne)' : ''}</div>`
+              : `<div style="margin-top:4px;font-size:11px;font-weight:700;color:var(--vert)">✅ Commande EBP corrigée</div>`}
+            <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+              ${etat.prises.filter(x => x.statut === 'À préparer').map(x => `<button onclick="marquerPriseStock(${x.mvt.id}, 'Préparé')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">✅ Préparé (${fmtQte(x.qte)})</button>`).join('')}
+              ${etat.prises.map(x => `<button onclick="annulerPriseStock(${x.mvt.id})" style="background:#fff;color:#c0392b;border:1px solid #e8a39b;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">↩️ Annuler (${fmtQte(x.qte)})</button>`).join('')}
+            </div>
+          </div>`);
+          continue;
+        }
+        if (!ouverte || !a || qCmd <= 0) continue;
+        const dispo = _stockParArticle[a.id] || 0;
+        if (dispo <= 0) continue;
+        nbDispo++;
+        const re = reemploiDisponible(a);
+        const propose = Math.min(qCmd, dispo);
+        const idIn = `dispo-qte-${l.id}`;
+        lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+          <div style="font-size:11px;color:#555;margin-top:2px">Commandé : <b>${fmtQte(qCmd)} ${esc(unite)}</b> · En stock : <b style="color:var(--vert)">${fmtQte(dispo)} ${esc(uniteApresQte(a['Unite'] || l['Unite']))}</b>${re ? ` <span style="background:#fde8c3;color:#7c5200;border-radius:6px;padding:0 5px;font-weight:700">dont ${fmtQte(re.qte)} revenu(s) de chantier</span>` : ''}${libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <input id="${idIn}" type="number" min="0" step="any" value="${propose}" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px" />
+            <span style="font-size:11px;color:#888">${esc(unite)}</span>
+            <button onclick="prendreEnStock(${r.id}, ${l.id}, ${a.id}, '${idIn}')" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">📦 Prendre en stock</button>
+          </div>
+        </div>`);
+      }
+      if (!lignesHtml.length) continue;
+      const retardAR = typeof joursAttenteAR === 'function' ? joursAttenteAR(r) : 0;
+      blocs.push(`<div style="background:#fff;border:1px solid #eee;border-radius:10px;padding:12px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:700;color:var(--gris)">
+          <span>${esc(r['Fournisseur'] || '')} <span style="font-weight:400;color:#aaa">· ${esc(r['Numero commande'] || '')}</span></span>
+          <span style="font-weight:600;font-size:10px;color:${couleurStatutCommande(statut)}">${esc(statut)}</span>
+        </div>
+        <div style="font-size:11px;color:#888;margin:2px 0 4px">🏗 ${esc(chantier || '—')} · commandé le ${r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—'}${retardAR ? ` · <span style="color:#c0392b;font-weight:700">AR attendu depuis ${retardAR} j</span>` : ''}</div>
+        ${apresAR && lignesHtml.some(h => h.includes('Prendre en stock')) ? `<div style="font-size:11px;color:#8a5a00;background:#fff8e6;border:1px solid #f0d9a8;border-radius:6px;padding:4px 8px;margin-bottom:4px">⚠️ AR déjà validé : la réduction est à <b>négocier avec le fournisseur</b> (commande peut-être déjà préparée ou expédiée).</div>` : ''}
+        ${lignesHtml.join('')}
+      </div>`);
+    }
+
+    if (resumeEl) resumeEl.innerHTML = [
+      `💡 ${nbDispo} ligne(s) disponible(s) en stock`,
+      nbAPreparer ? `📦 ${nbAPreparer} à préparer` : '',
+      nbAReduire ? `<span style="color:#c0392b;font-weight:800">⚠️ ${nbAReduire} à réduire dans EBP</span>` : ''
+    ].filter(Boolean).join(' · ');
+    const tab = document.getElementById('tab-commandes-dispo');
+    if (tab) tab.textContent = `🔁 Dispo. stock${nbDispo + nbAReduire ? ` (${nbDispo + nbAReduire})` : ''}`;
+    listeEl.innerHTML = blocs.join('') || '<div style="color:#aaa;font-size:12px;text-align:center;padding:14px">Aucun article des commandes en cours n\'est disponible au stock atelier.</div>';
+  }
+
+  async function prendreEnStock(commandeId, ligneId, articleId, inputId) {
+    if (!peutGererStock()) return;
+    const r = (_commandesCache || []).find(c => c.id === commandeId);
+    const l = (_commandesLignesCache[commandeId] || []).find(x => x.id === ligneId);
+    const a = _articlesCache.find(x => x.id === articleId);
+    if (!r || !l || !a) { alert('Commande ou article introuvable : rechargez la page.'); return; }
+    const q = Math.round((parseFloat(String(document.getElementById(inputId)?.value || '').replace(',', '.')) || 0) * 1000) / 1000;
+    const dispo = _stockParArticle[a.id] || 0;
+    const qCmd = Number(l['Quantite']) || 0;
+    if (q <= 0) { alert('Indiquez une quantité.'); return; }
+    if (q > dispo + 0.0005) { alert(`Stock insuffisant : ${fmtQte(dispo)} disponible(s).`); return; }
+    if (q > qCmd + 0.0005) { alert(`La quantité dépasse la quantité commandée (${fmtQte(qCmd)}).`); return; }
+    const num = r['Numero commande'] || '';
+    const reste = Math.round((qCmd - q) * 1000) / 1000;
+    const avertAR = statutCommandeDispo(r) === 'En attente AR' ? '' : '⚠️ L\'AR de cette commande est déjà validé : contactez le fournisseur AVANT, pour vérifier qu\'il peut encore réduire la commande.\n\n';
+    if (!confirm(avertAR + `Prendre ${fmtQte(q)} « ${l['Description'] || ''} » dans le stock atelier pour ${(r['Chantier'] || [])[0]?.value || 'le chantier'} ?\n\nÀ faire ensuite dans EBP : commande ${num}, passer cette ligne de ${fmtQte(qCmd)} à ${fmtQte(reste)}${reste === 0 ? ' (supprimer la ligne)' : ''}, et prévenir le fournisseur si la commande est déjà envoyée.`)) return;
+    try {
+      await creerMouvementsStock([{
+        articleId: a.id, type: 'Sortie', quantite: -q,
+        chantier: (r['Chantier'] || [])[0]?.value || '', commande: num, ligneId: l.id,
+        libelle: `${PREFIXE_PRISE_STOCK} ${num}`.trim(),
+        note: ecrireNotePrise({ qteEBP: qCmd, statut: 'À préparer', par: connectedCollab || '' })
+      }]);
+      renderCommandesDispoStock();
+      if (typeof renderStock === 'function') try { renderStock(); } catch (e) {}
+    } catch (e) {
+      console.error('Prise en stock', e);
+      alert('Erreur lors de la prise en stock : ' + e.message);
+    }
+  }
+
+  async function majMouvementPrise(mvtId, champs) {
+    const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/${mvtId}/?user_field_names=true`, {
+      method: 'PATCH', headers: HEADERS, body: JSON.stringify(champs)
+    });
+    if (!rPatch.ok) throw new Error('Baserow a refusé la mise à jour (' + rPatch.status + ') : ' + (await rPatch.text()));
+    const maj = await rPatch.json();
+    const i = _mouvementsCache.findIndex(m => m.id === mvtId);
+    if (i >= 0) _mouvementsCache[i] = { ..._mouvementsCache[i], ...maj };
+    recalculerStock();
+  }
+
+  async function marquerPriseStock(mvtId, statut) {
+    if (!peutGererStock()) return;
+    const m = _mouvementsCache.find(x => x.id === mvtId); if (!m) return;
+    try {
+      await majMouvementPrise(mvtId, { 'Note': ecrireNotePrise({ ...lireNotePrise(m['Note']), statut, prepare_par: connectedCollab || '', prepare_le: new Date().toLocaleDateString('fr-FR') }) });
+      renderCommandesDispoStock();
+    } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  async function annulerPriseStock(mvtId) {
+    if (!peutGererStock()) return;
+    const m = _mouvementsCache.find(x => x.id === mvtId); if (!m) return;
+    const q = -(Number(m['Quantite']) || 0);
+    if (!confirm(`Annuler la prise en stock de ${fmtQte(q)} ? Le stock est restitué.\n\nSi la commande a déjà été réduite dans EBP, pensez à remettre la quantité.`)) return;
+    try {
+      const champs = { 'Quantite': 0, 'Note': ecrireNotePrise({ ...lireNotePrise(m['Note']), statut: 'Annulé', annule_par: connectedCollab || '', annule_le: new Date().toLocaleDateString('fr-FR') }) };
+      if (m['Valeur HT'] !== undefined) champs['Valeur HT'] = 0;
+      await majMouvementPrise(mvtId, champs);
+      renderCommandesDispoStock();
+      if (typeof renderStock === 'function') try { renderStock(); } catch (e) {}
+    } catch (e) { alert('Erreur : ' + e.message); }
+  }
+
+  // Liste de préparation imprimable (prises « à préparer »), triée par emplacement
+  function imprimerListePreparation() {
+    const prises = prisesStockParLigne();
+    const lignes = [];
+    Object.entries(prises).forEach(([lid, ps]) => ps.filter(p => p.statut === 'À préparer').forEach(p => {
+      const a = _articlesCache.find(x => x.id === (p.mvt['Article'] || [])[0]?.id);
+      lignes.push({ empl: a ? libelleEmplacement(a) : '', art: a ? (a['Designation'] || '') : '', code: a ? (a['Code EBP'] || '') : '',
+                    qte: p.qte, unite: libUnite(a?.['Unite']), chantier: p.mvt['Chantier'] || '', cmd: p.mvt['Commande'] || '', par: p.par });
+    }));
+    if (!lignes.length) { alert('Aucune prise en stock à préparer.'); return; }
+    lignes.sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz') || x.chantier.localeCompare(y.chantier));
+    const esc = echapperHtmlNote;
+    const w = window.open('', '_blank');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Liste de préparation</title>
+      <style>body{font-family:Arial,sans-serif;margin:12mm;font-size:11pt}h1{font-size:15pt;margin:0 0 4mm}table{width:100%;border-collapse:collapse}
+      th,td{border:1px solid #999;padding:5px 6px;text-align:left;vertical-align:top}th{background:#eee;font-size:9pt}td.q{text-align:right;font-weight:bold;white-space:nowrap}td.ok{width:12mm}</style></head><body>
+      <h1>📦 Liste de préparation — prises en stock</h1><div style="font-size:9pt;color:#666;margin-bottom:4mm">Éditée le ${new Date().toLocaleString('fr-FR')} par ${esc(connectedCollab || '')}</div>
+      <table><tr><th>Emplacement</th><th>Article</th><th>Qté</th><th>Chantier</th><th>Commande</th><th>✔</th></tr>
+      ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td>${esc(x.art)}<br><span style="font-size:8pt;color:#777">${esc(x.code)}</span></td><td class="q">${fmtQte(x.qte)} ${esc(x.unite)}</td><td>${esc(x.chantier)}</td><td>${esc(x.cmd)}</td><td class="ok"></td></tr>`).join('')}
+      </table><script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+    w.document.close();
+  }
+
   async function creerMouvementsStock(mouvements) {
     // mouvements : [{ articleId, type, quantite, chantier, commande, ligneId, note, libelle }]
     const aujourdhui = dateYMD(new Date());
@@ -16401,6 +16655,8 @@
       alert('⚠️ Joignez l\'accusé de réception du fournisseur.\nS\'il n\'y en a pas, cochez « Pas d\'AR fourni par le fournisseur » et indiquez pourquoi.');
       return;
     }
+    const aReduire = (typeof lignesAReduireCommande === 'function' && _stockCharge) ? lignesAReduireCommande(id) : [];
+    if (aReduire.length && !confirm(`⚠️ Des articles de cette commande ont été pris en stock, mais la commande EBP n'a pas encore été réduite :\n\n${aReduire.map(x => `• ${x.l['Description'] || ''} : ${fmtQte(x.e.actuel)} → ${fmtQte(x.e.attendu)}`).join('\n')}\n\nVérifiez que l'AR du fournisseur tient compte de cette réduction, sinon vous recevrez en double.\n\nValider l'AR quand même ?`)) return;
     if (!arExistant && !fichierJoint && sansAR && motifSansAR.length < 5) {
       alert('⚠️ Indiquez pourquoi il n\'y a pas d\'AR (ex. confirmé par téléphone le…).');
       document.getElementById('ar-sans-motif-' + uid)?.focus();
@@ -21654,6 +21910,7 @@
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
+      <button id="tab-commandes-dispo" onclick="switchCommandesVue('dispo')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔁 Dispo. stock</button>
       <button id="tab-commandes-stock" onclick="switchCommandesVue('stock')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📚 Stock atelier</button>
     </div>
   </div>
@@ -21721,6 +21978,18 @@
       <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
+  <!-- Vue Disponible en stock : besoins nets (Administrateur / Gestionnaire) -->
+  <div id="commandes-vue-dispo" style="display:none">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+        <div id="commandes-dispo-resume" style="font-size:12px;color:var(--gris-moyen)"></div>
+        <button onclick="imprimerListePreparation()" style="flex:0 0 auto;background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🖨️ Liste de préparation</button>
+      </div>
+      <input type="text" id="commandes-dispo-recherche" placeholder="🔍 Rechercher (chantier, fournisseur, n° commande, article)…" oninput="renderCommandesDispoStock()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;background:#fff" />
+    </div>
+    <div id="commandes-dispo-liste" style="padding:8px 16px 80px"></div>
   </div>
 
   <!-- Vue Stock atelier : bibliothèque d'articles (EBP), quantités, emplacements -->
