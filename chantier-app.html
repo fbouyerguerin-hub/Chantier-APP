@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V41';
+  const APP_VERSION = 'V42';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12637,20 +12637,19 @@
     const m = a ? a['Stock mini'] : null;
     return (m === null || m === '' || m === undefined || isNaN(Number(m))) ? null : Number(m);
   }
-  // Le « Stock mini » s'exprime en PIÈCES pour un article conditionné (unité EBP « 100 »,
-  // « 1000 »…) : le stock (en conditionnements) est multiplié par l'unité avant comparaison.
-  // Pour les autres unités (u, m, kg…), mini et stock sont dans la même unité.
+  // Le « Stock mini » s'exprime dans la MÊME unité que le stock et les commandes : pour un
+  // article conditionné (unité EBP « 100 »), mini 1 = 1 × 100 pcs. Affichage « N × 100 pcs ».
   function facteurConditionnement(a) {
     const u = String((a && a['Unite']) ?? '').trim();
     return estUniteConditionnement(u) ? (Number(u.replace(',', '.')) || 1) : 1;
   }
-  function stockPourMini(a) { return (_stockParArticle[a.id] || 0) * facteurConditionnement(a); }
-  function uniteMini(a) { return facteurConditionnement(a) !== 1 ? 'pcs' : libUnite((a && a['Unite']) || 'u'); }
+  function stockPourMini(a) { return _stockParArticle[a.id] || 0; }
+  function uniteMini(a) { return uniteApresQte((a && a['Unite']) || 'u'); }
   function estSousMini(a) { const m = miniArticle(a); return m !== null && stockPourMini(a) <= m; }
   function articlesSousMini() {
     return (_articlesCache || []).filter(estSousMini)
       .map(a => {
-        const f = facteurConditionnement(a);
+        const f = 1; // mini et stock dans la même unité (conditionnements)
         const qteCond = _stockParArticle[a.id] || 0, qte = qteCond * f, mini = miniArticle(a);
         let enCmd = []; try { enCmd = enCommandeArticle(a['Code EBP'], a); } catch (e) {}
         const attenduCond = totalEnCommande(enCmd), attendu = attenduCond * f;
@@ -13498,7 +13497,7 @@
         </div>`
         + blocEnCommande + blocEnCmdChantiers
         + champ('Emplacement', libelleEmplacement(a) ? '📍 ' + esc(libelleEmplacement(a)) : '<span style="color:#c0392b">non renseigné</span>')
-        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteMini(a)) + (facteurConditionnement(a) !== 1 ? ` <span style="color:#999;font-weight:400">(stock : ${fmtQte(qte * facteurConditionnement(a))} pcs)</span>` : '') : '—')
+        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteMini(a)) : '—')
         + (re ? champ('Réemploi', `<span style="color:#7c5200">↩️ ${fmtQte(re.qte)} revenu(s) de ${esc(re.chantiers.slice(0, 2).join(', '))}</span>`) : '')
         + (!isNaN(px) && !isNaN(py) ? `<button onclick="voirArticleSurPlan(${a.id})" style="margin-top:6px;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🗺️ Voir sur le plan</button>` : '');
       const b = (label, action, fond = 'var(--beige-clair)', coul = 'var(--gris)') => `<button onclick="${action}" style="flex:1 1 30%;background:${fond};color:${coul};border:none;border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer">${label}</button>`;
@@ -16011,7 +16010,7 @@
     document.getElementById('art-edit-info-ebp').style.display = deEBP ? 'block' : 'none';
     document.getElementById('art-edit-zone').value = a?.['Zone'] || '';
     document.getElementById('art-edit-rayon').value = a?.['Rayon'] || '';
-    { const u = document.getElementById('art-edit-mini-unite'); if (u) u.textContent = a ? '— en ' + (facteurConditionnement(a) !== 1 ? 'pièces (conditionnement de ' + facteurConditionnement(a) + ')' : uniteMini(a)) : ''; }
+    { const u = document.getElementById('art-edit-mini-unite'); if (u) u.textContent = a ? (facteurConditionnement(a) !== 1 ? '— en conditionnements de ' + facteurConditionnement(a) + ' pcs (comme les commandes : 1 = 1 × ' + facteurConditionnement(a) + ' pcs)' : '— en ' + libUnite(a['Unite'] || 'u')) : ''; }
     document.getElementById('art-edit-mini').value = (a && a['Stock mini'] !== null && a['Stock mini'] !== undefined && a['Stock mini'] !== '') ? fmtQte(a['Stock mini']) : '';
     const px = a ? parseFloat(a['Plan_X']) : NaN, py = a ? parseFloat(a['Plan_Y']) : NaN;
     document.getElementById('reception-plan-x-art').value = isNaN(px) ? '' : px;
