@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V36';
+  const APP_VERSION = 'V37';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -3322,8 +3322,8 @@
   // Date d'entrée d'un collaborateur (table Collaborateurs, champ « Date d'entrée ») :
   // pour un nouveau profil, le calcul RTT / heures sup / manque sous 35h commence à sa
   // date d'entrée. Les semaines d'avant ne comptent pas ; dans la semaine d'entrée, les
-  // jours ouvrés d'avant l'arrivée sont justifiés à 7h (comme une absence approuvée) :
-  // pas de manque sur ces jours, et le seuil des 35h est ramené aux jours présents.
+  // jours ouvrés d'avant l'arrivée sont exclus : ils ne comptent pas comme travaillés, ne
+  // créent pas de manque, et les paliers 35/36/40/42,5h sont proratisés aux jours présents.
   const _dateEntreeParCollab = new Map();
   const CHAMPS_DATE_ENTREE = ["Date d'entrée", "Date d'entree", 'Date entrée', 'Date entree', "Date d'embauche", 'Date de démarrage', 'Date de demarrage'];
   function memoriserDateEntree(row) {
@@ -3461,7 +3461,13 @@
       const horsPeriode = lundiPivotStr !== null && lundiStr < lundiPivotStr;
       const semaineBloquee = plages.some(p => p.debut <= vendrediStr && p.fin >= lundiStr);
       const heuresFormation = heuresFormationSemaine(lundiStr);
-      const totalHeuresTravaillees = (totauxSemaine[lundiStr] || 0) + heuresFormation + heuresAvantEntree(collabId, lundiStr);
+      // Semaine d'entrée : les jours d'avant l'arrivée sont EXCLUS (pas comptés comme travaillés).
+      // Les paliers 35 / 36 / 40 / 42,5h sont proratisés aux jours sous contrat
+      // (ex. entrée le jeudi : 2 jours sur 5 → paliers 14 / 14,4 / 16 / 17h).
+      const prorataEntree = Math.max(0, 1 - heuresAvantEntree(collabId, lundiStr) / HEURES_BASE_RTT);
+      const P_BASE = HEURES_BASE_RTT * prorataEntree, P_SUP1 = HEURES_SUP1_FIN * prorataEntree,
+            P_NORM = HEURES_NORMALES_SEMAINE * prorataEntree, P_SEUIL = HEURES_SEUIL_PAYEES * prorataEntree;
+      const totalHeuresTravaillees = (totauxSemaine[lundiStr] || 0) + heuresFormation;
       // Calcul réel (écrase la valeur déclarée dans la demande) : le nombre d'heures de
       // RTT pris comble exactement l'écart jusqu'à 35h, sans jamais générer de surplus.
       // Semaines régularisées (depuis le 31/08/2026) : toute semaine avec un RTT
@@ -3469,26 +3475,26 @@
       const avecRttApprouve = (demandesRttApprouvees || []).some(r => rttDeclareParSemaine(r).has(lundiStr));
       const rttPrisSemaine = (semaineRegularisable(lundiStr) && avecRttApprouve && _absencesRttParCollab.has(collabId))
         ? rttReelSemaine(collabId, lundiStr, saisies)
-        : (semainesAvecRttHeure.has(lundiStr) ? Math.max(0, HEURES_BASE_RTT - totalHeuresTravaillees) : 0);
+        : (semainesAvecRttHeure.has(lundiStr) ? Math.max(0, P_BASE - totalHeuresTravaillees) : 0);
       const totalHeures = totalHeuresTravaillees + rttPrisSemaine;
-      if (!semaineBloquee && totalHeures >= HEURES_BASE_RTT) {
+      if (!semaineBloquee && prorataEntree > 0 && totalHeures >= P_BASE) {
         let rttSemaine, heuresSup = 0, surplus = 0;
         if (majorationRtt !== 1) {
           // Postes apprentis : pas de palier RTT (36-40h) / heures sup (35-36h et 40-42,5h) /
           // heures en plus (>42,5h) - tout ce qui dépasse 35h compte comme RTT,
           // majorée de 25%.
-          rttSemaine = (totalHeures - HEURES_BASE_RTT) * majorationRtt;
+          rttSemaine = (totalHeures - P_BASE) * majorationRtt;
         } else {
           // Heures sup entre 35h et 36h : payées directement, non comptabilisées dans le cumul
-          const heuresSup1 = Math.min(totalHeures, HEURES_SUP1_FIN) - HEURES_BASE_RTT;
+          const heuresSup1 = Math.min(totalHeures, P_SUP1) - P_BASE;
           // RTT = nombre d'heures réellement travaillées entre 36h et 40h (pas un forfait fixe)
-          rttSemaine = Math.max(0, Math.min(totalHeures, HEURES_NORMALES_SEMAINE) - HEURES_SUP1_FIN);
+          rttSemaine = Math.max(0, Math.min(totalHeures, P_NORM) - P_SUP1);
           heuresSup = heuresSup1;
-          if (totalHeures > HEURES_NORMALES_SEMAINE) {
+          if (totalHeures > P_NORM) {
             // Heures sup entre 40h et 42.5h : payées directement, non comptabilisées dans le cumul
-            heuresSup += Math.min(totalHeures, HEURES_SEUIL_PAYEES) - HEURES_NORMALES_SEMAINE;
+            heuresSup += Math.min(totalHeures, P_SEUIL) - P_NORM;
             // Heures en plus au-delà de 42.5h : seules celles-ci alimentent le cumul
-            surplus = totalHeures > HEURES_SEUIL_PAYEES ? totalHeures - HEURES_SEUIL_PAYEES : 0;
+            surplus = totalHeures > P_SEUIL ? totalHeures - P_SEUIL : 0;
           }
         }
         if (!horsPeriode) {
