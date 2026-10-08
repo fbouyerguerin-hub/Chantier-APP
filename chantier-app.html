@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V40';
+  const APP_VERSION = 'V41';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12637,13 +12637,24 @@
     const m = a ? a['Stock mini'] : null;
     return (m === null || m === '' || m === undefined || isNaN(Number(m))) ? null : Number(m);
   }
+  // Le « Stock mini » s'exprime en PIÈCES pour un article conditionné (unité EBP « 100 »,
+  // « 1000 »…) : le stock (en conditionnements) est multiplié par l'unité avant comparaison.
+  // Pour les autres unités (u, m, kg…), mini et stock sont dans la même unité.
+  function facteurConditionnement(a) {
+    const u = String((a && a['Unite']) ?? '').trim();
+    return estUniteConditionnement(u) ? (Number(u.replace(',', '.')) || 1) : 1;
+  }
+  function stockPourMini(a) { return (_stockParArticle[a.id] || 0) * facteurConditionnement(a); }
+  function uniteMini(a) { return facteurConditionnement(a) !== 1 ? 'pcs' : libUnite((a && a['Unite']) || 'u'); }
+  function estSousMini(a) { const m = miniArticle(a); return m !== null && stockPourMini(a) <= m; }
   function articlesSousMini() {
-    return (_articlesCache || []).filter(a => { const m = miniArticle(a); return m !== null && (_stockParArticle[a.id] || 0) <= m; })
+    return (_articlesCache || []).filter(estSousMini)
       .map(a => {
-        const qte = _stockParArticle[a.id] || 0, mini = miniArticle(a);
+        const f = facteurConditionnement(a);
+        const qteCond = _stockParArticle[a.id] || 0, qte = qteCond * f, mini = miniArticle(a);
         let enCmd = []; try { enCmd = enCommandeArticle(a['Code EBP'], a); } catch (e) {}
-        const attendu = totalEnCommande(enCmd);
-        return { a, qte, mini, manque: Math.max(0, mini - qte), enCmd, attendu, couvert: attendu > 0 && qte + attendu > mini };
+        const attenduCond = totalEnCommande(enCmd), attendu = attenduCond * f;
+        return { a, f, qteCond, qte, mini, manque: Math.max(0, mini - qte), enCmd, attenduCond, attendu, couvert: attendu > 0 && qte + attendu > mini };
       });
   }
   function majBadgeStockMini(charger) {
@@ -12703,13 +12714,15 @@
       listeEl.innerHTML = `<div class="feuille-empty">${(_articlesCache || []).some(a => miniArticle(a) !== null) ? '✅ Aucun article sous le stock mini.' : 'ℹ️ Aucun « Stock mini » renseigné : ouvrez un article dans Stock atelier pour le définir.'}</div>`;
       return;
     }
-    listeEl.innerHTML = liste.map(({ a, qte, mini, manque, enCmd, attendu, couvert }) => {
-      const unite = esc(uniteApresQte(a['Unite'] || 'u'));
+    listeEl.innerHTML = liste.map(({ a, f, qteCond, qte, mini, manque, enCmd, attenduCond, attendu, couvert }) => {
+      const uMini = esc(uniteMini(a));
+      const detailCond = f !== 1 ? `${fmtQte(qteCond)} ${esc(uniteApresQte(a['Unite']))} en stock` : 'stock / mini';
+      const manqueCond = f !== 1 && manque > 0 ? ` (≈ ${fmtQte(Math.ceil(manque / f))} ${esc(uniteApresQte(a['Unite']))})` : '';
       const emp = libelleEmplacement(a);
       const rupture = qte <= 0;
       const statut = couvert
-        ? `<span style="background:#fff3e0;color:#a2560f;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🚚 ${fmtQte(attendu)} en commande (${new Set(enCmd.map(e => e.r.id)).size} cde)</span>`
-        : `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🛒 À commander${attendu > 0 ? ' · ' + fmtQte(attendu) + ' déjà en cde, insuffisant' : ''}</span>`;
+        ? `<span style="background:#fff3e0;color:#a2560f;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🚚 ${fmtQte(attendu)} ${uMini} en commande (${new Set(enCmd.map(e => e.r.id)).size} cde)</span>`
+        : `<span style="background:#fdecea;color:#c0392b;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">🛒 À commander${attendu > 0 ? ' · ' + fmtQte(attendu) + ' ' + uMini + ' déjà en cde, insuffisant' : ''}</span>`;
       return `<div onclick="ouvrirFicheArticleModal(${a.id}, ${JSON.stringify(a['Code EBP'] || '').replace(/"/g, '&quot;')})" style="cursor:pointer;background:#fff;border:1px solid ${couvert ? '#f0d9a8' : '#f5c6c0'};border-left:4px solid ${couvert ? '#f0a030' : '#c0392b'};border-radius:10px;padding:10px 12px;margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
           <div style="flex:1;min-width:0">
@@ -12717,13 +12730,13 @@
             <div style="font-size:11px;color:#999;margin-top:2px">${[a['Code EBP'] ? 'EBP ' + esc(a['Code EBP']) : '', emp ? '📍 ' + esc(emp) : '📍 sans emplacement'].filter(Boolean).join(' · ')}</div>
           </div>
           <div style="text-align:right;flex:0 0 auto">
-            <div style="font-size:18px;font-weight:800;color:${rupture ? '#999' : '#c0392b'}">${fmtQte(qte)} <span style="font-size:11px;font-weight:600">/ ${fmtQte(mini)}</span></div>
-            <div style="font-size:10px;color:#777">${unite} · stock / mini</div>
+            <div style="font-size:18px;font-weight:800;color:${rupture ? '#999' : '#c0392b'}">${fmtQte(qte)} <span style="font-size:11px;font-weight:600">/ ${fmtQte(mini)} ${uMini}</span></div>
+            <div style="font-size:10px;color:#777">${detailCond}</div>
           </div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
           ${statut}
-          <span style="font-size:11px;font-weight:700;color:${rupture ? '#c0392b' : 'var(--gris-moyen)'}">${rupture ? '⛔ Rupture · ' : ''}manque ${fmtQte(manque)} pour le mini</span>
+          <span style="font-size:11px;font-weight:700;color:${rupture ? '#c0392b' : 'var(--gris-moyen)'}">${rupture ? '⛔ Rupture · ' : ''}manque ${fmtQte(manque)} ${uMini}${manqueCond} pour le mini</span>
         </div>
       </div>`;
     }).join('');
@@ -12819,7 +12832,7 @@
       });
     }
     if (_stockFiltre === 'stock') articles = articles.filter(a => (_stockParArticle[a.id] || 0) > 0);
-    if (_stockFiltre === 'mini') articles = articles.filter(a => a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined && (_stockParArticle[a.id] || 0) <= Number(a['Stock mini']));
+    if (_stockFiltre === 'mini') articles = articles.filter(estSousMini);
     if (_stockFiltre === 'sansemp') articles = articles.filter(a => !libelleEmplacement(a) && (_stockParArticle[a.id] || 0) > 0);
     if (_stockFiltre === 'reemploi') articles = articles.filter(a => reemploiDisponible(a));
 
@@ -12837,7 +12850,7 @@
     const resume = document.getElementById('stock-resume');
     if (resume) {
       const nbEnStock = Object.values(_stockParArticle).filter(q => q > 0).length;
-      const nbMini = _articlesCache.filter(a => a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined && (_stockParArticle[a.id] || 0) <= Number(a['Stock mini'])).length;
+      const nbMini = _articlesCache.filter(estSousMini).length;
       const nbReemploi = _articlesCache.filter(a => reemploiDisponible(a)).length;
       resume.innerHTML = `📚 ${_articlesCache.length} article(s) suivi(s) · 📦 ${nbEnStock} en stock${nbMini ? ` · <span style="color:#c0392b;font-weight:700">⚠️ ${nbMini} sous le mini</span>` : ''}${nbReemploi ? ` · <a href="#" onclick="setFiltreStock('reemploi');return false" style="color:#7c5200;font-weight:700">↩️ ${nbReemploi} en réemploi</a>` : ''}`;
     }
@@ -12880,8 +12893,8 @@
 
   function renderCarteArticle(a) {
     const qte = _stockParArticle[a.id] || 0;
-    const mini = (a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined) ? Number(a['Stock mini']) : null;
-    const sousMini = mini !== null && qte <= mini;
+    const mini = miniArticle(a);
+    const sousMini = estSousMini(a);
     const couleurQte = qte <= 0 ? '#999' : (sousMini ? '#c0392b' : 'var(--vert)');
     const emp = libelleEmplacement(a);
     const px = parseFloat(a['Plan_X']), py = parseFloat(a['Plan_Y']);
@@ -12903,7 +12916,7 @@
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-size:18px;font-weight:800;color:${couleurQte};line-height:1">${fmtQte(qte)}</div>
-          <div style="font-size:10px;color:#999">${echapperHtmlNote(libUnite(a['Unite'] || 'u'))}${mini !== null ? ' · mini ' + fmtQte(mini) : ''}</div>
+          <div style="font-size:10px;color:#999">${echapperHtmlNote(libUnite(a['Unite'] || 'u'))}${mini !== null ? ' · mini ' + fmtQte(mini) + ' ' + echapperHtmlNote(uniteMini(a)) : ''}</div>
           ${qteEnCmd > 0 ? `<div onclick="ouvrirFicheArticleModal(${a.id})" title="Commandé, pas encore réceptionné" style="cursor:pointer;margin-top:4px;display:inline-block;padding:2px 7px;border-radius:8px;background:#fff3e0;border:1px solid #f0c27a;color:#a2560f;font-size:10px;font-weight:800;white-space:nowrap">🚚 +${fmtQte(qteEnCmd)} en commande</div>` : ''}
         </div>
       </div>
@@ -13473,8 +13486,8 @@
       // rien : un ouvrage n'a pas de stock propre
     } else if (a) {
       const qte = _stockParArticle[a.id] || 0;
-      const mini = (a['Stock mini'] !== null && a['Stock mini'] !== '' && a['Stock mini'] !== undefined) ? Number(a['Stock mini']) : null;
-      const sousMini = mini !== null && qte <= mini;
+      const mini = miniArticle(a);
+      const sousMini = estSousMini(a);
       const px = parseFloat(a['Plan_X']), py = parseFloat(a['Plan_Y']);
       const re = reemploiDisponible(a);
       html += `<div style="display:flex;gap:8px;margin-bottom:6px">
@@ -13485,7 +13498,7 @@
         </div>`
         + blocEnCommande + blocEnCmdChantiers
         + champ('Emplacement', libelleEmplacement(a) ? '📍 ' + esc(libelleEmplacement(a)) : '<span style="color:#c0392b">non renseigné</span>')
-        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteApresQte(unite)) : '—')
+        + champ('Stock mini', mini !== null ? fmtQte(mini) + ' ' + esc(uniteMini(a)) + (facteurConditionnement(a) !== 1 ? ` <span style="color:#999;font-weight:400">(stock : ${fmtQte(qte * facteurConditionnement(a))} pcs)</span>` : '') : '—')
         + (re ? champ('Réemploi', `<span style="color:#7c5200">↩️ ${fmtQte(re.qte)} revenu(s) de ${esc(re.chantiers.slice(0, 2).join(', '))}</span>`) : '')
         + (!isNaN(px) && !isNaN(py) ? `<button onclick="voirArticleSurPlan(${a.id})" style="margin-top:6px;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🗺️ Voir sur le plan</button>` : '');
       const b = (label, action, fond = 'var(--beige-clair)', coul = 'var(--gris)') => `<button onclick="${action}" style="flex:1 1 30%;background:${fond};color:${coul};border:none;border-radius:8px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer">${label}</button>`;
@@ -15998,6 +16011,7 @@
     document.getElementById('art-edit-info-ebp').style.display = deEBP ? 'block' : 'none';
     document.getElementById('art-edit-zone').value = a?.['Zone'] || '';
     document.getElementById('art-edit-rayon').value = a?.['Rayon'] || '';
+    { const u = document.getElementById('art-edit-mini-unite'); if (u) u.textContent = a ? '— en ' + (facteurConditionnement(a) !== 1 ? 'pièces (conditionnement de ' + facteurConditionnement(a) + ')' : uniteMini(a)) : ''; }
     document.getElementById('art-edit-mini').value = (a && a['Stock mini'] !== null && a['Stock mini'] !== undefined && a['Stock mini'] !== '') ? fmtQte(a['Stock mini']) : '';
     const px = a ? parseFloat(a['Plan_X']) : NaN, py = a ? parseFloat(a['Plan_Y']) : NaN;
     document.getElementById('reception-plan-x-art').value = isNaN(px) ? '' : px;
@@ -22872,7 +22886,7 @@
       <button type="button" onclick="ouvrirPlanPoint('art')" id="btn-plan-point-art" style="flex:1;background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;color:#4a7c3f;cursor:pointer;text-align:left">🗺️ <span id="plan-point-label-art">Placer sur le plan (facultatif)</span></button>
       <button type="button" onclick="effacerPointArticle()" title="Retirer le point" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;color:#c0392b;cursor:pointer">✕</button>
     </div>
-    <label style="font-size:11px;font-weight:700;color:#999">Stock mini (alerte)</label>
+    <label style="font-size:11px;font-weight:700;color:#999">Stock mini (alerte) <span id="art-edit-mini-unite" style="font-weight:400"></span></label>
     <input type="text" inputmode="decimal" id="art-edit-mini" placeholder="vide = pas d'alerte" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 14px" />
     <button id="art-edit-valider" onclick="enregistrerArticle()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:700;cursor:pointer">💾 Enregistrer</button>
   </div>
