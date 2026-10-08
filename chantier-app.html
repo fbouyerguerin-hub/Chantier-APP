@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V32';
+  const APP_VERSION = 'V34';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14046,8 +14046,8 @@
         .pg:last-child { page-break-after: auto; }
         .hd { display: flex; gap: 6mm; align-items: flex-start; border-bottom: 0.6mm solid #000; padding-bottom: 3mm; }
         .tt { flex: 1; min-width: 0; }
-        .lg { width: 38mm; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: flex-start; padding-top: 1mm; }
-        .lg img { width: 38mm; max-height: 30mm; object-fit: contain; object-position: left top; }
+        .lg { width: 62mm; flex-shrink: 0; display: flex; align-items: flex-start; justify-content: flex-start; padding-top: 1mm; }
+        .lg img { width: 62mm; max-height: 46mm; object-fit: contain; object-position: left top; }
         .lo { font-size: 10pt; font-weight: 700; color: #555; letter-spacing: .3mm; text-transform: uppercase; }
         .nu { font-size: 24pt; font-weight: 800; font-family: monospace; margin: 1mm 0 2mm; }
         .inf { border-collapse: collapse; font-size: 10pt; }
@@ -15631,6 +15631,7 @@
         return `<section class="page">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8mm">
             <div>
+              <img src="${LOGO_URL}" alt="Guérin Bâtiments" style="height:16mm;margin-bottom:3mm;display:block" onerror="this.outerHTML='<b style=&quot;font-size:13pt;line-height:1.1;display:block;margin-bottom:3mm&quot;>GUÉRIN BÂTIMENTS</b>'">
               <h1>📦 BON DE SORTIE DE STOCK${reimpression ? ' <span style="font-size:10pt;border:1px solid #333;padding:1px 6px">RÉIMPRESSION</span>' : ''}</h1>
               <div class="info"><b>Chantier :</b> ${esc(g.lignes[0].mvt['Chantier'] || (g.r?.['Chantier'] || [])[0]?.value || '—')}</div>
               <div class="info"><b>Commande :</b> ${esc(num)}${g.r ? ' · ' + esc(g.r['Fournisseur'] || '') : ''}</div>
@@ -15652,7 +15653,7 @@
         th,td{border:1px solid #999;padding:4px 6px;text-align:left;vertical-align:middle;font-size:10pt}th{background:#eee;font-size:9pt}
         td.q{text-align:right;font-weight:bold;white-space:nowrap;font-size:12pt}td.qr{width:24mm;text-align:center}td.qr img{width:20mm;height:20mm}
         td.ok{width:10mm}.code{font-size:8pt;color:#666}.pied{margin-top:5mm;font-size:8pt;color:#555}</style></head><body>
-        ${pages.join('')}<script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+        ${pages.join('')}<script>window.onload = () => setTimeout(() => window.print(), 400);<\/script></body></html>`);
       fen.document.close();
     } catch (e) {
       fen.close();
