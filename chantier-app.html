@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V35';
+  const APP_VERSION = 'V36';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -18323,6 +18323,23 @@
     } catch(e) { console.warn('Erreur chargement postes:', e); }
   }
 
+  // Collaborateur en cours d'édition dans Gestion › Users (pour la date d'entrée)
+  let _userCollabEdition = { id: null, champDate: null };
+  async function enregistrerDateEntreeCollab(collabId, valeur, champ) {
+    if (!collabId) return true;
+    const nomChamp = champ || CHAMPS_DATE_ENTREE[0]; // « Date d'entrée » par défaut
+    const r = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/' + collabId + '/?user_field_names=true',
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [nomChamp]: valeur || null }) });
+    if (!r.ok) {
+      const txt = await r.text();
+      alert("⚠️ La date d'entrée n'a pas pu être enregistrée.\nVérifiez que la table Collaborateurs contient bien un champ de type Date nommé « Date d'entrée ».\n\n" + txt.slice(0, 200));
+      return false;
+    }
+    _dateEntreeParCollab.delete(Number(collabId));
+    if (valeur) _dateEntreeParCollab.set(Number(collabId), valeur);
+    return true;
+  }
+
   async function ouvrirFormUser(rowId) {
     document.getElementById('user-row-id').value = rowId || '';
     document.getElementById('user-id').value = '';
@@ -18330,6 +18347,8 @@
     document.getElementById('user-droit').value = 'Utilisateur';
     document.getElementById('user-actif').value = 'true';
     document.getElementById('user-save-info').style.display = 'none';
+    ['user-date-entree', 'user-date-entree-modif'].forEach(i => { const el = document.getElementById(i); if (el) el.value = ''; });
+    _userCollabEdition = { id: null, champDate: null };
 
     const isCreation = !rowId;
     document.getElementById('modal-user-titre').textContent = isCreation ? '➕ Nouveau collaborateur' : '✏️ Modifier utilisateur';
@@ -18378,6 +18397,9 @@
             const col = await resCol.json();
             document.getElementById('user-email-modif').value = col['Courriel'] || '';
             document.getElementById('user-tel-modif').value = col['Telephone'] || '';
+            // Date d'entrée (champ de la table Collaborateurs, nom toléré : voir CHAMPS_DATE_ENTREE)
+            _userCollabEdition = { id: collabFound.collabId, champDate: CHAMPS_DATE_ENTREE.find(k => k in col) || null };
+            document.getElementById('user-date-entree-modif').value = _userCollabEdition.champDate ? String(col[_userCollabEdition.champDate] || '').slice(0, 10) : '';
           } catch(e) {}
         }
       } catch(e) {}
@@ -18418,6 +18440,11 @@
           body: JSON.stringify({ 'Nom Complet': nomComplet, 'Courriel': document.getElementById('user-email').value.trim(), 'Telephone': document.getElementById('user-tel').value.trim(), 'Poste / Métier': posteVal })
         });
         if (!resCollab.ok) throw new Error('Erreur création collaborateur : ' + await resCollab.text());
+        try {
+          const collabCree = await resCollab.json();
+          const dateEntree = document.getElementById('user-date-entree').value;
+          if (dateEntree && collabCree?.id) await enregistrerDateEntreeCollab(collabCree.id, dateEntree, CHAMPS_DATE_ENTREE.find(k => k in collabCree) || null);
+        } catch (e) { console.warn("Date d'entrée non enregistrée", e); }
 
         // Étape 2 : créer le compte utilisateur
         btn.textContent = '🔑 Création du compte…';
@@ -18477,6 +18504,12 @@
             }
           }
         } catch(e) { console.warn('Collaborateur non mis à jour', e); }
+        // Date d'entrée (requête séparée : si le champ n'existe pas encore, le reste est déjà enregistré)
+        {
+          const collabIdDate = _userCollabEdition.id || COLLABORATEURS_ADMIN.find(c => c.nom === nomComplet)?.collabId;
+          const dateModif = document.getElementById('user-date-entree-modif').value;
+          if (collabIdDate && (dateModif || _userCollabEdition.champDate)) await enregistrerDateEntreeCollab(collabIdDate, dateModif, _userCollabEdition.champDate);
+        }
       }
 
       fermerFormUser();
@@ -21466,6 +21499,10 @@
           
           </select>
         </div>
+        <div class="field">
+          <label>Date d'entrée <span style="font-weight:400;color:#999;font-size:11px">(début du calcul des RTT)</span></label>
+          <input type="date" id="user-date-entree" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 13px;font-size:15px;color:var(--gris);outline:none" />
+        </div>
         <div style="background:#f5f0eb;border-left:3px solid var(--beige);border-radius:8px;padding:10px 14px;margin:0 0 14px;font-size:12px;font-weight:700;color:var(--gris)">
           🔑 2 — Accès à l'application
         </div>
@@ -21491,6 +21528,10 @@
             <option value="">-- Sélectionner --</option>
           
           </select>
+        </div>
+        <div class="field">
+          <label>Date d'entrée <span style="font-weight:400;color:#999;font-size:11px">(début du calcul des RTT)</span></label>
+          <input type="date" id="user-date-entree-modif" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 13px;font-size:15px;color:var(--gris);outline:none" />
         </div>
       </div>div>
 
