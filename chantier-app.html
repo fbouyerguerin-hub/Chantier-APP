@@ -733,6 +733,7 @@
   let _sessionApp = null;
   let _sessionExpireeSignalee = false;
   function sessionExpiree() {
+    if (tvParam()) { if (tvParam() !== 'apercu') setTimeout(() => location.reload(), 5000); return; } // écran TV : relance silencieuse
     if (_sessionExpireeSignalee) return;
     _sessionExpireeSignalee = true;
     alert('Votre session a expiré : merci de vous reconnecter.');
@@ -741,7 +742,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V74';
+  const APP_VERSION = 'V75';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1505,6 +1506,249 @@
     tableData['Chantiers'] = estUtilisateurSimpleConnecte() ? _chantiersTousSaisie.filter(c => chantierVisibleUtilisateur(c.statut)) : _chantiersTousSaisie;
   }
 
+  // ============================================================
+  // 📺 ÉCRAN ATELIER (smart TV) — affichage en boucle, lecture seule
+  // Adresse de la TV : chantier-app.html?tv=CLE   (CLE = secret TV_KEY du Worker)
+  // Aperçu depuis l'appli : Gestion › 📺 Écran TV › Aperçu (?tv=apercu, session en cours)
+  // Écrans : planning de la semaine · départs chantier à préparer · annonces · sécurité.
+  // Aucun prix ni document chiffré. Données relues toutes les 2 min, écran changé toutes les 25 s.
+  // ============================================================
+  const TV_DUREE_ECRAN = 25000, TV_RAFRAICHIR = 120000;
+  const _tv = { ecrans: [], idx: 0, minuterie: null, donnees: null, maj: null, erreur: '' };
+  function tvParam() { try { return new URLSearchParams(location.search).get('tv'); } catch (e) { return null; } }
+  async function tvObtenirSession(param) {
+    if (param === 'apercu') {
+      try { const o = JSON.parse(sessionStorage.getItem('gb_session_onglet') || 'null'); if (o && o.session) return o.session; } catch (e) {}
+      throw new Error("Aperçu : ouvrez-le depuis l'appli connectée (Gestion › 📺 Écran TV).");
+    }
+    let cle = param;
+    try {
+      if (cle && cle !== '1') localStorage.setItem('gb_tv_cle', cle); else cle = localStorage.getItem('gb_tv_cle');
+      history.replaceState(null, '', location.pathname + '?tv=1'); // la clé ne reste pas affichée dans l'adresse
+    } catch (e) {}
+    if (!cle) throw new Error("Clé de l'écran manquante : ouvrez chantier-app.html?tv=VOTRE_CLE");
+    const r = await _fetchNatifBrut(GB_WORKER + '/tv-session?cle=' + encodeURIComponent(cle), { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.session) throw new Error(d.error || ('Worker ' + r.status));
+    return d.session;
+  }
+  async function demarrerEcranTV(param) {
+    document.title = 'Écran atelier — Guérin Bâtiments';
+    const css = document.createElement('style');
+    css.textContent = `
+      #tv-ecran { position:fixed; inset:0; z-index:99999; background:#14181a; color:#f2f2f2; font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; display:flex; flex-direction:column; overflow:hidden; cursor:none }
+      #tv-ecran .tv-haut { display:flex; align-items:center; gap:2vw; padding:1.4vh 2.5vw; background:#1f2624; border-bottom:.5vh solid #4a7c3f }
+      #tv-ecran .tv-logo { height:6vh; background:#fff; border-radius:.6vh; padding:.4vh .8vw }
+      #tv-ecran .tv-titre { flex:1; font-size:3.2vh; font-weight:800; letter-spacing:.05vw }
+      #tv-ecran .tv-heure { font-size:5vh; font-weight:800; font-variant-numeric:tabular-nums }
+      #tv-ecran .tv-date { font-size:2.2vh; color:#b7c2bd; text-align:right; text-transform:capitalize }
+      #tv-ecran .tv-corps { flex:1; padding:2.5vh 2.5vw; overflow:hidden; display:flex; flex-direction:column }
+      #tv-ecran .tv-h1 { font-size:4.4vh; font-weight:900; margin-bottom:2vh; display:flex; align-items:center; gap:1.2vw }
+      #tv-ecran .tv-bas { display:flex; align-items:center; gap:1vw; padding:1vh 2.5vw; background:#1f2624; font-size:1.8vh; color:#9aa7a1 }
+      #tv-ecran .tv-points span { display:inline-block; width:1.2vh; height:1.2vh; border-radius:50%; background:#475550; margin-right:.6vw }
+      #tv-ecran .tv-points span.on { background:#7fbf6a }
+      #tv-ecran .tv-barre { position:absolute; left:0; bottom:0; height:.5vh; background:#7fbf6a; width:0 }
+      #tv-ecran .tv-grille { display:grid; grid-template-columns:repeat(5,1fr); gap:1vw; flex:1; min-height:0 }
+      #tv-ecran .tv-jour { background:#1f2624; border-radius:1vh; padding:1.2vh 1vw; overflow:hidden; display:flex; flex-direction:column; gap:1vh }
+      #tv-ecran .tv-jour.aujourdhui { outline:.4vh solid #7fbf6a; background:#24302a }
+      #tv-ecran .tv-jour-titre { font-size:2.6vh; font-weight:800; color:#cfe6c7; text-transform:capitalize }
+      #tv-ecran .tv-bloc { background:#2b3431; border-radius:.8vh; padding:.9vh .8vw; border-left:.6vh solid #7fbf6a }
+      #tv-ecran .tv-bloc b { display:block; font-size:2.1vh; line-height:1.2; margin-bottom:.4vh }
+      #tv-ecran .tv-bloc i { font-style:normal; font-size:1.9vh; color:#c9d3cf; line-height:1.35 }
+      #tv-ecran .tv-colonnes { columns:2; column-gap:2vw; flex:1; min-height:0 }
+      #tv-ecran .tv-carte { break-inside:avoid; background:#1f2624; border-radius:1vh; padding:1.4vh 1.2vw; margin-bottom:1.6vh; border-left:.8vh solid #e0a33a }
+      #tv-ecran .tv-carte.urgent { border-left-color:#e2574c; background:#2c2221 }
+      #tv-ecran .tv-carte h3 { margin:0 0 .8vh; font-size:2.6vh }
+      #tv-ecran .tv-ligne { font-size:2vh; color:#d5ddd9; padding:.3vh 0; display:flex; gap:1vw }
+      #tv-ecran .tv-tag { font-size:1.7vh; font-weight:800; border-radius:2vh; padding:.2vh .9vw; background:#e2574c; color:#fff; margin-left:1vw; vertical-align:middle }
+      #tv-ecran .tv-annonce { background:#1f2624; border-radius:1.2vh; padding:2.2vh 2vw; margin-bottom:2vh; border-left:1vh solid #4a90d9 }
+      #tv-ecran .tv-annonce.important { border-left-color:#e0a33a } #tv-ecran .tv-annonce.securite { border-left-color:#e2574c }
+      #tv-ecran .tv-annonce h2 { margin:0 0 1vh; font-size:3.6vh } #tv-ecran .tv-annonce p { margin:0; font-size:3vh; line-height:1.4; white-space:pre-wrap }
+      #tv-ecran .tv-vide { font-size:3vh; color:#8d9a95; margin-top:4vh; text-align:center }
+    `;
+    document.head.appendChild(css);
+    const el = document.createElement('div');
+    el.id = 'tv-ecran';
+    el.innerHTML = `<div class="tv-haut"><img class="tv-logo" src="${LOGO_URL}" onerror="this.style.display='none'"><div class="tv-titre">Atelier — Guérin Bâtiments</div><div><div class="tv-heure" id="tv-heure"></div><div class="tv-date" id="tv-date"></div></div></div>
+      <div class="tv-corps" id="tv-corps"><div class="tv-vide">⏳ Démarrage de l'écran…</div></div>
+      <div class="tv-bas"><div class="tv-points" id="tv-points"></div><div style="flex:1"></div><div id="tv-maj"></div></div><div class="tv-barre" id="tv-barre"></div>`;
+    document.body.appendChild(el);
+    document.querySelectorAll('body > *:not(#tv-ecran):not(script):not(style)').forEach(n => { if (n !== el) n.style.display = 'none'; });
+    const horloge = () => {
+      const d = new Date();
+      const h = document.getElementById('tv-heure'), j = document.getElementById('tv-date');
+      if (h) h.textContent = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      if (j) j.textContent = d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+    };
+    horloge(); setInterval(horloge, 10000);
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch (e) {}
+    const ouvrirSession = async () => { _sessionApp = await tvObtenirSession(param); };
+    try { await ouvrirSession(); }
+    catch (e) { document.getElementById('tv-corps').innerHTML = `<div class="tv-vide">⚠️ ${echapperHtmlNote(e.message)}</div>`; return; }
+    if (param !== 'apercu') setInterval(() => ouvrirSession().catch(() => {}), 6 * 3600000); // session renouvelée
+    await tvCharger();
+    setInterval(tvCharger, TV_RAFRAICHIR);
+    setInterval(() => { const h = new Date().getHours(); if (h === 4 && param !== 'apercu') location.reload(); }, 3600000); // relance quotidienne (mises à jour)
+    tvEcranSuivant(true);
+  }
+  async function tvCharger() {
+    try {
+      const maintenant = new Date();
+      const base = new Date(maintenant); if (base.getDay() === 6) base.setDate(base.getDate() + 2); if (base.getDay() === 0) base.setDate(base.getDate() + 1);
+      const lundi = getLundi(base), jours = [];
+      for (let i = 0; i < 5; i++) { const j = new Date(lundi); j.setDate(lundi.getDate() + i); jours.push(dateYMD(j)); }
+      const [resPlan, resCmd, resAnn] = await Promise.all([
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${jours[0]}&filter__Date__date_before_or_equal=${jours[4]}`, { headers: HEADERS }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200&filter__Statut__contains=${encodeURIComponent('atelier')}`, { headers: HEADERS }),
+        _fetchNatifBrut(GB_WORKER + '/tv-annonces?t=' + Date.now(), { headers: { 'X-Session': _sessionApp || '' }, cache: 'no-store' }).then(r => r.ok ? r.json() : {}).catch(() => ({}))
+      ]);
+      const planning = ((await resPlan.json()).results || []);
+      const commandes = ((await resCmd.json()).results || []).filter(r => /receptionne en atelier/.test(normaliserTexteStatut(extraireValeurChamp(r['Statut'], ''))) && !normRechCmd(String(r['Fournisseur'] || '') + ' ' + ((r['Chantier'] || [])[0]?.value || '')).includes('stock atelier'));
+      _tv.donnees = { jours, planning, commandes, annonces: resAnn || {} };
+      _tv.maj = new Date(); _tv.erreur = '';
+    } catch (e) { _tv.erreur = e.message; console.warn('Écran TV', e); }
+    const m = document.getElementById('tv-maj');
+    if (m) m.textContent = _tv.erreur ? '⚠️ Données non actualisées (' + _tv.erreur.slice(0, 60) + ')' : 'Actualisé à ' + _tv.maj.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  }
+  function tvListeEcrans() {
+    const d = _tv.donnees || {}, a = d.annonces || {};
+    const auj = dateYMD(new Date());
+    const annonces = (a.annonces || []).filter(x => !x.jusqu || x.jusqu >= auj);
+    const liste = [tvEcranPlanning, tvEcranDeparts];
+    if (annonces.length) liste.push(tvEcranAnnonces);
+    if (a.dernierAccident || a.consigne) liste.push(tvEcranSecurite);
+    return liste;
+  }
+  function tvEcranSuivant(premier) {
+    const ecrans = tvListeEcrans();
+    if (!premier) _tv.idx = (_tv.idx + 1) % ecrans.length; else _tv.idx = 0;
+    if (_tv.idx >= ecrans.length) _tv.idx = 0;
+    const corps = document.getElementById('tv-corps');
+    try { corps.innerHTML = _tv.donnees ? ecrans[_tv.idx]() : `<div class="tv-vide">⚠️ ${echapperHtmlNote(_tv.erreur || 'Chargement…')}</div>`; }
+    catch (e) { corps.innerHTML = `<div class="tv-vide">⚠️ ${echapperHtmlNote(e.message)}</div>`; }
+    document.getElementById('tv-points').innerHTML = ecrans.map((_, i) => `<span class="${i === _tv.idx ? 'on' : ''}"></span>`).join('');
+    const barre = document.getElementById('tv-barre');
+    if (barre) { barre.style.transition = 'none'; barre.style.width = '0'; void barre.offsetWidth; barre.style.transition = `width ${TV_DUREE_ECRAN}ms linear`; barre.style.width = '100%'; }
+    clearTimeout(_tv.minuterie);
+    _tv.minuterie = setTimeout(() => tvEcranSuivant(false), TV_DUREE_ECRAN);
+  }
+  const tvEsc = t => echapperHtmlNote(t == null ? '' : String(t));
+  function tvEcranPlanning() {
+    const { jours, planning } = _tv.donnees;
+    const auj = dateYMD(new Date());
+    const colonnes = jours.map(j => {
+      const parChantier = new Map();
+      planning.filter(r => r['Date'] === j && (r['Collaborateurs'] || []).length).forEach(r => {
+        const ch = (r['Chantier'] || [])[0]?.value || (r['Tâche'] || r['Tache'] || 'Atelier');
+        if (!parChantier.has(ch)) parChantier.set(ch, new Set());
+        (r['Collaborateurs'] || []).forEach(c => parChantier.get(ch).add(String(c.value || '').split(' ')[0] || c.value));
+      });
+      const blocs = [...parChantier.entries()].sort((a, b) => a[0].localeCompare(b[0], 'fr')).map(([ch, noms]) =>
+        `<div class="tv-bloc"><b>${tvEsc(ch.replace(/\s+-\s+DE\s*\d+.*$/i, ''))}</b><i>👷 ${tvEsc([...noms].sort((a, b) => a.localeCompare(b, 'fr')).join(', '))}</i></div>`).join('');
+      const libelle = new Date(j + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric' });
+      return `<div class="tv-jour${j === auj ? ' aujourdhui' : ''}"><div class="tv-jour-titre">${j === auj ? '▶ ' : ''}${tvEsc(libelle)}</div>${blocs || '<i style="color:#7d8a85;font-size:2vh">—</i>'}</div>`;
+    }).join('');
+    return `<div class="tv-h1">📅 Planning de la semaine</div><div class="tv-grille">${colonnes}</div>`;
+  }
+  function tvEcranDeparts() {
+    const { commandes, planning, jours } = _tv.donnees;
+    const auj = dateYMD(new Date());
+    const dem = (() => { const d = new Date(); d.setDate(d.getDate() + (d.getDay() === 5 ? 3 : 1)); return dateYMD(d); })();
+    const chantiersPoses = new Map(); // nom chantier -> 'auj' | 'dem'
+    planning.forEach(r => { const ch = (r['Chantier'] || [])[0]?.value; if (!ch) return; if (r['Date'] === auj) chantiersPoses.set(ch, 'auj'); else if (r['Date'] === dem && !chantiersPoses.has(ch)) chantiersPoses.set(ch, 'dem'); });
+    const groupes = new Map();
+    commandes.forEach(c => { const ch = (c['Chantier'] || [])[0]?.value || 'Sans chantier'; if (!groupes.has(ch)) groupes.set(ch, []); groupes.get(ch).push(c); });
+    const ordre = [...groupes.entries()].sort((a, b) => ((chantiersPoses.get(a[0]) === 'auj' ? 0 : chantiersPoses.get(a[0]) === 'dem' ? 1 : 2) - (chantiersPoses.get(b[0]) === 'auj' ? 0 : chantiersPoses.get(b[0]) === 'dem' ? 1 : 2)) || a[0].localeCompare(b[0], 'fr'));
+    if (!ordre.length) return `<div class="tv-h1">🚚 Départs chantier à préparer</div><div class="tv-vide">✅ Rien en attente de départ à l'atelier.</div>`;
+    const cartes = ordre.slice(0, 14).map(([ch, cmds]) => {
+      const quand = chantiersPoses.get(ch);
+      return `<div class="tv-carte${quand === 'auj' ? ' urgent' : ''}"><h3>${tvEsc(ch.replace(/\s+-\s+DE\s*\d+.*$/i, ''))}${quand === 'auj' ? '<span class="tv-tag">POSE AUJOURD\'HUI</span>' : quand === 'dem' ? '<span class="tv-tag" style="background:#e0a33a">POSE DEMAIN</span>' : ''}</h3>`
+        + cmds.slice(0, 6).map(c => `<div class="tv-ligne"><span>📦 ${tvEsc(c['Fournisseur'] || '')}</span><span style="color:#9aa7a1">${tvEsc(c['Numero commande'] || '')}</span><span style="margin-left:auto;color:#cfe6c7">📍 ${tvEsc(c['Lieu de réception'] || '—')}</span></div>`).join('')
+        + (cmds.length > 6 ? `<div class="tv-ligne" style="color:#9aa7a1">+ ${cmds.length - 6} autre(s)</div>` : '') + '</div>';
+    }).join('');
+    return `<div class="tv-h1">🚚 Départs chantier à préparer <span style="font-size:2.4vh;color:#9aa7a1;font-weight:600">${commandes.length} commande(s) réceptionnée(s) à l'atelier</span></div><div class="tv-colonnes">${cartes}</div>`;
+  }
+  function tvEcranAnnonces() {
+    const auj = dateYMD(new Date());
+    const liste = ((_tv.donnees.annonces || {}).annonces || []).filter(x => !x.jusqu || x.jusqu >= auj);
+    const ico = { info: 'ℹ️', important: '⚠️', securite: '🦺' };
+    return `<div class="tv-h1">📢 Informations</div>` + liste.slice(0, 5).map(a => `<div class="tv-annonce ${tvEsc(a.niveau)}">${a.titre ? `<h2>${ico[a.niveau] || 'ℹ️'} ${tvEsc(a.titre)}</h2>` : ''}<p>${tvEsc(a.texte)}</p></div>`).join('');
+  }
+  function tvEcranSecurite() {
+    const a = _tv.donnees.annonces || {};
+    let jours = null;
+    if (a.dernierAccident) { const d0 = new Date(a.dernierAccident + 'T00:00:00'); jours = Math.max(0, Math.floor((Date.now() - d0.getTime()) / 86400000)); }
+    return `<div class="tv-h1">🦺 Sécurité</div><div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4vh;text-align:center">
+      ${jours !== null ? `<div style="font-size:22vh;font-weight:900;line-height:1;color:${jours >= 30 ? '#7fbf6a' : jours >= 7 ? '#e0a33a' : '#e2574c'}">${jours}</div><div style="font-size:5vh;font-weight:800">jour${jours > 1 ? 's' : ''} sans accident</div>` : ''}
+      ${a.consigne ? `<div style="font-size:3.6vh;max-width:75vw;background:#2c2221;border-left:1vh solid #e2574c;border-radius:1.2vh;padding:2.5vh 2.5vw;line-height:1.4">🦺 ${tvEsc(a.consigne)}</div>` : ''}
+    </div>`;
+  }
+
+  // ── Gestion › 📺 Écran TV : annonces, sécurité, adresse de la TV ──
+  let _tvGestion = null;
+  async function chargerGestionTV() {
+    const el = document.getElementById('gestion-tv-contenu');
+    if (!el) return;
+    el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const r = await _fetchNatifBrut(GB_WORKER + '/tv-annonces?t=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+      _tvGestion = r.ok ? await r.json() : { annonces: [], dernierAccident: '', consigne: '' };
+      if (!r.ok) throw new Error('Worker ' + r.status + ' (Worker à mettre à jour ?)');
+      renderGestionTV();
+    } catch (e) { el.innerHTML = `<div class="feuille-empty">❌ ${echapperHtmlNote(e.message)}</div>`; }
+  }
+  function renderGestionTV() {
+    const el = document.getElementById('gestion-tv-contenu');
+    const g = _tvGestion || { annonces: [] };
+    const champ = 'width:100%;box-sizing:border-box;border:1.5px solid #ddd5c5;border-radius:8px;padding:8px 10px;font-size:13px;background:var(--beige-clair)';
+    const urlTV = location.origin + location.pathname + '?tv=VOTRE_CLE';
+    el.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:12px">
+        <div style="font-weight:800;margin-bottom:6px">📺 Adresse à ouvrir sur la TV</div>
+        <div style="font-family:monospace;font-size:12px;background:#f4f4f4;border-radius:6px;padding:8px;word-break:break-all">${echapperHtmlNote(urlTV)}</div>
+        <div style="font-size:11px;color:#777;margin-top:6px">VOTRE_CLE = la valeur du secret <b>TV_KEY</b> créé dans le Worker Cloudflare. Ouverte une fois, la TV la mémorise.</div>
+        <button onclick="window.open(location.pathname + '?tv=apercu', '_blank')" style="margin-top:10px;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px 14px;font-weight:800;cursor:pointer">👁️ Aperçu de l'écran</button>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:12px">
+        <div style="font-weight:800;margin-bottom:8px">🦺 Sécurité</div>
+        <label style="font-size:11px;color:#999;font-weight:700">Date du dernier accident (compteur « jours sans accident »)</label>
+        <input type="date" id="tv-g-accident" value="${echapperHtmlNote(g.dernierAccident || '')}" style="${champ};margin-bottom:8px" />
+        <label style="font-size:11px;color:#999;font-weight:700">Consigne sécurité du moment</label>
+        <textarea id="tv-g-consigne" rows="2" style="${champ}">${echapperHtmlNote(g.consigne || '')}</textarea>
+      </div>
+      <div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>📢 Annonces</b><button onclick="ajouterAnnonceTV()" style="background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-weight:800;cursor:pointer">＋ Annonce</button></div>
+        ${(g.annonces || []).map((a, i) => `<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin-bottom:8px">
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <input placeholder="Titre" value="${echapperHtmlNote(a.titre || '')}" oninput="_tvGestion.annonces[${i}].titre=this.value" style="${champ};flex:2" />
+            <select onchange="_tvGestion.annonces[${i}].niveau=this.value" style="${champ};flex:1">${[['info', 'ℹ️ Info'], ['important', '⚠️ Important'], ['securite', '🦺 Sécurité']].map(([v, l]) => `<option value="${v}" ${a.niveau === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          </div>
+          <textarea rows="2" placeholder="Texte affiché sur la TV" oninput="_tvGestion.annonces[${i}].texte=this.value" style="${champ};margin-bottom:6px">${echapperHtmlNote(a.texte || '')}</textarea>
+          <div style="display:flex;gap:6px;align-items:center"><label style="font-size:11px;color:#999">Affichée jusqu'au</label><input type="date" value="${echapperHtmlNote(a.jusqu || '')}" onchange="_tvGestion.annonces[${i}].jusqu=this.value" style="${champ};width:auto" /><span style="flex:1"></span><button onclick="_tvGestion.annonces.splice(${i},1);renderGestionTV()" style="background:none;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:5px 10px;cursor:pointer">🗑️</button></div>
+        </div>`).join('') || '<div style="font-size:12px;color:#aaa">Aucune annonce.</div>'}
+      </div>
+      <button id="tv-g-enregistrer" onclick="enregistrerGestionTV()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:30px">💾 Enregistrer (visible sur la TV sous 2 min)</button>`;
+  }
+  function ajouterAnnonceTV() {
+    _tvGestion = _tvGestion || { annonces: [] };
+    _tvGestion.dernierAccident = document.getElementById('tv-g-accident')?.value || _tvGestion.dernierAccident || '';
+    _tvGestion.consigne = document.getElementById('tv-g-consigne')?.value ?? _tvGestion.consigne ?? '';
+    _tvGestion.annonces.unshift({ titre: '', texte: '', niveau: 'info', jusqu: '' });
+    renderGestionTV();
+  }
+  async function enregistrerGestionTV() {
+    const btn = document.getElementById('tv-g-enregistrer');
+    btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
+    try {
+      const corps = { annonces: (_tvGestion.annonces || []), dernierAccident: document.getElementById('tv-g-accident').value, consigne: document.getElementById('tv-g-consigne').value };
+      const r = await _fetchNatifBrut(GB_WORKER + '/tv-annonces', { method: 'POST', headers: { ...headersWorker(), 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('Worker ' + r.status));
+      _tvGestion = d; renderGestionTV();
+      alert('✅ Enregistré : la TV l\'affichera sous 2 minutes.');
+    } catch (e) { alert('❌ ' + e.message); btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+  }
+
   // ── SESSION CONSERVÉE AU RECHARGEMENT ──
   // Un rechargement de la page (glisser vers le bas, mise à jour automatique de l'appli…)
   // ne déconnecte plus : la session est gardée pour cette appli ouverte (sessionStorage,
@@ -1543,6 +1787,8 @@
     if (versionTag) versionTag.textContent = 'Version ' + APP_VERSION;
     const todayLocal = (() => { const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
     document.getElementById('field-date').value = todayLocal;
+    const modeTV = tvParam();
+    if (modeTV) { demarrerEcranTV(modeTV); return; } // 📺 écran atelier
     ajouterLigne();
     showPage('page-login');
     if (!_scanEnAttente) await restaurerSessionOnglet();
@@ -22031,7 +22277,7 @@
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export','tv'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -22041,6 +22287,7 @@
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
     if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
+    if (tab === 'tv') chargerGestionTV();
     if (tab === 'export') {
       chargerSelectCollaborateursExport();
       initExportCongesSelects();
@@ -22213,6 +22460,7 @@
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
     <button class="tab-btn" id="tab-g-rentabilite" onclick="switchGestionTab('rentabilite')" style="font-size:11px">💶 Renta</button>
     <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
+    <button class="tab-btn" id="tab-g-tv" onclick="switchGestionTab('tv')" style="font-size:11px">📺 TV</button>
   </div>
   </div>
 
@@ -22303,6 +22551,10 @@
     <div id="renta-avert" style="display:none;margin:0 16px 10px;font-size:11px;color:#856404;background:#fef3cd;border-radius:8px;padding:6px 10px"></div>
     <div id="renta-kpis" style="margin:0 16px 12px"></div>
     <div id="renta-liste" style="margin:0 16px 20px"></div>
+  </div>
+
+  <div id="gestion-tv" style="display:none;padding:0 16px">
+    <div id="gestion-tv-contenu"></div>
   </div>
 
   <div id="gestion-export" style="display:none">
