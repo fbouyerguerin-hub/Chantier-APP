@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V65';
+  const APP_VERSION = 'V67';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2476,6 +2476,25 @@
     updateMoisLabel();
     if (connectedCollab) loadFeuille();
   }
+
+  // ── FENÊTRES : pas de fermeture accidentelle ──
+  // Sélectionner du texte dans un champ (ou tenir le doigt) puis relâcher sur le fond
+  // sombre déclenchait un « clic sur le fond » et fermait la fenêtre en perdant la saisie.
+  // Désormais une fenêtre ne se ferme au clic sur le fond que si l'appui a AUSSI commencé
+  // sur le fond.
+  (function () {
+    let departAppui = null;
+    document.addEventListener('pointerdown', e => { departAppui = e.target; }, true);
+    document.addEventListener('mousedown', e => { departAppui = e.target; }, true);
+    document.addEventListener('click', e => {
+      const cible = e.target, depart = departAppui;
+      departAppui = null;
+      if (!depart || depart === cible || !(cible instanceof Element) || !cible.contains(depart)) return;
+      let fixe = false;
+      try { fixe = getComputedStyle(cible).position === 'fixed'; } catch (err) {}
+      if (fixe) { e.stopImmediatePropagation(); e.preventDefault(); }
+    }, true);
+  })();
 
   // ── GARDE DE SORTIE (mobile) ──
   // Sur téléphone / tablette, le bouton « Retour » du système ferme l'appli sans passer
@@ -12212,6 +12231,22 @@
       `<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">${_sousOngletReceptionnees === 'chantier' ? 'Aucune commande partie sur chantier.' : "Aucune commande réceptionnée à l'atelier."}</div>`;
   }
 
+  // ── LIVRAISON SUR CHANTIER ──
+  // Repérée dans les lignes de la commande (lignes de texte ou d'articles) et dans sa
+  // référence : « livraison sur chantier », « livré chantier », « franco chantier »,
+  // « livraison directe », « à livrer sur site »… (majuscules / accents ignorés).
+  const _reLivraisonChantier = /(livr\w*|franco|expedi\w*|rendu|depot)\s*(directe?\s*)?(sur|a|au|en|:|-)?\s*(le\s+)?(chantier|site)|livraison\s+direct\w*|livr\w*\s+(directement\s+)?(chez\s+(le\s+)?client|client)/;
+  function texteLivraisonChantier(r) {
+    const lignes = (_commandesLignesCache && _commandesLignesCache[r.id]) || [];
+    const sources = [r['Reference complete'], r['Designation'], ...lignes.map(l => l['Description'])];
+    for (const t of sources) {
+      const n = String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (_reLivraisonChantier.test(n)) return String(t).trim().slice(0, 160);
+    }
+    return '';
+  }
+  function estLivraisonSurChantier(r) { return !!texteLivraisonChantier(r); }
+
   // ── RECHERCHE DES COMMANDES (tous les onglets) ──
   // Plusieurs mots ou morceaux de mots, dans n'importe quel ordre : « FB emaneo »
   // garde les commandes qui contiennent « fb » ET « emaneo » quelque part (chantier,
@@ -12222,6 +12257,7 @@
     const chantiers = (r['Chantier'] || []).map(c => c && c.value).join(' ');
     const lignes = (_commandesLignesCache && _commandesLignesCache[r.id]) || [];
     return normRechCmd([
+      estLivraisonSurChantier(r) ? 'livraison sur chantier' : '',
       chantiers, r['Fournisseur'], r['Numero commande'], r['Numero devis'], r['Numero facture'], r['Reference complete'],
       extraireValeurChamp(r['Statut'], ''), r['Note statut'], r['Valide par'], r['Receptionne par'], r['Envoye par'], r['Facture par'],
       ...lignes.map(l => [l['Reference'], l['Ref'], l['Code article'], l['Reference fournisseur'], l['Description'], l['Designation']].filter(Boolean).join(' '))
@@ -12319,9 +12355,11 @@
         <button id="fact-valider" onclick="validerFacturationCommande(${id})" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">💶 Valider la facturation</button>
       </div>
     </div>`;
-    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    // Pas de fermeture au clic sur le fond (saisie en cours) : seulement « Annuler ». Entrée = valider.
+    m.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); validerFacturationCommande(id); } });
     document.body.appendChild(m);
     majEcartFacturation(montantCmd);
+    setTimeout(() => { const n = m.querySelector('#fact-numero'); if (n && !n.value) n.focus(); }, 50);
   }
   async function validerFacturationCommande(id) {
     const r = (_commandesCache || []).find(x => x.id === id);
@@ -17325,6 +17363,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="display:flex;align-items:center;gap:6px">
           <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${couleur}20;color:${couleur}">${statut}</span>
+          ${estLivraisonSurChantier(r) ? `<span title="${echapperHtmlNote(texteLivraisonChantier(r))}" style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:800;background:#fff3e0;color:#c25e00;border:1px solid #f5c58a">🚚 Livraison sur chantier</span>` : ''}
           ${contexte === 'ar' ? (envoyeParMail 
             ? `<span title="Envoyé par mail au fournisseur" style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9">✉️ Envoyé</span>`
             : `<span title="Commande non encore envoyée au fournisseur" style="display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;background:#fdecea;color:#c62828;border:1px solid #ef9a9a">⚠️ Non envoyé</span>`
