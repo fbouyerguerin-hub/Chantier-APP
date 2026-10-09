@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V56';
+  const APP_VERSION = 'V57';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12070,6 +12070,17 @@
   // fiche article (infos EBP, stock, commandes avec prix payés, mouvements).
   let _timerArticlesOnglet = null, _articlesOngletLimite = 100, _articlesOngletQ = null;
   let _articlesOngletType = 'tous'; // 'tous' | 'ouvrages'
+  async function actualiserCatalogueEbpOnglet(btn) {
+    btn.disabled = true; const lib = btn.textContent; btn.textContent = '⏳ Actualisation…';
+    try {
+      try { localStorage.removeItem(CLE_CATALOGUE_LOCAL); } catch (e) {}
+      _nomenclatures.clear();
+      await chargerCatalogueLocal(true);
+      _catVerifT = 0;
+      renderCommandesArticles(true);
+    } catch (e) { alert('❌ Actualisation impossible : ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = lib; }
+  }
   function setTypeArticlesOnglet(t) {
     _articlesOngletType = t;
     _articlesOngletLimite = 100;
@@ -13619,20 +13630,47 @@
   // ============================================================
   let _ficheArticle = null; // { id, code }
   const _nomenclatures = new Map(); // code → réponse du Worker (ou 'chargement')
-  function chargerNomenclature(code) {
-    if (_nomenclatures.has(code)) return;
+  function chargerNomenclature(code, forcer = false) {
+    const n = _nomenclatures.get(code);
+    if (!forcer && n && (n === 'chargement' || !n.erreur)) return; // une erreur n'est pas mise en cache : nouvel essai
     _nomenclatures.set(code, 'chargement');
-    fetch(`${EBP_WORKER}/articles/nomenclature?code=${encodeURIComponent(code)}`, { headers: headersWorker(), cache: 'no-store' })
+    fetch(`${EBP_WORKER}/articles/nomenclature?code=${encodeURIComponent(code)}${forcer ? '&refresh=1&t=' + Date.now() : ''}`, { headers: headersWorker(), cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
       .then(d => { _nomenclatures.set(code, d); rafraichirFicheArticleOuverte(); })
-      .catch(() => { _nomenclatures.set(code, { erreur: true }); rafraichirFicheArticleOuverte(); });
+      .catch(e => { _nomenclatures.set(code, { erreur: true, message: e.message }); rafraichirFicheArticleOuverte(); });
+  }
+  // Mise à jour forcée depuis EBP (nomenclature modifiée, article devenu ouvrage…) :
+  // recharge le catalogue (drapeau ouvrage, nb de composants) puis la nomenclature.
+  let _actualisationEbp = false;
+  async function actualiserArticleDepuisEbp(code) {
+    if (_actualisationEbp) return;
+    _actualisationEbp = true;
+    const btn = document.getElementById('btn-actualiser-ebp');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualisation depuis EBP…'; }
+    try {
+      try { localStorage.removeItem(CLE_CATALOGUE_LOCAL); } catch (e) {}
+      _nomenclatures.clear();
+      await chargerCatalogueLocal(true);
+      _catVerifT = 0;
+      const x = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(normRef(code)) : null;
+      if (x && x.ouvrage) chargerNomenclature(code, true);
+      if (document.getElementById('commandes-vue-articles')?.style.display === 'block') renderCommandesArticles(true);
+      rafraichirFicheArticleOuverte();
+      if (!(x && x.ouvrage)) alert("ℹ️ Catalogue EBP rechargé.\n\nCet article n'est toujours pas vu comme un ouvrage par le connecteur EBP.\nVérifiez dans EBP que la fiche est bien de type « Ouvrage » et enregistrée ; si c'est le cas, le Worker garde sans doute une copie en cache.");
+    } catch (e) {
+      alert('❌ Actualisation impossible : ' + e.message);
+    } finally {
+      _actualisationEbp = false;
+      const b = document.getElementById('btn-actualiser-ebp');
+      if (b) { b.disabled = false; b.textContent = '🔄 Actualiser depuis EBP'; }
+    }
   }
   function renderNomenclatureFiche(code) {
     const esc = echapperHtmlNote;
     const n = _nomenclatures.get(code);
     if (!n || n === 'chargement') return '<div style="font-size:12px;color:#aaa;padding:6px 0">⏳ Chargement de la nomenclature…</div>';
-    if (n.erreur) return '<div style="font-size:12px;color:#a35a00;padding:6px 0">⚠️ Nomenclature indisponible (Worker à mettre à jour ou connexion).</div>';
-    if (!n.composants || !n.composants.length) return '<div style="font-size:12px;color:#999;padding:6px 0">Aucun composant trouvé pour cet ouvrage.</div>';
+    if (n.erreur) return `<div style="font-size:12px;color:#a35a00;padding:6px 0">⚠️ Nomenclature indisponible${n.message ? ' (' + esc(n.message) + ')' : ''} : connexion ou Worker EBP. Touchez « 🔄 Actualiser depuis EBP » pour réessayer.</div>`;
+    if (!n.composants || !n.composants.length) return '<div style="font-size:12px;color:#999;padding:6px 0">Aucun composant trouvé pour cet ouvrage. Si la nomenclature vient d\'être modifiée dans EBP, touchez « 🔄 Actualiser depuis EBP ».</div>';
     const prive = estProfilPrix();
     const parCodeStock = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
     // Ouvrages réalisables avec le stock de l'atelier (composants suivis au stock)
@@ -13706,12 +13744,14 @@
     const unite = (x && x.unite) || (a && a['Unite']) || 'u';
     const estOuvrage = !!(x && x.ouvrage);
     if (estOuvrage) chargerNomenclature(code);
+    const btnActuNonOuvrage = (!estOuvrage && x && code) ? `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" title="Nomenclature ajoutée dans EBP ? Recharger" style="background:#fff;color:#5e35b1;border:1px solid #d1c4e9;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">🔄 Actualiser depuis EBP</button>` : '';
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris);line-height:1.25">${esc(designation)}</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
         ${estOuvrage ? `<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
         ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
         ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
+        ${btnActuNonOuvrage}
       </div>`;
 
     // Informations EBP
@@ -13734,6 +13774,7 @@
         ${gestion ? `<button onclick="desactiverKit(${kit.id})" style="width:100%;margin-top:6px;background:none;border:1px solid #e0d6f0;color:#8e7cc3;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">Retirer de la gestion kit</button>` : ''}`;
       else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
+      html += `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 6px;background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer">🔄 Actualiser depuis EBP</button>`;
       html += `<button onclick="imprimerNomenclatureOuvrage('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 8px;background:#ede7f6;color:#5e35b1;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la nomenclature (QR + composants)</button>`;
       html += renderNomenclatureFiche(code);
     }
@@ -22879,6 +22920,7 @@
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (désignation, code EBP, référence, fournisseur)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="art-type-btn" data-type="tous" onclick="setTypeArticlesOnglet('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">📚 Tous les articles</button>
+        <button onclick="actualiserCatalogueEbpOnglet(this)" title="Recharger le catalogue et les nomenclatures depuis EBP" style="order:9;margin-left:auto;flex:0 0 auto;border:1px solid #d1c4e9;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#5e35b1">🔄 Actualiser EBP</button>
         <button class="art-type-btn" data-type="ouvrages" onclick="setTypeArticlesOnglet('ouvrages')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🧩 Ouvrages</button>
       </div>
     </div>
