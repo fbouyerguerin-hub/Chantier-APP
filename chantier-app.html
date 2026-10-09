@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V58';
+  const APP_VERSION = 'V60';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13650,7 +13650,7 @@
     if (_actualisationEbp) return;
     _actualisationEbp = true;
     const btn = document.getElementById('btn-actualiser-ebp');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualisation depuis EBP…'; }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Relecture dans EBP…'; }
     try {
       // 1. Le Worker relit les nomenclatures dans EBP (refresh=1), puis renvoie celle de l'article
       const rn = await fetch(`${EBP_WORKER}/articles/nomenclature?code=${encodeURIComponent(code)}&refresh=1&t=${Date.now()}`, { headers: headersWorker(), cache: 'no-store' });
@@ -13673,15 +13673,15 @@
     } finally {
       _actualisationEbp = false;
       const b = document.getElementById('btn-actualiser-ebp');
-      if (b) { b.disabled = false; b.textContent = '🔄 Actualiser depuis EBP'; }
+      if (b) { b.disabled = false; b.textContent = '🔄 Relire la nomenclature EBP'; }
     }
   }
   function renderNomenclatureFiche(code) {
     const esc = echapperHtmlNote;
     const n = _nomenclatures.get(code);
     if (!n || n === 'chargement') return '<div style="font-size:12px;color:#aaa;padding:6px 0">⏳ Chargement de la nomenclature…</div>';
-    if (n.erreur) return `<div style="font-size:12px;color:#a35a00;padding:6px 0">⚠️ Nomenclature indisponible${n.message ? ' (' + esc(n.message) + ')' : ''} : connexion ou Worker EBP. Touchez « 🔄 Actualiser depuis EBP » pour réessayer.</div>`;
-    if (!n.composants || !n.composants.length) return '<div style="font-size:12px;color:#999;padding:6px 0">Aucun composant trouvé pour cet ouvrage. Si la nomenclature vient d\'être modifiée dans EBP, touchez « 🔄 Actualiser depuis EBP ».</div>';
+    if (n.erreur) return `<div style="font-size:12px;color:#a35a00;padding:6px 0">⚠️ Nomenclature indisponible${n.message ? ' (' + esc(n.message) + ')' : ''} : connexion ou Worker EBP. Touchez « 🔄 Relire la nomenclature EBP » pour réessayer.</div>`;
+    if (!n.composants || !n.composants.length) return '<div style="font-size:12px;color:#999;padding:6px 0">Aucun composant trouvé pour cet ouvrage. Si la nomenclature vient d\'être modifiée dans EBP, touchez « 🔄 Relire la nomenclature EBP ».</div>';
     const prive = estProfilPrix();
     const parCodeStock = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
     // Ouvrages réalisables avec le stock de l'atelier (composants suivis au stock)
@@ -13755,14 +13755,12 @@
     const unite = (x && x.unite) || (a && a['Unite']) || 'u';
     const estOuvrage = !!(x && x.ouvrage);
     if (estOuvrage) chargerNomenclature(code);
-    const btnActuNonOuvrage = (!estOuvrage && x && code) ? `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" title="Nomenclature ajoutée dans EBP ? Recharger" style="background:#fff;color:#5e35b1;border:1px solid #d1c4e9;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">🔄 Actualiser depuis EBP</button>` : '';
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris);line-height:1.25">${esc(designation)}</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
         ${estOuvrage ? `<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
         ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
         ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
-        ${btnActuNonOuvrage}
       </div>`;
 
     // Informations EBP
@@ -13785,7 +13783,7 @@
         ${gestion ? `<button onclick="desactiverKit(${kit.id})" style="width:100%;margin-top:6px;background:none;border:1px solid #e0d6f0;color:#8e7cc3;border-radius:8px;padding:7px;font-size:11px;font-weight:700;cursor:pointer">Retirer de la gestion kit</button>` : ''}`;
       else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
-      html += `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 6px;background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer">🔄 Actualiser depuis EBP</button>`;
+      html += `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" title="Nomenclature modifiée dans EBP ? Relecture immédiate, sans attendre la synchronisation" style="width:100%;margin:0 0 6px;background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer">🔄 Relire la nomenclature EBP</button>`;
       html += `<button onclick="imprimerNomenclatureOuvrage('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 8px;background:#ede7f6;color:#5e35b1;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la nomenclature (QR + composants)</button>`;
       html += renderNomenclatureFiche(code);
     }
@@ -16675,6 +16673,128 @@
     label.textContent = 'Sync EBP';
     status.style.display = 'block';
     setTimeout(() => { status.style.display = 'none'; }, 10000);
+  }
+
+  // ============================================================
+  // SYNCHRONISATION EBP GLOBALE — un seul bouton « 🔄 Synchroniser »
+  // Enchaîne (l'une après l'autre, pour ménager l'API EBP) :
+  //   1. commandes fournisseurs   2. articles + nomenclatures d'ouvrages
+  //   3. commandes clients        4. répertoire   (3 et 4 : Administrateur / Gestionnaire)
+  // puis recharge les écrans concernés. Suivi dans un petit panneau ; on peut
+  // continuer à utiliser l'appli pendant la synchro.
+  // ============================================================
+  let _syncGlobaleEnCours = false;
+  const BOUTONS_SYNC_GLOBALE = [['btn-sync-ebp', 'sync-icon', 'sync-label'], ['btn-sync-ebp-clients', 'sync-icon-clients', 'sync-label-clients'], ['btn-sync-ebp-repertoire', 'sync-icon-repertoire', 'sync-label-repertoire']];
+  function etatBoutonsSyncGlobale(enCours) {
+    if (!document.getElementById('sync-spin-style')) {
+      const st = document.createElement('style'); st.id = 'sync-spin-style';
+      st.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+      document.head.appendChild(st);
+    }
+    BOUTONS_SYNC_GLOBALE.forEach(([b, i, l]) => {
+      const btn = document.getElementById(b), ic = document.getElementById(i), lb = document.getElementById(l);
+      if (btn) btn.disabled = false; // le bouton rouvre le panneau de suivi pendant la synchro
+      if (ic) ic.style.animation = enCours ? 'spin 1s linear infinite' : '';
+      if (lb) lb.textContent = enCours ? 'Synchro…' : 'Synchroniser';
+    });
+  }
+  function panneauSyncGlobale(etapes, fini) {
+    let p = document.getElementById('panneau-sync-globale');
+    if (!p) {
+      p = document.createElement('div');
+      p.id = 'panneau-sync-globale';
+      p.style.cssText = 'position:fixed;right:12px;bottom:calc(84px + env(safe-area-inset-bottom, 0px));z-index:9800;width:300px;max-width:calc(100vw - 24px);background:#fff;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);padding:12px 14px;font-size:12px';
+      document.body.appendChild(p);
+    }
+    const icone = e => ({ attente: '⏸️', encours: '⏳', ok: '✅', alerte: '⚠️', erreur: '❌', saute: '➖' })[e.etat] || '';
+    p.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <b style="font-size:13px;color:var(--gris)">🔄 Synchronisation EBP</b>
+        <button onclick="document.getElementById('panneau-sync-globale').remove()" title="${fini ? 'Fermer' : 'Masquer (la synchro continue)'}" style="background:#f0f0f0;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer">✕</button>
+      </div>`
+      + etapes.map(e => `<div style="display:flex;gap:8px;padding:4px 0;border-top:1px solid #f4f4f4">
+          <span style="width:18px;text-align:center">${icone(e)}</span>
+          <div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--gris)">${e.lib}</div>${e.detail ? `<div style="color:#888;font-size:11px">${echapperHtmlNote(e.detail)}</div>` : ''}</div>
+        </div>`).join('')
+      + (fini ? `<div style="margin-top:8px;font-size:11px;color:#888">Terminé à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</div>` : '<div style="margin-top:8px;font-size:11px;color:#888">Vous pouvez continuer à utiliser l\'appli.</div>');
+    if (fini) setTimeout(() => { const q = document.getElementById('panneau-sync-globale'); if (q && !etapes.some(e => e.etat === 'erreur' || e.etat === 'alerte')) q.remove(); }, 12000);
+  }
+  async function appelSyncWorker(chemin, delaiMs) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), delaiMs);
+    try {
+      const r = await fetch(`${EBP_WORKER}${chemin}`, { cache: 'no-store', signal: ctrl.signal, headers: headersWorker() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+      return d;
+    } finally { clearTimeout(t); }
+  }
+  let _derniereSyncEtapes = null;
+  async function synchroniserToutEbp() {
+    if (_syncGlobaleEnCours) { if (_derniereSyncEtapes) panneauSyncGlobale(_derniereSyncEtapes, false); return; }
+    _syncGlobaleEnCours = true;
+    const gestion = estProfilPrix();
+    const etapes = [
+      { cle: 'cmd', lib: '📦 Commandes fournisseurs', etat: 'attente' },
+      { cle: 'art', lib: '📚 Articles et ouvrages', etat: 'attente' },
+      { cle: 'cli', lib: '🧾 Commandes clients', etat: gestion ? 'attente' : 'saute', detail: gestion ? '' : 'réservé Administrateur / Gestionnaire' },
+      { cle: 'rep', lib: '📇 Répertoire', etat: gestion ? 'attente' : 'saute', detail: gestion ? '' : 'réservé Administrateur / Gestionnaire' },
+    ];
+    _derniereSyncEtapes = etapes;
+    const maj = () => panneauSyncGlobale(etapes, false);
+    const lancer = async (cle, fn) => {
+      const e = etapes.find(x => x.cle === cle);
+      if (e.etat === 'saute') return;
+      e.etat = 'encours'; e.detail = ''; maj();
+      try { const r = await fn(); e.etat = r && r.alerte ? 'alerte' : 'ok'; e.detail = (r && r.detail) || ''; }
+      catch (err) {
+        e.etat = err.name === 'AbortError' ? 'alerte' : 'erreur';
+        e.detail = err.name === 'AbortError' ? 'long : la synchro continue côté serveur, rechargez dans 1 min' : err.message;
+      }
+      maj();
+    };
+    etatBoutonsSyncGlobale(true);
+    maj();
+    try {
+      await lancer('cmd', async () => {
+        const d = await appelSyncWorker('/sync?updateDate=0', 55000);
+        const nbErr = (d.erreurs || []).length;
+        return { alerte: nbErr > 0, detail: `${d.commandes_crees ?? 0} créée(s), ${d.commandes_maj ?? 0} mise(s) à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
+      });
+      await lancer('art', async () => {
+        const d = await appelSyncWorker('/sync-articles?ouvrages=1', 55000);
+        if (d.status === 'erreur') throw new Error(d.message || (d.erreurs || []).join(' · ') || 'erreur');
+        const ouv = d.ouvrages && typeof d.ouvrages === 'object' ? d.ouvrages : null;
+        return { alerte: ouv && ouv.status === 'erreur', detail: `${d.catalogue ?? '?'} articles · ${d.lus_ebp ?? 0} modifié(s) dans EBP${ouv && ouv.ouvrages != null ? ' · ' + ouv.ouvrages + ' ouvrage(s)' : ''}${ouv && ouv.status === 'erreur' ? ' · ouvrages : ' + ouv.message : ''}` };
+      });
+      await lancer('cli', async () => {
+        const d = await appelSyncWorker('/sync-clients?updateDate=0', 180000);
+        const nbErr = (d.erreurs || []).length;
+        return { alerte: nbErr > 0, detail: `${d.commandes_crees ?? 0} créée(s), ${d.commandes_maj ?? 0} mise(s) à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
+      });
+      await lancer('rep', async () => {
+        const d = await appelSyncWorker('/sync-contacts', 180000);
+        const nbErr = (d.erreurs || []).length;
+        return { alerte: nbErr > 0, detail: `${d.contacts_crees ?? 0} créé(s), ${d.contacts_maj ?? 0} mis à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
+      });
+      // Rechargement des données dans l'appli (après un court délai pour Baserow)
+      await new Promise(r => setTimeout(r, 2000));
+      try { viderCacheBaserow(); } catch (e) {}
+      try { _commandesCache = []; _commandesLignesCache = {}; } catch (e) {}
+      try { localStorage.removeItem(CLE_CATALOGUE_LOCAL); } catch (e) {}
+      try { _nomenclatures.clear(); await chargerCatalogueLocal(true); _catVerifT = 0; } catch (e) {}
+      try { if (stockTablesConfigurees()) await chargerStock(true); } catch (e) {}
+      const page = currentNav || '';
+      try { if (page === 'commandes') await chargerCommandesPage(); } catch (e) {}
+      try { if (page === 'commandes-clients' && gestion) await chargerCommandesClientsPage(); } catch (e) {}
+      try { if (page === 'repertoire') await chargerRepertoirePage(); } catch (e) {}
+      try { if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock(); } catch (e) {}
+      try { if (document.getElementById('commandes-vue-articles')?.style.display === 'block') renderCommandesArticles(true); } catch (e) {}
+      try { rafraichirFicheArticleOuverte(); } catch (e) {}
+    } finally {
+      _syncGlobaleEnCours = false;
+      etatBoutonsSyncGlobale(false);
+      panneauSyncGlobale(etapes, true);
+    }
   }
 
   // ============================================================
@@ -22835,8 +22955,8 @@
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📦 Commandes fournisseurs</div>
     <div style="display:flex;gap:8px;align-items:center">
-      <button onclick="syncEBP()" id="btn-sync-ebp" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
-        <span id="sync-icon">🔄</span><span id="sync-label">Sync EBP</span>
+      <button onclick="synchroniserToutEbp()" id="btn-sync-ebp" title="Synchroniser tout depuis EBP (commandes, articles, ouvrages, clients, répertoire)" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
+        <span id="sync-icon">🔄</span><span id="sync-label">Synchroniser</span>
       </button>
       <button onclick="ouvrirReemploi()" title="Matériel revenu des chantiers, disponible avant de commander" style="background:#fde8c3;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;color:#7c5200;white-space:nowrap">↩️ Réemploi</button>
       <button onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande ou article)" style="background:var(--vert);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:#fff">📷</button>
@@ -22931,7 +23051,6 @@
       <input type="text" id="commandes-articles-recherche" placeholder="🔍 Rechercher un article (désignation, code EBP, référence, fournisseur)…" oninput="renderCommandesArticles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
       <div style="display:flex;gap:6px;margin-top:6px">
         <button class="art-type-btn" data-type="tous" onclick="setTypeArticlesOnglet('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">📚 Tous les articles</button>
-        <button onclick="actualiserCatalogueEbpOnglet(this)" title="Recharger le catalogue et les nomenclatures depuis EBP" style="order:9;margin-left:auto;flex:0 0 auto;border:1px solid #d1c4e9;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:#5e35b1">🔄 Actualiser EBP</button>
         <button class="art-type-btn" data-type="ouvrages" onclick="setTypeArticlesOnglet('ouvrages')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🧩 Ouvrages</button>
       </div>
     </div>
@@ -22980,7 +23099,6 @@
       <button onclick="ouvrirScanSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;margin-bottom:8px">📷 Sortie rapide par scan</button>
       <button onclick="ouvrirRetourChantier()" style="width:100%;background:#fff;color:var(--vert);border:1.5px solid var(--vert);border-radius:10px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px">↩️ Retour chantier</button>
       <div id="stock-outils-gestion" style="display:none;gap:8px;margin-bottom:8px">
-        <button id="btn-sync-articles" onclick="syncArticlesEBP()" style="flex:1;background:#e8f0e7;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🔄 Sync articles EBP</button>
         <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
         <button onclick="imprimerEtiquettesListe()" title="Imprimer les étiquettes QR des articles affichés" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Étiquettes</button>
         <button onclick="ouvrirCoutsChantiers()" title="Coût du stock consommé par chantier" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">💶 Coûts</button>
@@ -23008,8 +23126,8 @@
   <div class="bandeau-fige">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">🧾 Commandes clients</div>
-    <button onclick="syncEBPClients()" id="btn-sync-ebp-clients" title="Synchroniser depuis EBP" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
-      <span id="sync-icon-clients">🔄</span><span id="sync-label-clients">Sync EBP</span>
+    <button onclick="synchroniserToutEbp()" id="btn-sync-ebp-clients" title="Synchroniser tout depuis EBP (commandes, articles, ouvrages, clients, répertoire)" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
+      <span id="sync-icon-clients">🔄</span><span id="sync-label-clients">Synchroniser</span>
     </button>
   </div>
   <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
@@ -23027,8 +23145,8 @@
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📇 Répertoire</div>
     <div style="display:flex;gap:8px;align-items:center">
-      <button id="btn-sync-ebp-repertoire" onclick="syncEBPRepertoire()" title="Synchroniser depuis EBP" style="display:none;background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);align-items:center;gap:5px;font-weight:700">
-        <span id="sync-icon-repertoire">🔄</span><span id="sync-label-repertoire">Sync EBP</span>
+      <button id="btn-sync-ebp-repertoire" onclick="synchroniserToutEbp()" title="Synchroniser tout depuis EBP (commandes, articles, ouvrages, clients, répertoire)" style="display:none;background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);align-items:center;gap:5px;font-weight:700">
+        <span id="sync-icon-repertoire">🔄</span><span id="sync-label-repertoire">Synchroniser</span>
       </button>
       <button id="btn-repertoire-nouveau" onclick="ouvrirContactRepertoire(null)" style="display:none;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
     </div>
