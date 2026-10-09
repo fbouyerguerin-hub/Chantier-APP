@@ -38,6 +38,7 @@
        restent collés en haut de cette zone. --h-header = hauteur de l'en-tête (caleBandeaux()). */
     .page.page-figee.active { display: flex !important; flex-direction: column; height: calc(100vh - var(--h-header, 0px) - 70px); height: calc(100dvh - var(--h-header, 0px) - 70px); /* 70px = marge basse du body réservée à la barre de navigation */ overflow: hidden; }
     .page-figee > .bandeau-fige { flex: 0 0 auto; background: var(--gris-clair); box-shadow: 0 6px 8px -8px rgba(0,0,0,0.25); position: relative; z-index: 9; }
+    html, body { overscroll-behavior-y: contain; } /* pas de « tirer pour actualiser » du navigateur (déconnectait l appli) */
     .page-figee > .zone-defilement { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
     .zone-defilement .filtre-fige { position: sticky; top: 0; z-index: 8; background: var(--gris-clair); padding-top: 6px; padding-bottom: 6px; box-shadow: 0 6px 8px -8px rgba(0,0,0,0.18); }
     @media print {
@@ -741,7 +742,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V67';
+  const APP_VERSION = 'V69';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -986,6 +987,7 @@
 
       errEl.style.display = 'none';
       connectedUserRowId = user.id;
+      memoriserSessionOnglet(data.session, user);
       seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '', user['Accès Plan de charge'] === true);
       // Appli ouverte depuis un QR flashé avec l'appareil photo du téléphone
       // (lien …?scan=CODE) : afficher la fiche dès la connexion.
@@ -1504,6 +1506,39 @@
     tableData['Chantiers'] = estUtilisateurSimpleConnecte() ? _chantiersTousSaisie.filter(c => chantierVisibleUtilisateur(c.statut)) : _chantiersTousSaisie;
   }
 
+  // ── SESSION CONSERVÉE AU RECHARGEMENT ──
+  // Un rechargement de la page (glisser vers le bas, mise à jour automatique de l'appli…)
+  // ne déconnecte plus : la session est gardée pour cette appli ouverte (sessionStorage,
+  // effacé à la fermeture de l'appli et par 🚪 Quitter), 12 h maximum.
+  const CLE_SESSION_ONGLET = 'gb_session_onglet';
+  function memoriserSessionOnglet(session, user) {
+    try { sessionStorage.setItem(CLE_SESSION_ONGLET, JSON.stringify({ session, user, t: Date.now(), page: currentNav || 'saisie' })); } catch (e) {}
+  }
+  function memoriserPageOnglet(nav) {
+    try { const o = JSON.parse(sessionStorage.getItem(CLE_SESSION_ONGLET) || 'null'); if (o) { o.page = nav; sessionStorage.setItem(CLE_SESSION_ONGLET, JSON.stringify(o)); } } catch (e) {}
+  }
+  function oublierSessionOnglet() { try { sessionStorage.removeItem(CLE_SESSION_ONGLET); } catch (e) {} }
+  async function restaurerSessionOnglet() {
+    let o = null;
+    try { o = JSON.parse(sessionStorage.getItem(CLE_SESSION_ONGLET) || 'null'); } catch (e) {}
+    if (!o || !o.session || !o.user || Date.now() - (o.t || 0) > 12 * 3600000) { oublierSessionOnglet(); return false; }
+    try {
+      _sessionApp = o.session;
+      await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
+      const user = o.user;
+      connectedUserRowId = user.id;
+      seConnecter(user['Nom complet'], user['Vue ID'], user['Droit']?.value || user['Droit'] || '', user['Accès Plan de charge'] === true);
+      if (o.page && o.page !== 'saisie') { try { switchPage(o.page); } catch (e) {} }
+      return true;
+    } catch (e) {
+      console.warn('Session non restaurée', e);
+      _sessionApp = null;
+      oublierSessionOnglet();
+      showPage('page-login');
+      return false;
+    }
+  }
+
   async function init() {
     const versionTag = document.getElementById('app-version-tag');
     if (versionTag) versionTag.textContent = 'Version ' + APP_VERSION;
@@ -1511,6 +1546,7 @@
     document.getElementById('field-date').value = todayLocal;
     ajouterLigne();
     showPage('page-login');
+    if (!_scanEnAttente) await restaurerSessionOnglet();
   }
 
   function ajouterLigne() {
@@ -1824,6 +1860,8 @@
   function switchPage(nav) {
     if (typeof viderCacheVolatile === 'function') viderCacheVolatile(); // chaque onglet relit Baserow (listes de référence gardées)
     currentNav = nav;
+    try { memoriserOnglet(nav); } catch (e) {}
+    try { memoriserPageOnglet(nav); } catch (e) {}
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const navBtn = document.getElementById('nav-' + nav);
     if (navBtn) navBtn.classList.add('active');
@@ -2505,15 +2543,57 @@
   function estAppareilMobile() {
     try { return window.matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); } catch (e) { return false; }
   }
+  // Bouton « Retour » du téléphone = navigation DANS l'appli (plus jamais de sortie/déconnexion) :
+  //   1. une fenêtre est ouverte → elle se ferme ;
+  //   2. sinon → retour à l'onglet précédent ;
+  //   3. sur l'onglet de départ → alerte « Vous allez quitter » (Rester / Quitter).
+  // Chrome ignore les entrées d'historique ajoutées sans geste de l'utilisateur : l'entrée
+  // « tampon » est donc remise au prochain toucher de l'écran (sinon le 2e Retour fermait l'appli).
+  let _pileOnglets = [], _retourEnCours = false, _tamponARemettre = false;
+  function poserTamponHistorique() {
+    try { if (!history.state || !history.state.gardeSortie) history.pushState({ gardeSortie: true }, '', location.href); } catch (e) {}
+    _tamponARemettre = false;
+  }
+  function memoriserOnglet(nav) {
+    if (_retourEnCours || !nav) return;
+    if (_pileOnglets[_pileOnglets.length - 1] !== nav) _pileOnglets.push(nav);
+    if (_pileOnglets.length > 30) _pileOnglets.shift();
+  }
+  function fenetreOuverteLaPlusHaute() {
+    const candidats = [...document.querySelectorAll('div[id^="modal-"], div[id^="panneau-"]')]
+      .filter(el => { try { const cs = getComputedStyle(el); return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.position === 'fixed'; } catch (e) { return false; } });
+    candidats.sort((a, b) => (parseInt(getComputedStyle(b).zIndex) || 0) - (parseInt(getComputedStyle(a).zIndex) || 0));
+    return candidats[0] || null;
+  }
+  function fermerFenetre(el) {
+    // Bouton de fermeture de la fenêtre (✕ / Fermer / Annuler) s'il existe, sinon masquage
+    const btn = [...el.querySelectorAll('button')].find(b => /^(✕|×|x|fermer|annuler|retour)$/i.test((b.textContent || '').trim()));
+    if (btn) { btn.click(); if (!document.body.contains(el) || getComputedStyle(el).display === 'none') return; }
+    if (el.id === 'modal-garde-sortie' || el.id === 'modal-facturation' || el.id.startsWith('panneau-')) el.remove();
+    else el.style.display = 'none';
+  }
   function activerGardeSortie() {
     if (!estAppareilMobile()) return;
     _gardeSortieActive = true;
-    try { if (!history.state || !history.state.gardeSortie) history.pushState({ gardeSortie: true }, '', location.href); } catch (e) {}
+    poserTamponHistorique();
     if (_gardeSortieInit) return;
     _gardeSortieInit = true;
+    const remettre = () => { if (_tamponARemettre && _gardeSortieActive && connectedCollab) poserTamponHistorique(); };
+    document.addEventListener('pointerdown', remettre, true);
+    document.addEventListener('keydown', remettre, true);
     window.addEventListener('popstate', () => {
       if (!_gardeSortieActive || !connectedCollab) return;
-      try { history.pushState({ gardeSortie: true }, '', location.href); } catch (e) {} // on reste dans l'appli
+      _tamponARemettre = true;
+      poserTamponHistorique(); // tentative immédiate (acceptée si un geste récent existe)
+      const f = fenetreOuverteLaPlusHaute();
+      if (f) { fermerFenetre(f); return; }
+      if (_pileOnglets.length > 1) {
+        _pileOnglets.pop();
+        const precedent = _pileOnglets[_pileOnglets.length - 1];
+        _retourEnCours = true;
+        try { switchPage(precedent); } finally { _retourEnCours = false; }
+        return;
+      }
       afficherAlerteSortie();
     });
   }
@@ -2536,6 +2616,8 @@
 
   function seDeconnecter() {
     _gardeSortieActive = false; // sortie volontaire : plus d'alerte
+    oublierSessionOnglet(); // 🚪 Quitter : la session n'est plus restaurée
+    _pileOnglets = [];
     _peutVoirPrixActuel = false; // droits prix / ARC retirés à la déconnexion
     const wValidation = document.getElementById('widget-validation-heures');
     if (wValidation) wValidation.style.display = 'none';
