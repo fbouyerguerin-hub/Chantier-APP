@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V60';
+  const APP_VERSION = 'V61';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -4632,7 +4632,7 @@
     const lignes = _commandesLignesCache[commandeId] || [];
     const sel = _departSel[uid] || {};
     const choisies = lignes.filter(l => (sel[l.id] || 0) > 0);
-    const aPartir = lignes.filter(l => qteResteAtelier(l) > 0);
+    const aPartir = lignes.filter(l => estLigneArticleDepart(l) && qteResteAtelier(l) > 0); // lignes de texte ignorées
     // Commande sans lignes détaillées : départ global comme avant
     if (aPartir.length && !choisies.length) { alert('Cochez (ou scannez) les articles qui partent sur le chantier.'); return; }
     const complet = !aPartir.length || aPartir.every(l => (sel[l.id] || 0) >= qteResteAtelier(l) - 0.0005);
@@ -17516,12 +17516,34 @@
   }
   function qteEnvoyee(l) { return Number(l[CHAMP_QTE_ENVOYEE]) || 0; }
   function qteResteAtelier(l) { return Math.max(0, Math.round((qteRecueAtelier(l) - qteEnvoyee(l)) * 1000) / 1000); }
+  // Ligne « article » : quantité commandée > 0. Les lignes de texte / titres de section
+  // (ex. « Pliages 75/100 - RAL 1015 », qté 0) ne partent pas et ne comptent pas.
+  function estLigneArticleDepart(l) { return (parseFloat(l['Quantite']) || 0) > 0; }
+  const _departTotalCorrige = new Set();
   function resumeDepartPartiel(r) {
-    const lignes = _commandesLignesCache[r.id] || [];
+    const lignes = (_commandesLignesCache[r.id] || []).filter(estLigneArticleDepart);
     const parties = lignes.filter(l => qteEnvoyee(l) > 0).length;
     if (!parties) return '';
     const restantes = lignes.filter(l => qteResteAtelier(l) > 0).length;
+    if (!restantes) {
+      // Tout est parti : la commande doit être « Envoyé sur chantier » (correction automatique si besoin)
+      const statut = normaliserTexteStatut(extraireValeurChamp(r['Statut'], ''));
+      if (statut !== normaliserTexteStatut('Envoyé sur chantier') && !estCommandeFacturee(r) && !_departTotalCorrige.has(r.id) && connectedCollab) {
+        _departTotalCorrige.add(r.id);
+        finaliserDepartTotal(r).catch(e => console.warn('Départ total non enregistré', e));
+      }
+      return `<div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:#e8f5e9;color:#2e7d32;font-size:11px;font-weight:700">🚚 Départ total : ${parties} ligne(s) partie(s) sur chantier · plus rien à l'atelier</div>`;
+    }
     return `<div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:11px;font-weight:700">🚚 Départ partiel : ${parties} ligne(s) déjà partie(s) · ${restantes} encore à l'atelier</div>`;
+  }
+  async function finaliserDepartTotal(r) {
+    const payload = { 'Statut': 'Envoyé sur chantier' };
+    if (!r['Date envoi chantier']) payload['Date envoi chantier'] = dateYMD(new Date());
+    const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${r.id}/?user_field_names=true`, {
+      method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Baserow ' + res.status);
+    await rafraichirApresActionCommande();
   }
   function renderDepartLignes(uid) {
     const el = document.getElementById('depart-lignes-' + uid);
@@ -17531,7 +17553,7 @@
     const lignes = _commandesLignesCache[id] || [];
     const sel = _departSel[uid] || (_departSel[uid] = {});
     const esc = echapperHtmlNote;
-    const aPartir = lignes.filter(l => qteResteAtelier(l) > 0);
+    const aPartir = lignes.filter(l => estLigneArticleDepart(l) && qteResteAtelier(l) > 0);
     const nbSel = Object.values(sel).filter(q => q > 0).length;
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <span style="font-size:12px;font-weight:800;color:var(--gris)">Articles qui partent (${nbSel}/${aPartir.length})</span>
@@ -17582,7 +17604,7 @@
     const uid = _departScanUid; if (!uid) return false;
     const form = document.getElementById('depart-form-' + uid);
     if (!form || form.style.display === 'none') return false;
-    const lignes = (_commandesLignesCache[Number(form.dataset.commande)] || []).filter(l => qteResteAtelier(l) > 0);
+    const lignes = (_commandesLignesCache[Number(form.dataset.commande)] || []).filter(l => estLigneArticleDepart(l) && qteResteAtelier(l) > 0);
     const m = code.match(/^LIG-(\d+)$/i);
     const n = normRef(code);
     const l = m ? lignes.find(x => x.id === Number(m[1]))
