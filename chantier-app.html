@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V57';
+  const APP_VERSION = 'V58';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12073,6 +12073,10 @@
   async function actualiserCatalogueEbpOnglet(btn) {
     btn.disabled = true; const lib = btn.textContent; btn.textContent = '⏳ Actualisation…';
     try {
+      // Le Worker relit d'abord les nomenclatures dans EBP
+      const rs = await fetch(`${EBP_WORKER}/sync-ouvrages?t=${Date.now()}`, { headers: headersWorker(), cache: 'no-store' });
+      const d = rs.ok ? await rs.json() : null;
+      if (!rs.ok || (d && d.status === 'erreur')) throw new Error('Lecture EBP : ' + ((d && d.message) || 'HTTP ' + rs.status));
       try { localStorage.removeItem(CLE_CATALOGUE_LOCAL); } catch (e) {}
       _nomenclatures.clear();
       await chargerCatalogueLocal(true);
@@ -13648,15 +13652,22 @@
     const btn = document.getElementById('btn-actualiser-ebp');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Actualisation depuis EBP…'; }
     try {
+      // 1. Le Worker relit les nomenclatures dans EBP (refresh=1), puis renvoie celle de l'article
+      const rn = await fetch(`${EBP_WORKER}/articles/nomenclature?code=${encodeURIComponent(code)}&refresh=1&t=${Date.now()}`, { headers: headersWorker(), cache: 'no-store' });
+      if (!rn.ok) throw new Error('Worker EBP : HTTP ' + rn.status);
+      const nomen = await rn.json();
+      if (nomen.actualisation && nomen.actualisation.status === 'erreur') throw new Error('Lecture EBP : ' + (nomen.actualisation.message || 'erreur'));
+      // 2. Catalogue rechargé (repère « ouvrage » et nombre de composants à jour)
       try { localStorage.removeItem(CLE_CATALOGUE_LOCAL); } catch (e) {}
       _nomenclatures.clear();
       await chargerCatalogueLocal(true);
       _catVerifT = 0;
+      if (nomen.ouvrage) _nomenclatures.set(code, nomen);
       const x = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(normRef(code)) : null;
-      if (x && x.ouvrage) chargerNomenclature(code, true);
+      if (x && nomen.ouvrage) { x.ouvrage = true; x.nbComp = (nomen.composants || []).length; }
       if (document.getElementById('commandes-vue-articles')?.style.display === 'block') renderCommandesArticles(true);
       rafraichirFicheArticleOuverte();
-      if (!(x && x.ouvrage)) alert("ℹ️ Catalogue EBP rechargé.\n\nCet article n'est toujours pas vu comme un ouvrage par le connecteur EBP.\nVérifiez dans EBP que la fiche est bien de type « Ouvrage » et enregistrée ; si c'est le cas, le Worker garde sans doute une copie en cache.");
+      if (!nomen.ouvrage) alert("ℹ️ Catalogue EBP rechargé.\n\nCet article n'est toujours pas vu comme un ouvrage par le connecteur EBP.\nVérifiez dans EBP que la nomenclature est bien enregistrée sur cet article.");
     } catch (e) {
       alert('❌ Actualisation impossible : ' + e.message);
     } finally {
