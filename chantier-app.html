@@ -38,7 +38,6 @@
        restent collés en haut de cette zone. --h-header = hauteur de l'en-tête (caleBandeaux()). */
     .page.page-figee.active { display: flex !important; flex-direction: column; height: calc(100vh - var(--h-header, 0px) - 70px); height: calc(100dvh - var(--h-header, 0px) - 70px); /* 70px = marge basse du body réservée à la barre de navigation */ overflow: hidden; }
     .page-figee > .bandeau-fige { flex: 0 0 auto; background: var(--gris-clair); box-shadow: 0 6px 8px -8px rgba(0,0,0,0.25); position: relative; z-index: 9; }
-    html, body { overscroll-behavior-y: contain; } /* pas de « tirer pour actualiser » du navigateur (déconnectait l appli) */
     .page-figee > .zone-defilement { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
     .zone-defilement .filtre-fige { position: sticky; top: 0; z-index: 8; background: var(--gris-clair); padding-top: 6px; padding-bottom: 6px; box-shadow: 0 6px 8px -8px rgba(0,0,0,0.18); }
     @media print {
@@ -742,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V69';
+  const APP_VERSION = 'V70';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
