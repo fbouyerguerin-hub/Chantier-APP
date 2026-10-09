@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V62';
+  const APP_VERSION = 'V63';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -4590,7 +4590,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     }
 
@@ -12193,7 +12193,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     }
 
@@ -12209,6 +12209,28 @@
     if (_commandesVueActuelle === 'receptionnees') _commandesTrieesActuelles = triees;
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'receptionnees')).join('') ||
       `<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">${_sousOngletReceptionnees === 'chantier' ? 'Aucune commande partie sur chantier.' : "Aucune commande réceptionnée à l'atelier."}</div>`;
+  }
+
+  // ── RECHERCHE DES COMMANDES (tous les onglets) ──
+  // Plusieurs mots ou morceaux de mots, dans n'importe quel ordre : « FB emaneo »
+  // garde les commandes qui contiennent « fb » ET « emaneo » quelque part (chantier,
+  // fournisseur, n° commande / devis / facture, référence, statut, notes, personnes,
+  // et désignations / références des lignes d'articles). Majuscules et accents ignorés.
+  function normRechCmd(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function texteRechercheCommande(r) {
+    const chantiers = (r['Chantier'] || []).map(c => c && c.value).join(' ');
+    const lignes = (_commandesLignesCache && _commandesLignesCache[r.id]) || [];
+    return normRechCmd([
+      chantiers, r['Fournisseur'], r['Numero commande'], r['Numero devis'], r['Numero facture'], r['Reference complete'],
+      extraireValeurChamp(r['Statut'], ''), r['Note statut'], r['Valide par'], r['Receptionne par'], r['Envoye par'], r['Facture par'],
+      ...lignes.map(l => [l['Reference'], l['Ref'], l['Code article'], l['Reference fournisseur'], l['Description'], l['Designation']].filter(Boolean).join(' '))
+    ].filter(Boolean).join(' '));
+  }
+  function correspondRechercheCommande(r, recherche) {
+    const mots = normRechCmd(recherche).split(/[\s+,;]+/).filter(Boolean);
+    if (!mots.length) return true;
+    const t = texteRechercheCommande(r);
+    return mots.every(m => t.includes(m));
   }
 
   // ── FACTURATION (RAF) ──
@@ -12337,8 +12359,7 @@
     const mois = document.getElementById('commandes-facturees-mois')?.value || '';
     let filtrees = _commandesCache.filter(estCommandeFacturee);
     if (mois) filtrees = filtrees.filter(r => String(r['Date facture'] || '').slice(0, 7) === mois);
-    if (recherche) filtrees = filtrees.filter(r => [((r['Chantier'] || [])[0]?.value), r['Fournisseur'], r['Numero commande'], r['Numero devis'], r['Numero facture']]
-      .some(v => String(v || '').toLowerCase().includes(recherche)));
+    if (recherche) filtrees = filtrees.filter(r => correspondRechercheCommande(r, recherche));
     const triees = [...filtrees].sort((a, b) => String(b['Date facture'] || b['Date commande'] || '').localeCompare(String(a['Date facture'] || a['Date commande'] || '')));
     if (_commandesVueActuelle === 'facturees') _commandesTrieesActuelles = triees;
     const totCmd = triees.reduce((t, r) => t + (Number(r['Montant total HT']) || 0), 0);
@@ -12372,7 +12393,7 @@
 
     let groupes = Object.values(parChantier);
     if (recherche) {
-      groupes = groupes.filter(g => g.nom.toLowerCase().includes(recherche));
+      groupes = groupes.filter(g => correspondRechercheCommande({ Chantier: [{ value: g.nom }] }, recherche) || g.commandes.some(r => correspondRechercheCommande(r, recherche)));
     }
     groupes.sort((a, b) => a.nom.localeCompare(b.nom));
 
@@ -12430,7 +12451,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     } else {
       candidates = _commandesCache.filter(r => idsAvecRetour.has(r.id));
@@ -12625,7 +12646,7 @@
       const fournisseur = (r['Fournisseur'] || '').toLowerCase();
       const numero = (r['Numero commande'] || '').toLowerCase();
       const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-      return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+      return correspondRechercheCommande(r, recherche);
     });
     const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     zoneResultats.innerHTML = triees.length
@@ -12651,7 +12672,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     }
 
@@ -12685,7 +12706,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     }
 
@@ -12715,7 +12736,7 @@
         const fournisseur = (r['Fournisseur'] || '').toLowerCase();
         const numero = (r['Numero commande'] || '').toLowerCase();
         const numeroDevis = (r['Numero devis'] || '').toLowerCase();
-        return chantierNom.includes(recherche) || fournisseur.includes(recherche) || numero.includes(recherche) || numeroDevis.includes(recherche);
+        return correspondRechercheCommande(r, recherche);
       });
     }
 
@@ -16921,13 +16942,12 @@
     const resumeEl = document.getElementById('commandes-clients-resume');
     if (!listeEl) return;
     const recherche = (document.getElementById('commandes-clients-recherche')?.value || '').trim().toLowerCase();
-    const mots = recherche.split(/\s+/).filter(Boolean);
-    const resultats = _commandesClientsCache.filter(r => {
-      const client = (r['Client'] || '').toLowerCase();
-      const numero = String(r['Numero commande'] || '').toLowerCase();
-      const texte = `${client} ${numero}`;
-      return mots.every(m => texte.includes(m));
-    });
+    const mots = normRechCmd(recherche).split(/[\s+,;]+/).filter(Boolean);
+    // Tous les champs texte de la commande client (client, n°, chantier, devis, statut…), accents ignorés
+    const texteLigne = r => normRechCmd(Object.entries(r).filter(([k]) => k !== 'id' && k !== 'order')
+      .map(([, v]) => Array.isArray(v) ? v.map(x => (x && typeof x === 'object') ? (x.value ?? x.name ?? '') : x).join(' ')
+        : (v && typeof v === 'object') ? (v.value ?? '') : v).join(' '));
+    const resultats = _commandesClientsCache.filter(r => { const t = texteLigne(r); return mots.every(m => t.includes(m)); });
     if (resumeEl) {
       const masquees = _commandesClientsTotalBase - _commandesClientsCache.length;
       resumeEl.textContent = resultats.length + ' commande(s) client' + (masquees > 0
@@ -23039,7 +23059,7 @@
   <div id="commandes-vue-liste">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
+      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -23048,7 +23068,7 @@
   <div id="commandes-vue-ar" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="commandes-ar-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -23056,7 +23076,7 @@
   <!-- Vue Réception partielle -->
   <div id="commandes-vue-partielle" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesPartielles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesPartielles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-partielle-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -23064,7 +23084,7 @@
   <!-- Vue Réceptionnées -->
   <div id="commandes-vue-receptionnees" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
       <div style="display:flex;gap:6px;margin:6px 0 4px;overflow-x:auto">
         <button class="recep-sous-btn" data-sous="atelier" onclick="setSousOngletReceptionnees('atelier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">🏭 À l'atelier <span id="recep-nb-atelier"></span></button>
         <button class="recep-sous-btn" data-sous="chantier" onclick="setSousOngletReceptionnees('chantier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🚚 Parties sur chantier <span id="recep-nb-chantier"></span></button>
@@ -23076,7 +23096,7 @@
   <!-- Vue Facturées (RAF) : commandes rapprochées de leur facture fournisseur — Administrateur / Gestionnaire -->
   <div id="commandes-vue-facturees" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-facturees-recherche" placeholder="🔍 Rechercher (chantier, fournisseur, n° commande, devis ou facture)…" oninput="renderCommandesFacturees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-facturees-recherche" placeholder="🔍 Rechercher (chantier, fournisseur, n° commande, devis ou facture) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesFacturees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
       <div style="display:flex;gap:8px;align-items:center;margin:6px 0 2px;flex-wrap:wrap">
         <label style="font-size:11px;color:#777">Mois de facture</label>
         <input type="month" id="commandes-facturees-mois" onchange="renderCommandesFacturees()" style="border:1px solid #ddd;border-radius:8px;padding:5px 8px;font-size:12px" />
@@ -23090,7 +23110,7 @@
   <!-- Vue Par chantier -->
   <div id="commandes-vue-chantier" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-chantier-recherche" placeholder="🔍 Rechercher un chantier…" oninput="renderCommandesParChantier()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-chantier-recherche" placeholder="🔍 Rechercher un chantier — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesParChantier()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-par-chantier" style="padding:8px 16px 80px"></div>
   </div>
@@ -23111,7 +23131,7 @@
   <div id="commandes-vue-retour" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="retour-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
   </div>
