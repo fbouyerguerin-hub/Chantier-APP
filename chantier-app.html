@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V63';
+  const APP_VERSION = 'V65';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1894,7 +1894,8 @@
   //   - Source     : texte (« EBP » ou « Manuel »)
   // Les clients et fournisseurs EBP sont poussés dans cette table par le Worker (route /sync-contacts, + cron).
   // ID mémorisé si l'appli l'a retrouvé automatiquement (voir resoudreTableRepertoire)
-  let TABLE_REPERTOIRE = (() => { try { return localStorage.getItem('gb_table_repertoire') || '2442130'; } catch (e) { return '2442130'; } })();
+  // Table Baserow « Répertoire » : 1228501 (2442130 était l'ID de la VUE, pas de la table)
+  let TABLE_REPERTOIRE = (() => { try { const v = localStorage.getItem('gb_table_repertoire'); return (v && v !== '2442130') ? v : '1228501'; } catch (e) { return '1228501'; } })();
   const REPERTOIRE_CATEGORIES = ['Client', 'Fournisseur', 'Sous-traitant', 'Collaborateur', 'Administration', 'Autre'];
   const REPERTOIRE_COULEURS = {
     'Client': '#2e7d32', 'Fournisseur': '#1565c0', 'Sous-traitant': '#ef6c00',
@@ -12233,6 +12234,27 @@
     return mots.every(m => t.includes(m));
   }
 
+  // Resynchronisation d'UNE commande (en-tête + lignes d'articles), quelle que soit sa date de modification
+  async function resynchroniserCommande(id, btn) {
+    const r = (_commandesCache || []).find(x => x.id === id);
+    if (!r) return;
+    const lib = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Lecture dans EBP…'; }
+    try {
+      const d = await appelSyncWorker(`/sync?num=${encodeURIComponent(r['Numero commande'])}&depuis=${encodeURIComponent(String(r['Date commande'] || '').slice(0, 10))}&t=${Date.now()}`, 60000);
+      if (d.status === 'introuvable') throw new Error(d.message);
+      if ((d.erreurs || []).length) throw new Error(d.erreurs.map(e => e.erreur).join(' · '));
+      const n = (d.lignes_crees || 0) + (d.lignes_maj || 0) + (d.lignes_suppr || 0);
+      await rafraichirApresActionCommande();
+      if (typeof afficherToast === 'function') afficherToast(n || d.commandes_maj ? `✅ Commande mise à jour (${d.lignes_crees || 0} ligne(s) ajoutée(s), ${d.lignes_maj || 0} modifiée(s), ${d.lignes_suppr || 0} supprimée(s))` : '✅ Commande déjà à jour');
+      else alert(n || d.commandes_maj ? `✅ Commande mise à jour : ${d.lignes_crees || 0} ligne(s) ajoutée(s), ${d.lignes_maj || 0} modifiée(s), ${d.lignes_suppr || 0} supprimée(s).` : '✅ Commande déjà à jour avec EBP.');
+    } catch (e) {
+      alert('❌ Resynchronisation impossible : ' + (e.name === 'AbortError' ? 'délai dépassé, réessayez' : e.message));
+    } finally {
+      if (btn && document.body.contains(btn)) { btn.disabled = false; btn.textContent = lib; }
+    }
+  }
+
   // ── FACTURATION (RAF) ──
   // Une commande réceptionnée passe au statut « Facturée » quand la facture fournisseur
   // est reçue et rapprochée. Champs optionnels de la table Commandes (ignorés s'ils
@@ -16803,7 +16825,8 @@
       await lancer('cmd', async () => {
         const d = await appelSyncWorker('/sync?updateDate=0', 55000);
         const nbErr = (d.erreurs || []).length;
-        return { alerte: nbErr > 0, detail: `${d.commandes_crees ?? 0} créée(s), ${d.commandes_maj ?? 0} mise(s) à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
+        const lig = (d.lignes_crees || 0) + (d.lignes_maj || 0) + (d.lignes_suppr || 0);
+        return { alerte: nbErr > 0, detail: `${d.commandes_crees ?? 0} créée(s), ${d.commandes_maj ?? 0} mise(s) à jour${lig ? ' · ' + lig + ' ligne(s) d\'articles modifiée(s)' : ''}${nbErr ? ' · ' + nbErr + ' erreur(s) : ' + d.erreurs.slice(0, 3).map(e => e.num).join(', ') : ''}` };
       });
       await lancer('art', async () => {
         const d = await appelSyncWorker('/sync-articles?ouvrages=1', 55000);
@@ -16817,7 +16840,13 @@
         return { alerte: nbErr > 0, detail: `${d.commandes_crees ?? 0} créée(s), ${d.commandes_maj ?? 0} mise(s) à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
       });
       await lancer('rep', async () => {
-        const d = await appelSyncWorker('/sync-contacts', 180000);
+        let d;
+        try { d = await appelSyncWorker('/sync-contacts', 180000); }
+        catch (e) {
+          if (/TABLE_DOES_NOT_EXIST|does not exist|404/i.test(e.message)) return { detail: 'table Répertoire non créée dans Baserow : étape ignorée' };
+          throw e;
+        }
+        if ((d.erreurs || []).some(x => /TABLE_DOES_NOT_EXIST/i.test(JSON.stringify(x)))) return { detail: 'table Répertoire non créée dans Baserow : étape ignorée' };
         const nbErr = (d.erreurs || []).length;
         return { alerte: nbErr > 0, detail: `${d.contacts_crees ?? 0} créé(s), ${d.contacts_maj ?? 0} mis à jour${nbErr ? ' · ' + nbErr + ' erreur(s)' : ''}` };
       });
@@ -17310,6 +17339,7 @@
       ${(statut === 'Réception partielle' && nbManquant) ? `<div style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;margin-left:6px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:11px;font-weight:700;color:#a5761f">🔶 ${nbManquant} article(s) manquant(s)</div>` : ''}
       ${detailsHTML}
       ${blocFacturationCommande(r, statut, peutVoirPrix, montantHT)}
+      ${r['Numero commande'] && estProfilPrix() ? `<button onclick="resynchroniserCommande(${r.id}, this)" title="Relire cette commande et ses articles dans EBP" style="margin-top:6px;background:#fff;color:var(--gris-moyen);border:1px dashed #ccc;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🔄 Resynchroniser depuis EBP</button>` : ''}
       ${peutRetourStock ? `<button onclick="ouvrirRetourChantierPour(this.dataset.chantier)" data-chantier="${echapperHtmlNote((r['Chantier'] || [])[0]?.value || '').replace(/"/g, '&quot;')}" style="width:100%;margin-top:6px;background:#fff;color:var(--vert);border:1px solid #c5d9c3;border-radius:8px;padding:6px;font-size:11px;font-weight:700;cursor:pointer">↩️ Retour chantier (surplus au stock atelier)</button>` : ''}
     </div>`;
   }
