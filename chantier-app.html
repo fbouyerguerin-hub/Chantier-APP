@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V61';
+  const APP_VERSION = 'V62';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12165,6 +12165,22 @@
     }, tout ? 0 : 80);
   }
 
+  // Sous-onglets de Réceptionnées : à l'atelier / parties sur chantier
+  // (« Envoyé sur chantier » ou livrée directement « Réceptionné sur chantier »)
+  let _sousOngletReceptionnees = 'atelier';
+  function estCommandeSurChantier(r) {
+    const st = normaliserTexteStatut(extraireValeurChamp(r['Statut'], ''));
+    return st === normaliserTexteStatut('Envoyé sur chantier') || st === normaliserTexteStatut('Réceptionné sur chantier');
+  }
+  function setSousOngletReceptionnees(sous) {
+    _sousOngletReceptionnees = sous;
+    document.querySelectorAll('.recep-sous-btn').forEach(b => {
+      const actif = b.dataset.sous === sous;
+      b.style.background = actif ? 'var(--vert)' : '#fff';
+      b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    renderCommandesReceptionnees();
+  }
   function renderCommandesReceptionnees() {
     const listeEl = document.getElementById('commandes-receptionnees-liste');
     const recherche = (document.getElementById('commandes-receptionnees-recherche')?.value || '').trim().toLowerCase();
@@ -12181,10 +12197,18 @@
       });
     }
 
-    const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    const surChantier = filtrees.filter(estCommandeSurChantier);
+    const aLAtelier = filtrees.filter(r => !estCommandeSurChantier(r));
+    const nbA = document.getElementById('recep-nb-atelier'), nbC = document.getElementById('recep-nb-chantier');
+    if (nbA) nbA.textContent = '(' + aLAtelier.length + ')';
+    if (nbC) nbC.textContent = '(' + surChantier.length + ')';
+    const source = _sousOngletReceptionnees === 'chantier' ? surChantier : aLAtelier;
+    const triees = [...source].sort((a, b) => _sousOngletReceptionnees === 'chantier'
+      ? String(b['Date envoi chantier'] || b['Date reception'] || b['Date commande'] || '').localeCompare(String(a['Date envoi chantier'] || a['Date reception'] || a['Date commande'] || ''))
+      : (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
     if (_commandesVueActuelle === 'receptionnees') _commandesTrieesActuelles = triees;
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, peutVoirPrix, 'receptionnees')).join('') ||
-      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande réceptionnée.</div>';
+      `<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">${_sousOngletReceptionnees === 'chantier' ? 'Aucune commande partie sur chantier.' : "Aucune commande réceptionnée à l'atelier."}</div>`;
   }
 
   // ── FACTURATION (RAF) ──
@@ -23041,6 +23065,10 @@
   <div id="commandes-vue-receptionnees" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <div style="display:flex;gap:6px;margin:6px 0 4px;overflow-x:auto">
+        <button class="recep-sous-btn" data-sous="atelier" onclick="setSousOngletReceptionnees('atelier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">🏭 À l'atelier <span id="recep-nb-atelier"></span></button>
+        <button class="recep-sous-btn" data-sous="chantier" onclick="setSousOngletReceptionnees('chantier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🚚 Parties sur chantier <span id="recep-nb-chantier"></span></button>
+      </div>
     </div>
     <div id="commandes-receptionnees-liste" style="padding:8px 16px 80px"></div>
   </div>
