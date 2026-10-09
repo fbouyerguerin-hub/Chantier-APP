@@ -741,7 +741,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V72';
+  const APP_VERSION = 'V74';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -11863,7 +11863,7 @@
     ar: 'En attente d\'AR',
     partielle: 'Réception partielle',
     receptionnees: 'Réceptionnées',
-    facturees: 'Facturées'
+    facturees: 'Factures fournisseurs'
   };
 
   function switchCommandesVue(vue) {
@@ -12378,7 +12378,26 @@
   // n'existent pas) : « Numero facture » (texte), « Date facture » (date),
   // « Montant facture HT » (nombre), « Facture par » (texte).
   // Le statut d'avant est mémorisé dans « Note statut » pour pouvoir annuler.
-  function estCommandeFacturee(r) { return normaliserTexteStatut(extraireValeurChamp(r['Statut'], '')) === normaliserTexteStatut('Facturée'); }
+  // Facturation INDÉPENDANTE du statut logistique (V73) : une commande est facturée dès que sa
+  // « Date facture » est renseignée ; son Statut reste celui de la logistique (réceptionnée,
+  // envoyée sur chantier…), donc le départ chantier reste possible après facturation.
+  // Ancien fonctionnement (Statut « Facturée ») encore reconnu, et converti automatiquement.
+  function estStatutFactureeAncien(r) { return normaliserTexteStatut(extraireValeurChamp(r['Statut'], '')) === normaliserTexteStatut('Facturée'); }
+  function estCommandeFacturee(r) { return estStatutFactureeAncien(r) || !!r['Date facture']; }
+  function statutAvantFacturation(r) {
+    const m = String(r['Note statut'] || '').match(/\[avant facturation : ([^\]]*)\]/);
+    return (m && m[1].trim()) || 'Réceptionné en atelier';
+  }
+  const _facturationConvertie = new Set();
+  async function convertirFacturationAncienne(r) {
+    // Statut « Facturée » → statut logistique d'avant + Date facture renseignée
+    if (_facturationConvertie.has(r.id) || !estProfilPrix()) return;
+    _facturationConvertie.add(r.id);
+    const payload = { 'Statut': statutAvantFacturation(r), 'Note statut': String(r['Note statut'] || '').replace(/\s*\[avant facturation : [^\]]*\]/g, '').trim() };
+    if (!r['Date facture']) payload['Date facture'] = dateYMD(new Date());
+    const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${r.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+    if (res.ok) await rafraichirApresActionCommande();
+  }
   function blocFacturationCommande(r, statut, peutVoirPrix, montantHT) {
     if (!peutVoirPrix || !estProfilPrix()) return '';
     const esc = echapperHtmlNote;
@@ -12387,7 +12406,7 @@
       const ecart = mt > 0 && montantHT > 0 ? Math.round((mt - montantHT) * 100) / 100 : 0;
       const df = r['Date facture'] ? new Date(String(r['Date facture']).slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR') : '';
       return `<div style="margin-top:6px;padding:7px 10px;border-radius:8px;background:#eef1f5;border:1px solid #cfd6df;font-size:11px;color:#3d4a5c;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <b>💶 Facturée</b>
+        <b>🧾 Facture fournisseur reçue</b>
         ${r['Numero facture'] ? `<span>n° <b>${esc(r['Numero facture'])}</b></span>` : ''}
         ${df ? `<span>du ${df}</span>` : ''}
         ${mt > 0 ? `<span><b>${mt.toFixed(2)} € HT</b>${ecart ? ` <span style="color:${ecart > 0 ? '#c0392b' : '#2e7d32'};font-weight:700">(écart ${ecart > 0 ? '+' : ''}${ecart.toFixed(2)} €)</span>` : ' <span style="color:#2e7d32">✓ conforme</span>'}</span>` : ''}
@@ -12398,7 +12417,7 @@
       </div>`;
     }
     if (!estStatutCommandeReceptionne(statut) || estCommandePartielle(r)) return '';
-    return `<button onclick="ouvrirFacturationCommande(${r.id})" style="width:100%;margin-top:6px;background:#eef1f5;color:#3d4a5c;border:1px solid #cfd6df;border-radius:8px;padding:7px;font-size:12px;font-weight:800;cursor:pointer">💶 Marquer facturée (facture fournisseur reçue)</button>`;
+    return `<button onclick="ouvrirFacturationCommande(${r.id})" style="width:100%;margin-top:6px;background:#eef1f5;color:#3d4a5c;border:1px solid #cfd6df;border-radius:8px;padding:7px;font-size:12px;font-weight:800;cursor:pointer">🧾 Facture fournisseur reçue</button>`;
   }
   function majEcartFacturation(montantCmd) {
     const v = parseFloat(document.getElementById('fact-montant')?.value) || 0;
@@ -12422,7 +12441,7 @@
     m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9500;display:flex;align-items:center;justify-content:center;padding:16px';
     const champ = 'width:100%;box-sizing:border-box;border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;background:var(--beige-clair);outline:none';
     m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:420px;padding:18px">
-      <div style="font-size:15px;font-weight:800;color:var(--gris);margin-bottom:2px">💶 Facturation de la commande</div>
+      <div style="font-size:15px;font-weight:800;color:var(--gris);margin-bottom:2px">🧾 Facture fournisseur</div>
       <div style="font-size:12px;color:#888;margin-bottom:12px">${esc(r['Numero commande'] || '')} · ${esc(r['Fournisseur'] || '')}${montantCmd ? ' · commande ' + montantCmd.toFixed(2) + ' € HT' : ''}</div>
       <label style="font-size:11px;font-weight:700;color:#999">N° de facture fournisseur</label>
       <input id="fact-numero" style="${champ};margin-bottom:10px" value="${esc(r['Numero facture'] || '')}" />
@@ -12433,7 +12452,7 @@
       <div id="fact-ecart" style="font-size:12px;margin:6px 0 14px;min-height:16px"></div>
       <div style="display:flex;gap:8px">
         <button onclick="document.getElementById('modal-facturation').remove()" style="flex:1;background:#f0f0f0;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
-        <button id="fact-valider" onclick="validerFacturationCommande(${id})" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">💶 Valider la facturation</button>
+        <button id="fact-valider" onclick="validerFacturationCommande(${id})" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">🧾 Enregistrer la facture</button>
       </div>
     </div>`;
     // Pas de fermeture au clic sur le fond (saisie en cours) : seulement « Annuler ». Entrée = valider.
@@ -12449,18 +12468,13 @@
     btn.disabled = true; btn.textContent = '⏳ Enregistrement…';
     const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`;
     try {
-      const payload = { 'Statut': 'Facturée' };
-      if (!estCommandeFacturee(r)) {
-        const statutAvant = extraireValeurChamp(r['Statut'], '');
-        const note = String(r['Note statut'] || '').replace(/\s*\[avant facturation : [^\]]*\]/g, '').trim();
-        payload['Note statut'] = (note ? note + ' ' : '') + `[avant facturation : ${statutAvant}]`;
-      }
-      const res = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
-      if (!res.ok) throw new Error((await res.text()).slice(0, 200) + "\n\nVérifiez que le champ Statut de la table Commandes contient bien l'option « Facturée ».");
-      // Détails de facture : champs optionnels, un par un (un champ absent ne bloque pas le reste)
+      const dateF = document.getElementById('fact-date').value || dateYMD(new Date());
+      // 1. Date facture (= marqueur « facturée ») : obligatoire
+      const res = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Date facture': dateF }) });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 200) + "\n\nCréez dans Baserow, table Commandes fournisseurs, un champ « Date facture » (type date).");
+      // 2. Détails : champs optionnels, un par un (un champ absent ne bloque pas le reste)
       const details = {
         'Numero facture': document.getElementById('fact-numero').value.trim(),
-        'Date facture': document.getElementById('fact-date').value || null,
         'Montant facture HT': parseFloat(document.getElementById('fact-montant').value) || null,
         'Facture par': connectedCollab || ''
       };
@@ -12469,26 +12483,32 @@
         const rr = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [k]: v }) });
         if (!rr.ok) manquants.push(k);
       }
+      // Ancienne facturation par statut : on rend son statut logistique à la commande
+      if (estStatutFactureeAncien(r)) {
+        await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statutAvantFacturation(r), 'Note statut': String(r['Note statut'] || '').replace(/\s*\[avant facturation : [^\]]*\]/g, '').trim() }) });
+      }
       document.getElementById('modal-facturation')?.remove();
-      if (manquants.length) alert('✅ Commande passée en « Facturée ».\n\nℹ️ Non enregistré (champ absent de la table Commandes) : ' + manquants.join(', ') + '.\nCréez-le(s) dans Baserow pour conserver ces informations.');
+      if (manquants.length) alert('✅ Facture fournisseur enregistrée.\n\nℹ️ Non enregistré (champ absent de la table Commandes) : ' + manquants.join(', ') + '.\nCréez-le(s) dans Baserow pour conserver ces informations.');
       await rafraichirApresActionCommande();
     } catch (e) {
       alert('❌ Facturation impossible : ' + e.message);
-      btn.disabled = false; btn.textContent = '💶 Valider la facturation';
+      btn.disabled = false; btn.textContent = '🧾 Enregistrer la facture';
     }
   }
   async function annulerFacturationCommande(id) {
     const r = (_commandesCache || []).find(x => x.id === id);
     if (!r || !estProfilPrix()) return;
-    const note = String(r['Note statut'] || '');
-    const m = note.match(/\[avant facturation : ([^\]]*)\]/);
-    const statutAvant = (m && m[1].trim()) || 'Réceptionné en atelier';
-    if (!confirm(`Annuler la facturation de la commande ${r['Numero commande'] || ''} ?\nElle repassera au statut « ${statutAvant} ».`)) return;
+    if (!confirm(`Annuler la facture fournisseur de la commande ${r['Numero commande'] || ''} ?\nLe n°, la date et le montant de facture seront effacés.`)) return;
+    const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`;
     try {
-      const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statutAvant, 'Note statut': note.replace(/\s*\[avant facturation : [^\]]*\]/g, '').trim() })
-      });
+      const res = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Date facture': null }) });
       if (!res.ok) throw new Error((await res.text()).slice(0, 200));
+      for (const k of ['Numero facture', 'Montant facture HT', 'Facture par']) {
+        try { await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [k]: k === 'Montant facture HT' ? null : '' }) }); } catch (e) {}
+      }
+      if (estStatutFactureeAncien(r)) {
+        await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': statutAvantFacturation(r), 'Note statut': String(r['Note statut'] || '').replace(/\s*\[avant facturation : [^\]]*\]/g, '').trim() }) });
+      }
       await rafraichirApresActionCommande();
     } catch (e) { alert('❌ Annulation impossible : ' + e.message); }
   }
@@ -12507,11 +12527,11 @@
     const totFact = triees.reduce((t, r) => t + (Number(r['Montant facture HT']) || 0), 0);
     const aFacturer = _commandesCache.filter(r => !estCommandePartielle(r) && estStatutCommandeReceptionne(extraireValeurChamp(r['Statut'], '')) && !estCommandeFacturee(r)).length;
     const resume = document.getElementById('commandes-facturees-resume');
-    if (resume) resume.innerHTML = `💶 <b>${triees.length}</b> commande(s) facturée(s) · commandé ${totCmd.toFixed(2)} € HT · facturé <b>${totFact.toFixed(2)} € HT</b>`
+    if (resume) resume.innerHTML = `🧾 <b>${triees.length}</b> commande(s) avec facture fournisseur · commandé ${totCmd.toFixed(2)} € HT · facturé <b>${totFact.toFixed(2)} € HT</b>`
       + (totFact && Math.abs(totFact - totCmd) >= 0.01 ? ` · <span style="color:${totFact > totCmd ? '#c0392b' : '#2e7d32'};font-weight:700">écart ${totFact - totCmd > 0 ? '+' : ''}${(totFact - totCmd).toFixed(2)} €</span>` : '')
-      + (aFacturer ? ` · <span style="color:#a5761f">⏳ ${aFacturer} réceptionnée(s) en attente de facture</span>` : '');
+      + (aFacturer ? ` · <span style="color:#a5761f">⏳ ${aFacturer} réceptionnée(s) sans facture fournisseur</span>` : '');
     listeEl.innerHTML = triees.map(r => renderCarteCommande(r, true, 'facturees')).join('') ||
-      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande facturée.</div>';
+      '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune facture fournisseur enregistrée.</div>';
   }
 
   // Vue "Par chantier" : regroupe toutes les commandes (tous statuts confondus)
@@ -17260,7 +17280,9 @@
     contexte = contexte || 'page';
     const uid = r.id + '-' + contexte;
     const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
-    const statut = estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
+    if (estStatutFactureeAncien(r) && estProfilPrix()) convertirFacturationAncienne(r).catch(() => {});
+    const statut = estCommandePartielle(r) ? 'Réception partielle'
+      : (estStatutFactureeAncien(r) ? statutAvantFacturation(r) : extraireValeurChamp(r['Statut'], 'En attente AR'));
     const couleur = couleurStatutCommande(statut);
     const chantierNom = (r['Chantier'] || [])[0]?.value || '—';
     const montantHT = Number(r['Montant total HT']) || 0;
@@ -17722,7 +17744,7 @@
     if (!restantes) {
       // Tout est parti : la commande doit être « Envoyé sur chantier » (correction automatique si besoin)
       const statut = normaliserTexteStatut(extraireValeurChamp(r['Statut'], ''));
-      if (statut !== normaliserTexteStatut('Envoyé sur chantier') && !estCommandeFacturee(r) && !_departTotalCorrige.has(r.id) && connectedCollab) {
+      if (statut !== normaliserTexteStatut('Envoyé sur chantier') && !estStatutFactureeAncien(r) && !_departTotalCorrige.has(r.id) && connectedCollab) {
         _departTotalCorrige.add(r.id);
         finaliserDepartTotal(r).catch(e => console.warn('Départ total non enregistré', e));
       }
@@ -23189,7 +23211,7 @@
       <button id="tab-commandes-liste" onclick="switchCommandesVue('liste')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:var(--vert);color:#fff">📋 En attente réception</button>
       <button id="tab-commandes-partielle" onclick="switchCommandesVue('partielle')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔶 Partielle</button>
       <button id="tab-commandes-receptionnees" onclick="switchCommandesVue('receptionnees')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">✅ Réceptionnées</button>
-      <button id="tab-commandes-facturees" onclick="switchCommandesVue('facturees')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">💶 Facturées</button>
+      <button id="tab-commandes-facturees" onclick="switchCommandesVue('facturees')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🧾 Factures fournisseurs</button>
       <button id="tab-commandes-chantier" onclick="switchCommandesVue('chantier')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🏗 Par chantier</button>
       <button id="tab-commandes-articles" onclick="switchCommandesVue('articles')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔍 Articles</button>
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
