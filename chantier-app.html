@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V79';
+  const APP_VERSION = 'V80';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14520,7 +14520,19 @@
       // catalogue EBP ; à défaut (ligne en texte libre), la fiche de la commande.
       const ligneId = Number(code.split('-')[1]);
       const r = trouverCommandeDeLigne(ligneId);
-      if (!r) { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return; }
+      if (!r) {
+        // Ligne pas encore chargée sur ce téléphone (commande d'un autre onglet / ancienne) :
+        // on la lit dans Baserow avec sa commande, puis on rejoue le scan.
+        if (source !== 'rejeu') {
+          setMessageScan('⏳ Recherche de la ligne…', 'var(--gris-moyen)');
+          chargerLigneEtCommande(ligneId).then(ok => {
+            if (ok) { _dernierScan = { code: '', t: 0 }; traiterCodeScanne(code, 'rejeu'); }
+            else { bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); }
+          });
+          return;
+        }
+        bipScan(false); setMessageScan(`❌ Ligne de commande introuvable : ${code}`, '#c0392b'); return;
+      }
       const l = (_commandesLignesCache[r.id] || []).find(x => x.id === ligneId);
       const aStock = l ? trouverArticlePourLigne(l) : null;
       if (aStock) {
@@ -14543,7 +14555,28 @@
     // Étiquette de commande
     if (/^CMD-\d+$/i.test(code) || (_scanMode === 'info' && trouverCommandeParCode(code))) {
       const r = trouverCommandeParCode(code);
-      if (!r) { bipScan(false); setMessageScan(`❌ Commande introuvable ou non accessible : ${code}`, '#c0392b'); return; }
+      if (!r) {
+        const mC = code.match(/^CMD-(\d+)$/i);
+        if (mC && source !== 'rejeu') {
+          // Commande pas encore chargée sur ce téléphone : lecture directe puis nouveau traitement
+          setMessageScan('⏳ Recherche de la commande…', 'var(--gris-moyen)');
+          (async () => {
+            try {
+              const rc = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${mC[1]}/?user_field_names=true`, { headers: HEADERS });
+              if (!rc.ok) throw new Error();
+              const cmd = await rc.json();
+              _modalCommandesCache = [...(_modalCommandesCache || []).filter(c => c.id !== cmd.id), cmd];
+              const rs = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmd.id}`, { headers: HEADERS });
+              _commandesLignesCache[cmd.id] = (await rs.json()).results || [];
+              if (stockTablesConfigurees() && !_stockCharge) await chargerStock().catch(() => {});
+              _dernierScan = { code: '', t: 0 };
+              traiterCodeScanne(code, 'rejeu');
+            } catch (e) { bipScan(false); setMessageScan(`❌ Commande introuvable ou non accessible : ${code}`, '#c0392b'); }
+          })();
+          return;
+        }
+        bipScan(false); setMessageScan(`❌ Commande introuvable ou non accessible : ${code}`, '#c0392b'); return;
+      }
       if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Étiquette de commande : utilisez 📷 sur la page Commandes', '#a5761f'); return; }
       // Même commande déjà affichée pendant un départ : ne pas tout recharger
       // (le QR de la commande reste souvent dans le champ de la caméra).
@@ -15316,6 +15349,30 @@
   // ============================================================
   let _recExpress = null;
   const MOTIFS_NC = ['Manquant', 'Endommagé', 'Erreur article', 'Erreur quantité', 'Autre'];
+  // Lecture directe d'une ligne de commande (et de sa commande) absente du cache local
+  async function chargerLigneEtCommande(ligneId) {
+    try {
+      const rl = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${ligneId}/?user_field_names=true`, { headers: HEADERS });
+      if (!rl.ok) return false;
+      const l = await rl.json();
+      const cid = (l['Commande'] || [])[0]?.id;
+      if (!cid) return false;
+      if (!trouverCommandeParCode('CMD-' + cid)) {
+        const rc = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${cid}/?user_field_names=true`, { headers: HEADERS });
+        if (!rc.ok) return false;
+        const cmd = await rc.json();
+        _modalCommandesCache = [...(_modalCommandesCache || []).filter(c => c.id !== cid), cmd];
+      }
+      // Toutes les lignes de la commande (pour la fiche et le départ)
+      try {
+        const rs = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cid}`, { headers: HEADERS });
+        _commandesLignesCache[cid] = (await rs.json()).results || [l];
+      } catch (e) { _commandesLignesCache[cid] = [l]; }
+      if (!_commandesLignesCache[cid].some(x => x.id === l.id)) _commandesLignesCache[cid].push(l);
+      if (stockTablesConfigurees() && !_stockCharge) await chargerStock().catch(() => {});
+      return true;
+    } catch (e) { console.warn('Ligne de commande', e); return false; }
+  }
   function trouverCommandeDeLigne(ligneId) {
     const id = Object.keys(_commandesLignesCache || {}).find(k => (_commandesLignesCache[k] || []).some(l => l.id === ligneId));
     return id ? trouverCommandeParCode('CMD-' + id) : null;
