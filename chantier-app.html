@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V77';
+  const APP_VERSION = 'V78';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15180,6 +15180,47 @@
     document.getElementById('scan-bloc-chantier').style.display = info ? 'none' : 'block';
     document.getElementById('scan-pied').style.display = info ? 'none' : 'block';
   }
+  // Commande réceptionnée scannée : ses articles suivis au stock atelier, avec stock et emplacement.
+  // Commande « STOCK ATELIER » d'un seul article → ouverture directe de la fiche de cet article.
+  async function afficherStockArticlesCommandeScan(r, fiche) {
+    const zone = () => document.getElementById('scan-stock-articles');
+    if (!zone() || !stockTablesConfigurees()) return;
+    zone().innerHTML = '<div style="font-size:12px;color:#999;padding:6px 2px">⏳ Recherche des articles au stock…</div>';
+    if (!_stockCharge) await chargerStock().catch(() => {});
+    if (!_commandesLignesCache[r.id] || !_commandesLignesCache[r.id].length) {
+      try {
+        const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${r.id}`, { headers: HEADERS });
+        _commandesLignesCache[r.id] = (await res.json()).results || [];
+      } catch (e) {}
+    }
+    const vus = new Set(), trouves = [];
+    (_commandesLignesCache[r.id] || []).forEach(l => {
+      const a = trouverArticleParCode(l['Reference'] || l['Ref'] || l['Code article'] || '');
+      if (a && !vus.has(a.id) && !estKit(a)) { vus.add(a.id); trouves.push({ a, l }); }
+    });
+    if (!zone()) return;
+    if (!trouves.length) { zone().innerHTML = ''; return; }
+    // Commande pour le stock atelier avec un seul article : directement sur sa fiche (stock, emplacement, mouvements)
+    if (estCommandeStockAtelier(r) && trouves.length === 1 && _scanMode === 'info' && !fiche.sansFormulaire) {
+      try { arreterCamera(); } catch (e) {}
+      document.getElementById('modal-scan-stock').style.display = 'none';
+      ouvrirFicheArticle(trouves[0].a.id);
+      return;
+    }
+    const esc = echapperHtmlNote;
+    zone().innerHTML = `<div style="background:#eef4ec;border:1px solid #cfe0ca;border-radius:10px;padding:8px 10px;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:800;color:var(--vert);margin-bottom:4px">📦 Articles de cette commande au stock atelier</div>
+        ${trouves.map(({ a }) => {
+          const q = _stockParArticle[a.id] || 0, emp = libelleEmplacement(a);
+          return `<div onclick="try{arreterCamera()}catch(e){};document.getElementById('modal-scan-stock').style.display='none';ouvrirFicheArticle(${a.id})" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:7px 4px;border-top:1px solid #dfe9db">
+            <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(a['Designation'] || a['Code EBP'] || '')}</div>
+              <div style="font-size:10px;color:#888">${esc(a['Code EBP'] || '')}${emp ? ' · 📍 ' + esc(emp) : ' · 📍 sans emplacement'}</div></div>
+            <div style="font-size:14px;font-weight:800;color:${q > 0 ? 'var(--vert)' : '#c0392b'};white-space:nowrap">${esc(fmtQteUnite(q, a['Unite'] || 'u'))}</div>
+            <span style="color:#bbb">›</span>
+          </div>`;
+        }).join('')}
+      </div>`;
+  }
   function afficherFicheScan(fiche) {
     _scanFiche = fiche;
     // Caméra masquée pour laisser la place à la fiche — sauf départ sur chantier,
@@ -15195,7 +15236,8 @@
       // Colis qui arrive : panneau « réception express » (conforme / non conforme)
       // au-dessus de la fiche ; le formulaire détaillé reste accessible dessous.
       _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', ecarts: {}, selection: null } : null;
-      el.innerHTML = r ? `<div id="rx-panel"></div>${renderCarteCommande(r, estProfilPrix(), 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
+      el.innerHTML = r ? `<div id="rx-panel"></div><div id="scan-stock-articles"></div>${renderCarteCommande(r, estProfilPrix(), 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
+      if (r && !receptionPossible && (estStatutCommandeReceptionne(statut) || estCommandePartielle(r))) afficherStockArticlesCommandeScan(r, fiche).catch(e => console.warn('Stock articles scan', e));
       if (receptionPossible) renderRecExpress();
       _departScanUid = null;
       if (r && statut === 'Réceptionné en atelier' && !estCommandeStockAtelier(r) && !fiche.sansFormulaire) {
