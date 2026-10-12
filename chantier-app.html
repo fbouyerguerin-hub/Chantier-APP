@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V78';
+  const APP_VERSION = 'V79';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13850,6 +13850,8 @@
       await _scanner.start(
         { facingMode: 'environment' },
         { fps: 15,
+          // Sans détecteur natif (iPhone) : décodage limité au centre de l'image, plus rapide
+          ...(('BarcodeDetector' in window) ? {} : { qrbox: (w, h) => { const c = Math.floor(Math.min(w, h) * 0.75); return { width: c, height: c }; } }),
           // Image HD + mise au point continue : petits QR (lignes de la fiche A4) nets
           videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 },
                               advanced: [{ focusMode: 'continuous' }] } },
@@ -13860,7 +13862,48 @@
       console.warn('Caméra HD refusée, réglages standard', e);
       await _scanner.start({ facingMode: 'environment' }, { fps: 12 }, surLecture, () => {});
     }
-    setMessageScan('📷 Visez une étiquette', 'var(--gris-moyen)');
+    afficherOutilsCamera(_scanner, 'scan-camera');
+    setMessageScan('📷 Visez une étiquette — à 15-25 cm, utilisez le zoom si besoin', 'var(--gris-moyen)');
+  }
+
+  // Outils caméra sous l'image : zoom ×1 / ×2 / ×3 (on tient le téléphone plus loin, la mise
+  // au point se fait mieux) et lampe torche (atelier sombre, étiquettes en fond de rayonnage).
+  let _cameraZoom = Number(localStorage.getItem('gb_scan_zoom') || 0) || 0;
+  function afficherOutilsCamera(scanner, idZone) {
+    const zone = document.getElementById(idZone);
+    if (!zone || !scanner) return;
+    let barre = document.getElementById(idZone + '-outils');
+    if (!barre) { barre = document.createElement('div'); barre.id = idZone + '-outils'; zone.insertAdjacentElement('afterend', barre); }
+    barre.style.cssText = 'display:flex;gap:6px;justify-content:center;margin:6px auto 0;max-width:420px';
+    let cap = {};
+    try { cap = scanner.getRunningTrackCapabilities ? scanner.getRunningTrackCapabilities() : {}; } catch (e) {}
+    const zMin = cap.zoom ? (cap.zoom.min || 1) : null, zMax = cap.zoom ? Math.min(cap.zoom.max || 1, 4) : null;
+    const btn = 'border:none;border-radius:8px;padding:7px 12px;font-size:13px;font-weight:800;cursor:pointer';
+    const html = [];
+    if (zMin !== null && zMax > zMin) {
+      [1, 2, 3].filter(z => z >= zMin && z <= zMax).forEach(z => {
+        const actif = (_cameraZoom || 1) === z;
+        html.push(`<button onclick="appliquerZoomCamera(${z}, '${idZone}')" style="${btn};background:${actif ? 'var(--vert)' : '#eee'};color:${actif ? '#fff' : 'var(--gris)'}">🔍 ×${z}</button>`);
+      });
+    }
+    if (cap.torch) html.push(`<button id="${idZone}-lampe" onclick="basculerLampeCamera('${idZone}')" style="${btn};background:#eee;color:var(--gris)">🔦 Lampe</button>`);
+    barre.innerHTML = html.join('');
+    barre.style.display = html.length ? 'flex' : 'none';
+    if (_cameraZoom && zMin !== null) appliquerZoomCamera(_cameraZoom, idZone, true);
+  }
+  function scannerDeZone(idZone) { return idZone === 'retour-camera' ? _scannerRetour : _scanner; }
+  async function appliquerZoomCamera(z, idZone, silencieux) {
+    const sc = scannerDeZone(idZone);
+    try { await sc.applyVideoConstraints({ advanced: [{ zoom: z }] }); _cameraZoom = z; localStorage.setItem('gb_scan_zoom', String(z)); }
+    catch (e) { if (!silencieux) console.warn('Zoom refusé', e); }
+    if (!silencieux) afficherOutilsCamera(sc, idZone);
+  }
+  let _lampeAllumee = false;
+  async function basculerLampeCamera(idZone) {
+    const sc = scannerDeZone(idZone);
+    try { await sc.applyVideoConstraints({ advanced: [{ torch: !_lampeAllumee }] }); _lampeAllumee = !_lampeAllumee; } catch (e) { console.warn('Lampe refusée', e); }
+    const b = document.getElementById(idZone + '-lampe');
+    if (b) { b.style.background = _lampeAllumee ? '#f5c518' : '#eee'; b.textContent = _lampeAllumee ? '🔦 Lampe allumée' : '🔦 Lampe'; }
   }
 
   // Fiche affichée après scan : la caméra s'efface pour laisser la place au
@@ -14815,7 +14858,10 @@
       document.body.appendChild(tmp);
       const imgs = articles.map(a => {
         tmp.innerHTML = '';
-        new QRCode(tmp, { text: urlScan(codeBarreArticle(a)), width: 256, height: 256, correctLevel: QRCode.CorrectLevel.L });
+        // QR « court » : le code seul (≈ 8 caractères) au lieu de l'adresse complète (≈ 90) →
+        // QR de 21×21 au lieu de 41×41 cases, deux fois plus gros sur l'étiquette, lu de plus loin
+        // et sans mise au point fine. Lu par le 📷 de l'appli (pas par l'appareil photo du téléphone).
+        new QRCode(tmp, { text: codeBarreArticle(a), width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
         const c = tmp.querySelector('canvas');
         return c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
       });
@@ -16186,6 +16232,7 @@
       } catch (e) {
         await _scannerRetour.start({ facingMode: 'environment' }, { fps: 12 }, surLecture, () => {});
       }
+      afficherOutilsCamera(_scannerRetour, 'retour-camera');
       btn.textContent = '⏹ Arrêter la caméra';
       btn.style.background = '#7f8c8d';
       msgRetour('📷 Visez l\'étiquette de l\'article : chaque passage ajoute 1', false);
