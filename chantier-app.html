@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V80';
+  const APP_VERSION = 'V82';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15139,7 +15139,24 @@
       const lignes = _commandesLignesCache[r.id] || [];
       // QR de ligne : code seul (« LIG-123 », lu uniquement depuis l'appli) → QR
       // très peu dense, lisible même petit et à distance par la caméra.
-      const qrLignes = lignes.map(l => qrDe('LIG-' + l.id, 160));
+      // QR de ligne AVEC marge blanche intégrée (« zone de silence » de 4 modules) : sans elle,
+      // les traits du tableau collés au QR empêchaient les téléphones de le détecter.
+      const qrAvecMarge = (texte, px) => {
+        tmp.innerHTML = '';
+        new QRCode(tmp, { text: texte, width: px, height: px, correctLevel: QRCode.CorrectLevel.M });
+        const src = tmp.querySelector('canvas');
+        if (!src) return tmp.querySelector('img')?.src || '';
+        const modules = 21 + 4 * (Math.max(1, Math.ceil((texte.length - 10) / 10)) - 1); // ≈ version du QR
+        const marge = Math.round(px / modules * 4);
+        const c = document.createElement('canvas');
+        c.width = c.height = px + 2 * marge;
+        const g = c.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.imageSmoothingEnabled = false;
+        g.drawImage(src, marge, marge, px, px);
+        return c.toDataURL('image/png');
+      };
+      const qrLignes = lignes.map(l => qrAvecMarge('LIG-' + l.id, 168));
       tmp.remove();
       const esc = s => echapperHtmlNote(s == null ? '' : String(s));
       const fd = d => d ? new Date(String(d).split('T')[0] + 'T12:00:00').toLocaleDateString('fr-FR') : '';
@@ -15212,7 +15229,7 @@
         .li thead th { text-align: left; font-size: 8pt; color: #555; border-bottom: 0.4mm solid #000; padding: 1mm; }
         .li td { border-bottom: 0.2mm solid #bbb; padding: 1mm; vertical-align: middle; }
         .li tr { break-inside: avoid; }
-        .q { width: 17mm; } .q img { width: 16mm; height: 16mm; image-rendering: pixelated; display: block; }
+        .q { width: 19mm; padding: 0 !important; border-bottom: none !important; } .q img { width: 19mm; height: 19mm; image-rendering: pixelated; display: block; } /* trait de séparation arrêté avant le QR ; marge blanche incluse dans l'image */
         .n { width: 6mm; color: #777; text-align: center; }
         .de { font-weight: 700; }
         .co { font-size: 8.5pt; color: #333; margin-top: 0.5mm; }
