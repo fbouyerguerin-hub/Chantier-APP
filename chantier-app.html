@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V82';
+  const APP_VERSION = 'V84';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -18022,7 +18022,15 @@
           <a href="${f.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📎 ${esc(f.visible_name || f.name)}</a>
           ${gestion ? `<span onclick="supprimerDocumentCommande(${r.id}, ${i}, '${uid}', '${type}')" style="cursor:pointer;font-size:11px;color:#c0392b" title="Supprimer">✕</span>` : ''}
         </div>`).join('')}
-        ${notes.length ? `<div style="margin-top:4px">${notes.map(noteHtml).join('')}</div>` : ((docs.length || (type === 'prive' && (r['Accusé de réception'] || []).length)) ? '' : '<div style="font-size:11px;color:#aaa;font-style:italic">Aucune note ni pièce jointe.</div>')}
+        ${(() => {
+          // Notes automatiques des pièces jointes (« 📎 … ajouté », « 🗑️ … supprimé ») : repliées,
+          // affichées à la demande ; les notes écrites par les utilisateurs restent visibles.
+          const estNotePJ = t => /(📎|🗑️)\s.*\s(ajouté|supprimé)\s*$/.test(t);
+          const notesPJ = notes.filter(estNotePJ), notesLibres = notes.filter(t => !estNotePJ(t));
+          if (!notes.length) return (docs.length || (type === 'prive' && (r['Accusé de réception'] || []).length)) ? '' : '<div style="font-size:11px;color:#aaa;font-style:italic">Aucune note ni pièce jointe.</div>';
+          return (notesLibres.length ? `<div style="margin-top:4px">${notesLibres.map(noteHtml).join('')}</div>` : '')
+            + (notesPJ.length ? `<details style="margin-top:4px"><summary style="cursor:pointer;font-size:10px;color:#999;list-style:none">🕓 Historique des pièces jointes (${notesPJ.length}) ▸</summary><div style="margin-top:2px">${notesPJ.map(noteHtml).join('')}</div></details>` : '');
+        })()}
         ${champsAbsents.length ? '' : `
         <div style="display:flex;gap:6px;margin-top:6px">
           <textarea id="note-${type}-${uid}" rows="1" placeholder="Ajouter une note…" style="flex:1;min-width:0;resize:vertical;border:1px solid #ddd;border-radius:8px;padding:6px 8px;font-size:11px;font-family:inherit"></textarea>
@@ -18077,15 +18085,20 @@
 
   async function supprimerDocumentCommande(id, index, uid, type = 'public') {
     if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
-    if (!confirm('Supprimer ce document ?')) return;
     const c = CHAMPS_NOTES_DOCS[type];
+    const fic = (_commandesCache.find(x => x.id === id)?.[c.docs] || [])[index];
+    if (!confirm(`Supprimer « ${fic ? (fic.visible_name || fic.name) : 'ce document'} » de la commande ?`)) return;
     try {
       const actuel = await lireCommandeFraiche(id);
       const avant = (_commandesCache.find(r => r.id === id)?.[c.docs] || [])[index];
       const existants = (actuel[c.docs] || []).filter((f, i) => avant ? f.name !== avant.name : i !== index)
         .map(f => ({ name: f.name, visible_name: f.visible_name }));
+      const payload = { [c.docs]: existants };
+      // Traçabilité : la suppression laisse une note (qui / quand / quel fichier), comme l'ajout
+      const supprime = avant || (actuel[c.docs] || [])[index];
+      if (supprime && c.notes in actuel) payload[c.notes] = [String(actuel[c.notes] || '').trim(), ligneNoteCommande('🗑️ ' + (supprime.visible_name || supprime.name) + ' supprimé')].filter(Boolean).join('\n');
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
-        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [c.docs]: existants })
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
       });
 
       if (!rPatch.ok) throw new Error('Baserow a refusé la suppression (' + rPatch.status + ') : ' + (await rPatch.text()));
