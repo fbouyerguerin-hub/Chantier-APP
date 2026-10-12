@@ -188,6 +188,8 @@
     .tabs { display: flex; margin: 16px 16px 0; background: #fff; border-radius: 14px; padding: 4px; box-shadow: 0 2px 8px rgba(44,44,44,0.08); }
     .tab-btn { flex: 1; padding: 10px; border: none; background: none; border-radius: 10px; font-size: 13px; font-weight: 600; color: var(--gris-moyen); cursor: pointer; }
     .tab-btn.active { background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; }
+    .onglets-gestion .tab-btn { flex: 1 0 auto; white-space: nowrap; padding: 10px 8px; } /* 7 onglets : défilement horizontal sur téléphone */
+    .onglets-gestion::-webkit-scrollbar { display: none; }
 
     /* SUIVI DEMANDES */
     .demande-card { background: #fff; border-radius: 14px; margin: 12px 16px 0; padding: 14px; box-shadow: 0 2px 8px rgba(44,44,44,0.06); border-left: 4px solid #ddd; }
@@ -742,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V75';
+  const APP_VERSION = 'V77';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13957,6 +13959,7 @@
     ]);
     // mode par défaut : retour si du matériel du kit est encore sur un chantier
     if (!_kit.mode) _kit.mode = chantiersAvecKit().length ? 'retour' : 'sortie';
+    if (_kit.mode === 'retour') { const en = chantiersAvecKit(); if (en.length === 1) _kit.chantier = en[0]; }
     renderKit();
   }
   function fermerKit() { document.getElementById('modal-kit').style.display = 'none'; _kit = null; }
@@ -13978,11 +13981,14 @@
     });
     return Object.keys(noms).filter(n => soldesChantierStock(n).some(x => ids.has(x.articleId))).sort();
   }
-  function kitMode(mode) { _kit.mode = mode; _kit.chantier = ''; _kit.sel = {}; renderKit(); }
+  function kitMode(mode) {
+    _kit.mode = mode; _kit.chantier = ''; _kit.sel = {};
+    if (mode === 'retour') { const en = chantiersAvecKit(); if (en.length === 1) _kit.chantier = en[0]; }
+    renderKit();
+  }
   function kitChantier(v) {
     _kit.chantier = (v || '').trim();
-    _kit.sel = {};
-    if (_kit.mode === 'sortie') composantsKit().forEach(({ c, a }) => { if (a) _kit.sel[a.id] = 0; });
+    if (_kit.mode === 'retour') _kit.sel = {}; // en sortie, les composants déjà cochés sont conservés
     renderKit();
   }
   function kitQte(articleId, v, max) {
@@ -14024,10 +14030,10 @@
       html += `<label style="font-size:11px;font-weight:700;color:#999">Chantier d'où revient le matériel</label>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px">${enCours.map(c => `<button onclick="kitChantier(this.dataset.c)" data-c="${esc(c).replace(/"/g, '&quot;')}" style="border:1.5px solid var(--vert);border-radius:16px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;background:${_kit.chantier === c ? 'var(--vert)' : '#fff'};color:${_kit.chantier === c ? '#fff' : 'var(--vert)'}">${esc(c)}</button>`).join('')}</div>`;
     }
-    if (!_kit.chantier) { el.innerHTML = html + '<div style="font-size:12px;color:#999;text-align:center;padding:10px">Choisissez le chantier pour afficher les composants.</div>'; return; }
+    if (!_kit.chantier && _kit.mode === 'retour') { el.innerHTML = html + '<div style="font-size:12px;color:#999;text-align:center;padding:10px">Choisissez le chantier pour afficher les composants.</div>'; return; }
     const soldes = _kit.mode === 'retour' ? soldesChantierStock(_kit.chantier) : [];
     html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span style="font-size:12px;font-weight:800;color:var(--gris)">${_kit.mode === 'sortie' ? 'Composants pris' : 'Composants qui reviennent'}</span>
+        <span style="font-size:12px;font-weight:800;color:var(--gris)">${_kit.mode === 'sortie' ? '☑️ Cochez chaque composant présent dans le kit' : 'Composants qui reviennent'}</span>
         <span><button onclick="kitTout(true)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">${_kit.mode === 'sortie' ? 'Kit complet' : 'Tout'}</button>
         <button onclick="kitTout(false)" style="background:var(--beige-clair);border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">Aucun</button></span></div>`;
     let nb = 0;
@@ -14046,6 +14052,18 @@
           <input type="number" min="0" step="any" inputmode="decimal" value="${q || ''}" placeholder="0" onchange="kitQte(${a.id}, this.value${max !== undefined ? ', ' + max : ''})" style="width:62px;padding:6px;border:1px solid #ccc;border-radius:6px;font-weight:800;text-align:right" />
         </div>`;
     }).join('');
+    // Contrôle de complétude du kit
+    const suivis = composantsKit().filter(x => x.a && (_kit.mode === 'sortie' || (soldes.find(s => s.articleId === x.a.id)?.solde || 0) > 0));
+    const total = suivis.length, coches = suivis.filter(x => (_kit.sel[x.a.id] || 0) > 0).length;
+    if (total) {
+      const pct = Math.round(coches / total * 100), complet = coches === total;
+      html += `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:${complet ? '#e8f5e9' : '#fff8e1'};font-size:12px;font-weight:800;color:${complet ? '#2e7d32' : '#a5761f'}">
+          ${complet ? '✅ Kit complet' : `⏳ ${coches} / ${total} composant(s) vérifié(s) — ${total - coches} manquant(s)`}
+          <div style="height:6px;background:#eee;border-radius:3px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${complet ? '#2e7d32' : '#e0a33a'}"></div></div>
+        </div>`;
+    }
+    if (_kit.mode === 'sortie' && !_kit.chantier) nb = 0; // chantier obligatoire pour valider la sortie
+    if (_kit.mode === 'sortie' && !_kit.chantier && coches) html += '<div style="font-size:11px;color:#c0392b;font-weight:700;margin-top:6px">⬆️ Choisissez le chantier de destination pour valider la sortie.</div>';
     html += `<button onclick="validerKit()" ${nb ? '' : 'disabled'} style="margin-top:12px;width:100%;background:var(--vert);opacity:${nb ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:800;cursor:pointer">${_kit.mode === 'sortie' ? `✅ Valider la sortie (${nb} composant${nb > 1 ? 's' : ''})` : `✅ Valider le retour (${nb} composant${nb > 1 ? 's' : ''})`}</button>`;
     el.innerHTML = html;
   }
@@ -14053,6 +14071,8 @@
     if (!_kit || !_kit.chantier) return;
     const lignes = Object.entries(_kit.sel).filter(([, q]) => q > 0).map(([id, q]) => ({ a: _articlesCache.find(x => x.id === Number(id)), q }));
     if (!lignes.length) return;
+    const totalKit = composantsKit().filter(x => x.a && (_kit.mode === 'sortie' || (soldesChantierStock(_kit.chantier).find(s => s.articleId === x.a.id)?.solde || 0) > 0)).length;
+    if (lignes.length < totalKit && !confirm(`⚠️ Kit incomplet : ${totalKit - lignes.length} composant(s) non coché(s).\n\nValider quand même avec les ${lignes.length} composant(s) cochés ?`)) return;
     if (_kit.mode === 'sortie') {
       const manque = lignes.filter(l => (_stockParArticle[l.a.id] || 0) < l.q);
       if (manque.length && !confirm(`${manque.length} composant(s) en quantité supérieure au stock de l'appli. Valider quand même ?`)) return;
@@ -22453,7 +22473,7 @@
   </div>
 
   <!-- ONGLETS GESTION -->
-  <div style="display:flex;margin:0 16px 16px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+  <div class="onglets-gestion" style="display:flex;margin:0 16px 16px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none">
     <button class="tab-btn active" id="tab-g-utilisateurs" onclick="switchGestionTab('utilisateurs')" style="font-size:11px">👤 Users</button>
     <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
     <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
