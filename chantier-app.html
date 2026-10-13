@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V90';
+  const APP_VERSION = 'V92';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13634,7 +13634,7 @@
     if (!listeEl) return;
     const recherche = normTexte(document.getElementById('stock-recherche')?.value || '');
     const mots = recherche.split(' ').filter(Boolean);
-    let articles = _articlesCache.filter(a => a['Actif'] !== false && !estKit(a));
+    let articles = _articlesCache.filter(a => a['Actif'] !== false && !estKit(a) && !estFicheOuvrage(a)); // fiches « Ouvrage » = emplacement seul, pas de stock
 
     if (mots.length) {
       articles = articles.filter(a => {
@@ -14147,8 +14147,18 @@
     if (!el || !_kit) return;
     const esc = echapperHtmlNote;
     const n = _nomenclatures.get(_kit.code);
+    // Emplacement du kit au magasin (zone / rayon / point sur le plan), comme un article
+    const kitRow = (_articlesCache || []).find(y => y.id === _kit.id);
+    const empKit = kitRow ? libelleEmplacement(kitRow) : '';
+    const pointKit = kitRow && !isNaN(parseFloat(kitRow['Plan_X'])) && !isNaN(parseFloat(kitRow['Plan_Y']));
+    const gestionKit = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris)">${esc(_kit.designation)}</div>
-      <div style="font-size:11px;color:#999;margin:2px 0 10px">Ouvrage EBP ${esc(_kit.code)}</div>`;
+      <div style="font-size:11px;color:#999;margin:2px 0 6px">Ouvrage EBP ${esc(_kit.code)}</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        ${empKit ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${esc(empKit)}</span>` : '<span style="font-size:11px;color:#bbb">📍 Emplacement non défini</span>'}
+        ${pointKit ? `<button onclick="voirArticleSurPlan(${kitRow.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+        ${gestionKit && kitRow ? `<button onclick="ouvrirEditionArticle(${kitRow.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">✏️ ${empKit || pointKit ? 'Modifier' : 'Définir'} l'emplacement</button>` : ''}
+      </div>`;
     if (!n || n.erreur || !(n.composants || []).length) { el.innerHTML = html + '<div style="color:#a35a00;font-size:12px">⚠️ Nomenclature du kit indisponible.</div>'; return; }
     const onglet = (m, lib) => `<button onclick="kitMode('${m}')" style="flex:1;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;background:${_kit.mode === m ? 'var(--vert)' : '#f1f5f9'};color:${_kit.mode === m ? '#fff' : 'var(--gris)'}">${lib}</button>`;
     const enCours = chantiersAvecKit();
@@ -14415,7 +14425,15 @@
     // Stock atelier
     if (!estOuvrage) html += titreSection('Stock atelier');
     if (estOuvrage) {
-      // rien : un ouvrage n'a pas de stock propre
+      // Pas de stock propre, mais un EMPLACEMENT (zone / rayon / point sur le plan), comme un article
+      html += titreSection('Emplacement');
+      const emp = a ? libelleEmplacement(a) : '';
+      const px = a ? parseFloat(a['Plan_X']) : NaN, py = a ? parseFloat(a['Plan_Y']) : NaN;
+      html += champ('Emplacement', emp ? '📍 ' + esc(emp) : '<span style="color:#999">non renseigné</span>')
+        + `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+            ${a && !isNaN(px) && !isNaN(py) ? `<button onclick="voirArticleSurPlan(${a.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--vert);cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+            ${gestion ? `<button onclick="definirEmplacementOuvrage('${esc(code)}')" style="background:var(--beige-clair);border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">✏️ ${emp || (!isNaN(px)) ? 'Modifier l\'emplacement' : 'Définir l\'emplacement'}</button>` : ''}
+          </div>`;
     } else if (a) {
       const qte = _stockParArticle[a.id] || 0;
       const mini = miniArticle(a);
@@ -14714,7 +14732,7 @@
     if (trouverArticleParCode(v) || trouverCommandeParCode(v)) { traiterCodeScanne(v); return; }
     // Pas un code : recherche texte, ajout si un seul résultat
     const mots = normTexte(v).split(' ').filter(Boolean);
-    const res = _articlesCache.filter(a => a['Actif'] !== false && mots.every(m => normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur']].join(' ')).includes(m)));
+    const res = _articlesCache.filter(a => a['Actif'] !== false && !estFicheOuvrage(a) && mots.every(m => normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur']].join(' ')).includes(m)));
     if (res.length === 1) traiterCodeScanne(codeBarreArticle(res[0]));
     else { bipScan(false); setMessageScan(res.length ? `🔎 ${res.length} articles correspondent — précisez` : `❌ Aucun article pour « ${v} »`, '#c0392b'); }
   }
@@ -17145,10 +17163,32 @@
 
   // ── Fiche article (emplacement, stock mini, création manuelle) ──
   let _artEditionId = null;
+  // Emplacement d'un ouvrage : fiche « Ouvrage » créée à la demande dans la table Articles
+  // (sans stock propre ; ignorée par les listes de stock), puis formulaire d'emplacement habituel.
+  async function definirEmplacementOuvrage(code) {
+    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
+    if (!_stockCharge) await chargerStock().catch(() => {});
+    let a = (_articlesCache || []).find(y => normRef(y['Code EBP'] || '') === normRef(code));
+    if (!a) {
+      const x = _catLocal && _catLocal.parCode ? _catLocal.parCode.get(normRef(code)) : null;
+      try {
+        const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true`, {
+          method: 'POST', headers: HEADERS,
+          body: JSON.stringify({ 'Code EBP': code, 'Designation': (x && x.designation) || code, 'Origine': 'Ouvrage', 'Unite': 'u', 'Actif': true })
+        });
+        if (!res.ok) throw new Error('Baserow ' + res.status + ' : ' + (await res.text()).slice(0, 150));
+        a = await res.json();
+        _articlesCache.push(a);
+      } catch (e) { alert('❌ Création de la fiche emplacement impossible : ' + e.message); return; }
+    }
+    ouvrirEditionArticle(a.id);
+  }
+  function estFicheOuvrage(a) { return !!a && (a['Origine'] || '') === 'Ouvrage'; }
+
   function ouvrirEditionArticle(id) {
     const a = id ? _articlesCache.find(x => x.id === id) : null;
     _artEditionId = a ? a.id : null;
-    const deEBP = a && (a['Origine'] || '') === 'EBP';
+    const deEBP = a && ['EBP', 'Ouvrage', 'Kit'].includes(a['Origine'] || '');
     document.getElementById('art-edit-titre').textContent = a ? '✏️ Article & emplacement' : '➕ Nouvel article';
     const champsCatalogue = ['designation', 'ref', 'fournisseur', 'unite'];
     document.getElementById('art-edit-designation').value = a?.['Designation'] || '';
@@ -17201,7 +17241,7 @@
       'Plan_Y': isNaN(py) ? null : py
     };
     const existant = _artEditionId ? _articlesCache.find(x => x.id === _artEditionId) : null;
-    const deEBP = existant && (existant['Origine'] || '') === 'EBP';
+    const deEBP = existant && ['EBP', 'Ouvrage', 'Kit'].includes(existant['Origine'] || '');
     if (!deEBP) {
       payload['Designation'] = designation;
       payload['Reference fournisseur'] = document.getElementById('art-edit-ref').value.trim();
@@ -17221,6 +17261,8 @@
       if (existant) Object.assign(existant, row); else _articlesCache.push(row);
       fermerEditionArticle();
       renderStock();
+      try { rafraichirFicheArticleOuverte(); } catch (e) {}
+      try { if (_kit) renderKit(); } catch (e) {}
     } catch (e) {
       console.error('Erreur enregistrement article', e);
       alert('Erreur : ' + e.message);
