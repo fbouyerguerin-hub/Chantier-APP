@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V87';
+  const APP_VERSION = 'V88';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -17860,7 +17860,7 @@
       const planYPartiel = parseFloat(r['Plan_Y']) || null;
       const badgeLieuPartiel = (lieu || planXPartiel !== null) ? `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
         ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
-        ${planXPartiel !== null ? `<button type="button" onclick="voirPointSurPlan(${planXPartiel},${planYPartiel},{lieu:'${(lieu||'Emplacement').replace(/'/g,"\'")}',chantier:'${chantierNom.replace(/'/g,"\'")}',fourn:'${(r['Fournisseur']||'').replace(/'/g,"\'")}',num:'${(r['Numero commande']||'').replace(/'/g,"\'")}',statut:'${statut.replace(/'/g,"\'")}'})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+        ${planXPartiel !== null ? `<button type="button" data-plan="${echapperHtmlNote(JSON.stringify({ x: planXPartiel, y: planYPartiel, lieu: lieu || 'Emplacement', chantier: chantierNom, fourn: r['Fournisseur'] || '', num: r['Numero commande'] || '', statut }))}" onclick="voirPlanDepuisBouton(this)" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
       </div>` : '';
       actionsHTML = `
         ${badgeLieuPartiel}
@@ -17893,7 +17893,7 @@
       if (lieu || planX !== null) {
         extras += `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
           ${lieu ? `<div style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${lieu}</div>` : ''}
-          ${planX !== null ? `<button type="button" onclick="voirPointSurPlan(${planX},${planY},{lieu:'${(lieu||'Emplacement').replace(/'/g,"\\'")}',chantier:'${chantierNom.replace(/'/g,"\\'")}',fourn:'${(r['Fournisseur']||'').replace(/'/g,"\\'")}',num:'${(r['Numero commande']||'').replace(/'/g,"\\'")}',statut:'${statut.replace(/'/g,"\\'")}'})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
+          ${planX !== null ? `<button type="button" data-plan="${echapperHtmlNote(JSON.stringify({ x: planX, y: planY, lieu: lieu || 'Emplacement', chantier: chantierNom, fourn: r['Fournisseur'] || '', num: r['Numero commande'] || '', statut }))}" onclick="voirPlanDepuisBouton(this)" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
         </div>`;
       }
       if (estStatutCommandeReceptionne(statut)) {
@@ -24336,8 +24336,8 @@
 </div>
 
 <!-- MODALE PLAN VIEWER -->
-<div id="modal-plan-viewer" style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.7);flex-direction:column">
-  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
+<div id="modal-plan-viewer" style="display:none;position:fixed;inset:0;z-index:10050;background:rgba(0,0,0,.7);flex-direction:column">
+  <div style="background:linear-gradient(135deg,#2c2c2c,#4a5240);padding:calc(14px + env(safe-area-inset-top, 0px)) 18px 14px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0">
     <div>
       <div id="plan-viewer-title" style="font-size:14px;font-weight:800;color:#fff">Emplacement</div>
       <div style="font-size:11px;color:rgba(255,255,255,.7);margin-top:2px">Localisation sur le plan</div>
@@ -24513,6 +24513,13 @@ function fermerPlanPoint(confirmer){
   _ppUid=null;
 }
 
+// Bouton « Voir sur le plan » des commandes : infos lues dans data-plan (JSON) — plus d'erreur
+// quand le chantier, le fournisseur ou l'emplacement contient une apostrophe (« L'HERMENAULT »…)
+function voirPlanDepuisBouton(btn){
+  let d = {};
+  try { d = JSON.parse(btn.getAttribute('data-plan') || '{}'); } catch (e) {}
+  voirPointSurPlan(Number(d.x), Number(d.y), { lieu: d.lieu, chantier: d.chantier, fourn: d.fourn, num: d.num, statut: d.statut });
+}
 function voirPointSurPlan(planX,planY,infos){
   // infos peut être un objet {lieu,chantier,fourn,num,statut} ou une string (compat)
   const info = (typeof infos==='object'&&infos) ? infos : {lieu:infos||'Emplacement',chantier:'',fourn:'',num:'',statut:''};
