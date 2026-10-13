@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V95';
+  const APP_VERSION = 'V97';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1218,6 +1218,21 @@
     }
   }
 
+  // ── HEURE DES CHANGEMENTS DE STATUT DES COMMANDES ──
+  // Validation AR, réception, départ et retour chantier sont horodatés (date + heure).
+  // Il faut cocher « Inclure l'heure » sur ces champs date dans Baserow ; tant que ce n'est pas fait,
+  // l'enregistrement retombe automatiquement sur la date seule (aucune erreur pour l'utilisateur).
+  function horodatageStatut() { return new Date().toISOString(); }
+  function formaterDateStatut(d) {
+    if (!d) return '';
+    const s = String(d);
+    if (!/T\d{2}:\d{2}/.test(s)) return new Date(s.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR');
+    const dt = new Date(s);
+    if (isNaN(dt)) return s.slice(0, 10);
+    return dt.toLocaleDateString('fr-FR') + ' à ' + dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  }
+  const _reDateHeureJson = /"(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"/g;
+
   // ── PHOTOS ALLÉGÉES ──
   // Toute photo envoyée à Baserow (pièces jointes, non-conformités, planning, messages…) est
   // redimensionnée à 1600 px maximum et recompressée en JPEG qualité 0,72 avant l'envoi :
@@ -1264,8 +1279,18 @@
     }
     if (methode !== 'GET') {
       viderCacheBaserow();
+      // Champ date encore « sans heure » dans Baserow : nouvel essai avec la date seule
+      const corps = init && typeof init.body === 'string' ? init.body : '';
+      const avecHeure = methode === 'PATCH' && corps && _reDateHeureJson.test(corps);
+      _reDateHeureJson.lastIndex = 0;
       // Vidé aussi à la fin de l'écriture : une lecture lancée pendant l'écriture ne reste pas en cache
-      return _fetchNatif(input, init).then(r => { viderCacheBaserow(); return r; }, e => { viderCacheBaserow(); throw e; });
+      return _fetchNatif(input, init).then(async r => {
+        if (avecHeure && r.status === 400) {
+          const txt = await r.clone().text().catch(() => '');
+          if (/date/i.test(txt)) { r = await _fetchNatif(input, { ...init, body: corps.replace(_reDateHeureJson, '"$1"') }); }
+        }
+        viderCacheBaserow(); return r;
+      }, e => { viderCacheBaserow(); throw e; });
     }
     const m = url.match(/^https:\/\/api\.baserow\.io\/api\/database\/rows\/table\/(\d+)\//);
     if (!m || CACHE_BASEROW_TABLES_EXCLUES.has(m[1])) return _fetchNatif(input, init);
@@ -5030,7 +5055,7 @@
     const r = trouverCommandeParCode('CMD-' + commandeId) || {};
     const aujourdhui = dateYMD(new Date());
     const detail = choisies.map(l => `${l['Description'] || 'article'} × ${fmtQte(sel[l.id])}`).join(' ; ');
-    const payload = { 'Envoye par': connectedCollab || '', 'Date envoi chantier': aujourdhui };
+    const payload = { 'Envoye par': connectedCollab || '', 'Date envoi chantier': horodatageStatut() };
     const historique = (r['Note statut'] || '').trim();
     if (complet) {
       payload['Statut'] = 'Envoyé sur chantier';
@@ -9888,12 +9913,29 @@
           const affCollabSupprimables = affCollab.filter(a => a.isSaisie !== true);
           const showClearAll = isGestAdmin && !isPasseCollectif && affCollabSupprimables.length > 0;
 
-          if (showDup || showClearAll) {
-            td.style.position = 'relative';
-            // Boutons alignés sur la ligne véhicule : on réduit la largeur du bloc véhicule
-            const nbBtns = (showDup ? 1 : 0) + (showClearAll ? 1 : 0);
-            if (vehBlocEl) vehBlocEl.style.maxWidth = 'calc(100% - ' + (nbBtns * 34 + 2) + 'px)';
-            else td.style.paddingTop = '38px';
+          // En-tête de case : [véhicule] [🗑] [⧉] sur une même ligne, dans le flux (plus de boutons
+          // en position absolue qui chevauchaient le premier collaborateur et sa croix ✕)
+          let enteteCase = null;
+          if ((showDup || showClearAll) && vehBlocEl) {
+            enteteCase = document.createElement('div');
+            enteteCase.style.cssText = 'display:flex;align-items:flex-start;gap:4px;margin-bottom:5px';
+            td.insertBefore(enteteCase, vehBlocEl);
+            enteteCase.appendChild(vehBlocEl);
+            vehBlocEl.style.flex = '1 1 auto';
+            vehBlocEl.style.minWidth = '0';
+            vehBlocEl.style.maxWidth = 'none';
+            vehBlocEl.style.marginBottom = '0';
+          }
+          const styleBtnCase = 'flex:0 0 26px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;padding:0;cursor:pointer;line-height:1;font-weight:700;touch-action:manipulation;';
+
+          if (showClearAll) {
+            const btnClearAll = document.createElement('button');
+            btnClearAll.innerHTML = '🗑';
+            btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
+            btnClearAll.className = 'btn-clear-all-collab';
+            btnClearAll.style.cssText = styleBtnCase + 'background:#fdecea;border:1px solid #e6b3ac;font-size:13px;color:#c0392b';
+            btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
+            (enteteCase || td).appendChild(btnClearAll);
           }
 
           if (showDup) {
@@ -9901,19 +9943,9 @@
             btnDup.innerHTML = '⧉';
             btnDup.title = 'Dupliquer cette équipe sur les jours suivants';
             btnDup.className = 'btn-dup-equipe';
-            btnDup.style.cssText = 'position:absolute;top:4px;right:3px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:var(--beige-clair);border:1px solid var(--beige);border-radius:6px;font-size:16px;padding:0;cursor:pointer;color:var(--gris);line-height:1;font-weight:700;touch-action:manipulation';
+            btnDup.style.cssText = styleBtnCase + 'background:var(--beige-clair);border:1px solid var(--beige);font-size:14px;color:var(--gris)';
             btnDup.onclick = e => { e.stopPropagation(); dupliquerEquipeJours(chantier, dateStr, affCollab); };
-            td.appendChild(btnDup);
-          }
-
-          if (showClearAll) {
-            const btnClearAll = document.createElement('button');
-            btnClearAll.innerHTML = '🗑';
-            btnClearAll.title = 'Retirer tous les collaborateurs de cette case';
-            btnClearAll.className = 'btn-clear-all-collab';
-            btnClearAll.style.cssText = 'position:absolute;top:4px;right:' + (showDup ? '37px' : '3px') + ';width:30px;height:30px;display:flex;align-items:center;justify-content:center;background:#fdecea;border:1px solid #e6b3ac;border-radius:6px;font-size:15px;padding:0;cursor:pointer;color:#c0392b;line-height:1;font-weight:700;touch-action:manipulation';
-            btnClearAll.onclick = e => { e.stopPropagation(); supprimerTousCollabCase(chantier, dateStr, affCollabSupprimables); };
-            td.appendChild(btnClearAll);
+            (enteteCase || td).appendChild(btnDup);
           }
 
           if (isGestAdmin && !isPasseCollectif) {
@@ -13016,7 +13048,7 @@
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0 8px">🏗 ${chantierNom}</div>
       ${nbFlagged ? `<div style="margin-bottom:8px;padding:6px 10px;border-radius:8px;background:#fdecea;border:1px solid #e5b8b8;font-size:11px;color:#c0392b">
-        <div style="display:flex;align-items:center;gap:4px;font-weight:700">🔄 ${nbFlagged} article(s) en retour${signalePar ? ` · signalé par ${signalePar}` : ''}${dateRetour ? ` (${new Date(dateRetour + 'T12:00:00').toLocaleDateString('fr-FR')})` : ''}</div>
+        <div style="display:flex;align-items:center;gap:4px;font-weight:700">🔄 ${nbFlagged} article(s) en retour${signalePar ? ` · signalé par ${signalePar}` : ''}${dateRetour ? ` (${formaterDateStatut(dateRetour)})` : ''}</div>
         <ul style="margin:4px 0 0;padding-left:16px">${lignes.filter(l => l['Retour chantier']).map(l => `<li>${l['Description'] || 'Article sans description'}</li>`).join('')}</ul>
       </div>` : ''}
       ${renderFormRetourArticles(r, uid)}
@@ -13050,7 +13082,7 @@
       const note = noteInput ? noteInput.value.trim() : '';
       const payloadCommande = { 'Note retour chantier': note };
       payloadCommande['Retour signale par'] = nbCoche > 0 ? (connectedCollab || '') : '';
-      payloadCommande['Date retour chantier'] = nbCoche > 0 ? dateYMD(new Date()) : null;
+      payloadCommande['Date retour chantier'] = nbCoche > 0 ? horodatageStatut() : null;
 
       const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, {
         method: 'PATCH', headers: HEADERS, body: JSON.stringify(payloadCommande)
@@ -15357,7 +15389,7 @@
         ['Chantier', chantier || (stock ? 'Sans chantier → stock atelier' : '')],
         ['Date commande', fd(r['Date commande'])],
         ['Réception prévue', fd(r['Date reception prevue'])],
-        ['AR validé', fd(r['Date validation AR']) + (r['Valide par'] ? ' · ' + extraireValeurChamp(r['Valide par'], '') : '')],
+        ['AR validé', formaterDateStatut(r['Date validation AR']) + (r['Valide par'] ? ' · ' + extraireValeurChamp(r['Valide par'], '') : '')],
         ['Référence', r['Reference complete']],
         ['Destination', stock ? 'STOCK ATELIER' : (r['Lieu de réception'] || '')],
       ].filter(x => x[1]);
@@ -17947,7 +17979,7 @@
     const referenceComplete = r['Reference complete'] || '';
     const envoyeParMail = r['Envoye par mail'] === true;
 
-    const formaterDate = (d) => d ? new Date(d + 'T12:00:00').toLocaleDateString('fr-FR') : '';
+    const formaterDate = formaterDateStatut;
 
     const nbArticles = (_commandesLignesCache[r.id] || []).length;
     const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix, statut);
@@ -18410,7 +18442,7 @@
   }
   async function finaliserDepartTotal(r) {
     const payload = { 'Statut': 'Envoyé sur chantier' };
-    if (!r['Date envoi chantier']) payload['Date envoi chantier'] = dateYMD(new Date());
+    if (!r['Date envoi chantier']) payload['Date envoi chantier'] = horodatageStatut();
     const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${r.id}/?user_field_names=true`, {
       method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload)
     });
@@ -18550,7 +18582,7 @@
     }
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Envoi…'; }
     try {
-      const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '', 'Date validation AR': dateYMD(new Date()) };
+      const payload = { 'Statut': 'En attente réception', 'Valide par': connectedCollab || '', 'Date validation AR': horodatageStatut() };
       const note = noteInput ? noteInput.value.trim() : '';
       // Note de validation ajoutée à l'historique (n'écrase plus les notes précédentes)
       const cmdAvant = (_commandesCache || []).find(c => c.id === id) || {};
@@ -18639,7 +18671,7 @@
     if (partielle && !lignes.length && !note) { alert('Merci de préciser ce qui manque (note obligatoire, aucun article détaillé sur cette commande).'); return; }
     const statutCible = partielle ? 'Réception partielle' : (type === 'atelier' ? 'Réceptionné en atelier' : 'Réceptionné sur chantier');
     const dateAujourdhui = dateYMD(new Date());
-    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': dateAujourdhui };
+    const payload = { 'Statut': statutCible, 'Lieu de réception': lieu, 'Receptionne par': connectedCollab || '', 'Date reception': horodatageStatut() };
     if (planX !== null) payload['Plan_X'] = planX;
     if (planY !== null) payload['Plan_Y'] = planY;
     // On ne renseigne "1ere reception par/date" qu'au tout premier arrivage :
