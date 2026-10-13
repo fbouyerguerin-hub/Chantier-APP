@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V92';
+  const APP_VERSION = 'V94';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1030,7 +1030,8 @@
     connectedViewId = viewId;
     connectedDroit = droit || '';
     connectedAccesCharge = !!accesChargeSupp;
-    _peutVoirPrixActuel = estProfilPrix(); // jamais hérité du profil précédent (tablette partagée)
+    _peutVoirPrixActuel = estProfilPrix();
+    setTimeout(() => { try { chargerParametresApp(); } catch (e) {} }, 500); // codes génériques partagés // jamais hérité du profil précédent (tablette partagée)
     activerGardeSortie();
     filtrerChantiersSelonDroit();
     // Chercher dans les données déjà chargées (case-insensitive)
@@ -13382,8 +13383,42 @@
 
   // Code article EBP d'une ligne de commande fournisseur : le Worker /sync
   // écrit l'ItemId EBP dans le champ "Reference fournisseur" des lignes.
+  // Codes EBP GÉNÉRIQUES (article « divers » dont la désignation change à chaque ligne) :
+  // ils ne servent jamais à rattacher une ligne à un article du stock — ni propositions
+  // « Dispo. stock », ni entrées en stock sur ce code, ni scan. La ligne est alors traitée
+  // par sa désignation, comme une ligne sans code. ➜ Liste modifiable ici.
+  // Liste partagée, réglée depuis la fiche d'un article (🏷️ Code générique) et stockée par le Worker
+  let ARTICLES_GENERIQUES = (() => { try { return JSON.parse(localStorage.getItem('gb_generiques') || 'null') || ['EL00001']; } catch (e) { return ['EL00001']; } })();
+  function estCodeGenerique(code) { return !!code && ARTICLES_GENERIQUES.some(g => normRef(g) === normRef(code || '')); }
+  async function chargerParametresApp() {
+    try {
+      const r = await _fetchNatifBrut(GB_WORKER + '/parametres?t=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (Array.isArray(d.generiques)) { ARTICLES_GENERIQUES = d.generiques; try { localStorage.setItem('gb_generiques', JSON.stringify(d.generiques)); } catch (e) {} }
+    } catch (e) {}
+  }
+  async function basculerCodeGenerique(code) {
+    if (!estProfilPrix()) return;
+    const deja = estCodeGenerique(code);
+    if (!confirm(deja
+      ? `Retirer ${code} des codes génériques ?\n\nSes lignes de commande seront de nouveau rattachées à l'article ${code} (stock, Dispo. stock, scan).`
+      : `Marquer ${code} comme code GÉNÉRIQUE (article « divers ») ?\n\nSes lignes de commande ne seront plus rattachées à cet article : ni proposition Dispo. stock, ni entrée en stock sur ce code. Elles seront traitées par leur désignation.`)) return;
+    await chargerParametresApp();
+    const liste = deja ? ARTICLES_GENERIQUES.filter(g => normRef(g) !== normRef(code)) : [...ARTICLES_GENERIQUES, String(code).trim().toUpperCase()];
+    try {
+      const r = await _fetchNatifBrut(GB_WORKER + '/parametres', { method: 'POST', headers: { ...headersWorker(), 'Content-Type': 'application/json' }, body: JSON.stringify({ generiques: liste }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + ' (Worker à mettre à jour ?)'));
+      ARTICLES_GENERIQUES = d.generiques || liste;
+      try { localStorage.setItem('gb_generiques', JSON.stringify(ARTICLES_GENERIQUES)); } catch (e) {}
+      try { rafraichirFicheArticleOuverte(); } catch (e) {}
+      try { if (document.getElementById('commandes-vue-dispo')?.style.display === 'block') renderCommandesDispoStock(); } catch (e) {}
+    } catch (e) { alert('❌ ' + e.message); }
+  }
   function codeArticleLigne(l) {
-    return (l['Code article'] || l['Reference fournisseur'] || '').toString().trim();
+    const c = (l['Code article'] || l['Reference fournisseur'] || '').toString().trim();
+    return estCodeGenerique(c) ? '' : c;
   }
   // Rapprochement ligne de commande → article de la bibliothèque :
   // 1) code article EBP (ItemId), 2) réf. fournisseur de la fiche article, 3) désignation exacte.
@@ -14379,6 +14414,8 @@
         ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
         ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
+        ${code && estCodeGenerique(code) ? '<span title="Code « divers » : ses lignes de commande ne sont pas rattachées à cet article" style="background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🏷️ code générique</span>' : ''}
+        ${code && !estOuvrage && estProfilPrix() ? `<button onclick="basculerCodeGenerique('${esc(code)}')" style="background:#fff;border:1px solid #e0d6c4;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#8a7a5c;cursor:pointer">${estCodeGenerique(code) ? '↩️ Retirer des génériques' : '🏷️ Marquer générique'}</button>` : ''}
       </div>`;
 
     // Informations EBP
@@ -15402,7 +15439,8 @@
     }
     const vus = new Set(), trouves = [];
     (_commandesLignesCache[r.id] || []).forEach(l => {
-      const a = trouverArticleParCode(l['Reference'] || l['Ref'] || l['Code article'] || '');
+      const codeL = l['Reference'] || l['Ref'] || l['Code article'] || '';
+      const a = estCodeGenerique(codeL) ? trouverArticlePourLigne(l) : trouverArticleParCode(codeL);
       if (a && !vus.has(a.id) && !estKit(a)) { vus.add(a.id); trouves.push({ a, l }); }
     });
     if (!zone()) return;
