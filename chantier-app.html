@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V88';
+  const APP_VERSION = 'V89';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -24362,7 +24362,7 @@
       </div>
       <div id="plan-viewer-inner" style="display:none;position:absolute;transform-origin:0 0;will-change:transform">
         <img id="plan-viewer-img" alt="" style="display:block;width:100%;pointer-events:none;user-select:none" />
-        <div id="plan-viewer-marker" style="display:none;position:absolute;transform:translate(-50%,-100%);pointer-events:none;z-index:5">
+        <div id="plan-viewer-marker" style="display:none;position:absolute;transform:translate(-50%,calc(-100% + 7.5px));pointer-events:none;z-index:5"><!-- le CENTRE du point rouge est sur l'emplacement enregistré (comme à la saisie), plus le bas de l'épingle -->
           <!-- Bulle légende -->
           <div id="plan-viewer-bubble" style="background:#e74c3c;color:#fff;border-radius:8px;padding:5px 9px;white-space:nowrap;font-size:11px;font-weight:800;box-shadow:0 2px 8px rgba(0,0,0,.4);margin-bottom:3px;text-align:center;max-width:140px;overflow:hidden;text-overflow:ellipsis"></div>
           <!-- Flèche vers le bas -->
