@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V86';
+  const APP_VERSION = 'V87';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13065,6 +13065,97 @@
   }
 
 
+  // ── EXPORT EXCEL : commandes en attente de réception (+ reliquats partiels) ──
+  // Feuille 1 « En attente » : toutes les commandes, filtres Excel actifs, lignes en retard en rouge.
+  // Feuille 2 « À relancer » : uniquement celles dont la date de réception prévue est dépassée,
+  // regroupées par fournisseur (prêtes pour les appels / mails de relance).
+  async function exporterCommandesEnAttenteReception() {
+    const prix = estProfilPrix();
+    const toutes = _commandesCache.filter(r => {
+      if (estCommandePartielle(r)) return true;
+      const st = extraireValeurChamp(r['Statut'], 'En attente AR');
+      return !estStatutCommandeReceptionne(st) && st !== 'En attente AR' && !estCommandeFacturee(r);
+    });
+    if (!toutes.length) { alert('Aucune commande en attente de réception.'); return; }
+    const d = v => v ? new Date(String(v).slice(0, 10) + 'T12:00:00') : null;
+    const lignesDe = r => (_commandesLignesCache[r.id] || []).filter(l => (parseFloat(l['Quantite']) || 0) > 0);
+    const resteDe = r => lignesDe(r).filter(l => l['Non réceptionné']).map(l => `${l['Description'] || ''}`.slice(0, 60)).join(' ; ');
+    const donnees = toutes.map(r => {
+      const retard = joursRetardReception(r);
+      return {
+        relancer: retard > 0 ? 'OUI' : (r['Date reception prevue'] ? 'non' : 'date ?'),
+        retard: retard || null,
+        numero: r['Numero commande'] || '',
+        fournisseur: r['Fournisseur'] || '',
+        chantier: (r['Chantier'] || [])[0]?.value || '',
+        devis: r['Numero devis'] || '',
+        dateCmd: d(r['Date commande']),
+        dateAR: d(r['Date validation AR']),
+        prevue: d(r['Date reception prevue']),
+        statut: estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], ''),
+        livChantier: estLivraisonSurChantier(r) ? 'Oui' : '',
+        nbArt: lignesDe(r).length || null,
+        reste: estCommandePartielle(r) ? resteDe(r) : '',
+        montant: prix ? (Number(r['Montant total HT']) || null) : undefined
+      };
+    }).sort((a, b) => (b.retard || 0) - (a.retard || 0) || a.fournisseur.localeCompare(b.fournisseur, 'fr'));
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Guérin Bâtiments';
+    const colonnes = [
+      { header: 'À relancer', key: 'relancer', width: 11 },
+      { header: 'Jours de retard', key: 'retard', width: 10 },
+      { header: 'N° commande', key: 'numero', width: 14 },
+      { header: 'Fournisseur', key: 'fournisseur', width: 26 },
+      { header: 'Chantier', key: 'chantier', width: 38 },
+      { header: 'Devis', key: 'devis', width: 12 },
+      { header: 'Date commande', key: 'dateCmd', width: 12, style: { numFmt: 'dd/mm/yyyy' } },
+      { header: 'AR validé le', key: 'dateAR', width: 12, style: { numFmt: 'dd/mm/yyyy' } },
+      { header: 'Réception prévue', key: 'prevue', width: 13, style: { numFmt: 'dd/mm/yyyy' } },
+      { header: 'Statut', key: 'statut', width: 20 },
+      { header: 'Livraison chantier', key: 'livChantier', width: 10 },
+      { header: 'Nb articles', key: 'nbArt', width: 9 },
+      { header: 'Reste à recevoir', key: 'reste', width: 40 },
+      ...(prix ? [{ header: 'Montant HT', key: 'montant', width: 12, style: { numFmt: '#,##0.00 €' } }] : [])
+    ];
+    const remplir = (ws, lignes, titre) => {
+      ws.columns = colonnes;
+      ws.spliceRows(1, 0, [titre], []);
+      ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF2E4A26' } };
+      const entete = ws.getRow(3);
+      entete.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      entete.alignment = { vertical: 'middle', wrapText: true };
+      entete.height = 30;
+      entete.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A7C3F' } }; });
+      lignes.forEach(x => {
+        const row = ws.addRow(x);
+        if (x.relancer === 'OUI') {
+          row.eachCell({ includeEmpty: true }, c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDECEA' } }; });
+          row.getCell('relancer').font = { bold: true, color: { argb: 'FFC0392B' } };
+          row.getCell('retard').font = { bold: true, color: { argb: 'FFC0392B' } };
+        }
+        row.alignment = { vertical: 'top', wrapText: true };
+      });
+      ws.views = [{ state: 'frozen', ySplit: 3 }];
+      ws.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: colonnes.length } };
+      ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+    };
+    const auj = new Date().toLocaleDateString('fr-FR');
+    const nbRelance = donnees.filter(x => x.relancer === 'OUI').length;
+    remplir(wb.addWorksheet('En attente'), donnees, `Commandes en attente de réception — ${auj} — ${donnees.length} commande(s), dont ${nbRelance} à relancer`);
+    const aRelancer = donnees.filter(x => x.relancer === 'OUI').sort((a, b) => a.fournisseur.localeCompare(b.fournisseur, 'fr') || (b.retard || 0) - (a.retard || 0));
+    remplir(wb.addWorksheet('À relancer'), aRelancer, `À relancer (date de réception prévue dépassée) — ${auj} — ${aRelancer.length} commande(s)`);
+    const sansDate = donnees.filter(x => x.relancer === 'date ?').length;
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `Commandes_en_attente_${dateYMD(new Date())}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    if (sansDate) alert(`ℹ️ ${sansDate} commande(s) sans date de réception prévue : marquées « date ? » dans la colonne À relancer (renseignez la date pour qu'elles soient suivies).`);
+  }
+
   function renderCommandesListe() {
     const resumeEl = document.getElementById('commandes-resume');
     const listeEl = document.getElementById('commandes-liste');
@@ -23679,7 +23770,10 @@
   <!-- Vue Liste (commandes validées AR, en attente de réception) -->
   <div id="commandes-vue-liste">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <div id="commandes-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <div id="commandes-resume" style="flex:1;font-size:12px;color:var(--gris-moyen)"></div>
+        <button onclick="exporterCommandesEnAttenteReception()" title="Export Excel : toutes les commandes en attente + feuille « À relancer » (délai dépassé)" style="flex:0 0 auto;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer">📥 Excel relances</button>
+      </div>
       <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
