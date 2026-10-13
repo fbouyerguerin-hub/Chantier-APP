@@ -744,7 +744,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V94';
+  const APP_VERSION = 'V95';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1218,9 +1218,50 @@
     }
   }
 
+  // ── PHOTOS ALLÉGÉES ──
+  // Toute photo envoyée à Baserow (pièces jointes, non-conformités, planning, messages…) est
+  // redimensionnée à 1600 px maximum et recompressée en JPEG qualité 0,72 avant l'envoi :
+  // ~200-400 Ko au lieu de 3-6 Mo, toujours lisible pour une étiquette ou un défaut.
+  // Les PDF et autres fichiers ne sont pas modifiés ; une photo déjà légère reste telle quelle.
+  const PHOTO_MAX_PX = 1600, PHOTO_QUALITE = 0.72, PHOTO_SEUIL_OCTETS = 400 * 1024;
+  async function compresserPhoto(fichier) {
+    try {
+      if (!fichier || !/^image\/(jpeg|jpg|png|webp|heic|heif)$/i.test(fichier.type || '') || fichier.size <= PHOTO_SEUIL_OCTETS) return fichier;
+      const bitmap = await (window.createImageBitmap ? createImageBitmap(fichier, { imageOrientation: 'from-image' }).catch(() => null) : null)
+        || await new Promise((ok, ko) => { const img = new Image(); img.onload = () => ok(img); img.onerror = ko; img.src = URL.createObjectURL(fichier); });
+      const w = bitmap.width, h = bitmap.height, k = Math.min(1, PHOTO_MAX_PX / Math.max(w, h));
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * k); c.height = Math.round(h * k);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(bitmap, 0, 0, c.width, c.height);
+      const blob = await new Promise(ok => c.toBlob(ok, 'image/jpeg', PHOTO_QUALITE));
+      if (!blob || blob.size >= fichier.size) return fichier;
+      const nom = String(fichier.name || 'photo').replace(/\.(png|webp|heic|heif|jpe?g)$/i, '') + '.jpg';
+      return new File([blob], nom, { type: 'image/jpeg', lastModified: Date.now() });
+    } catch (e) { console.warn('Compression photo ignorée', e); return fichier; }
+  }
+  async function alleegerEnvoiFichier(init) {
+    const fd = init && init.body;
+    if (!(fd instanceof FormData)) return init;
+    const nouveau = new FormData();
+    for (const [k, v] of fd.entries()) {
+      if (v instanceof File || v instanceof Blob) {
+        const f = v instanceof File ? v : new File([v], 'photo.jpg', { type: v.type });
+        const allege = await compresserPhoto(f);
+        nouveau.append(k, allege, allege.name);
+      } else nouveau.append(k, v);
+    }
+    return { ...init, body: nouveau };
+  }
+
   window.fetch = function(input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const methode = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    if (methode === 'POST' && /\/user-files\/upload-file\/?$/.test(url.split('?')[0])) {
+      viderCacheBaserow();
+      return alleegerEnvoiFichier(init).then(i2 => _fetchNatif(input, i2)).then(r => { viderCacheBaserow(); return r; }, e => { viderCacheBaserow(); throw e; });
+    }
     if (methode !== 'GET') {
       viderCacheBaserow();
       // Vidé aussi à la fin de l'écriture : une lecture lancée pendant l'écriture ne reste pas en cache
