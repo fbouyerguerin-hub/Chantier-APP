@@ -760,7 +760,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V4';
+  const APP_VERSION = 'V5';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14808,7 +14808,7 @@
     // Bon de sortie de stock (prise en stock d'une commande) : le scan valide la sortie
     if (/^BS-\d+(\.\d+)*$/i.test(code)) { validerBonSortieScan(code); return; }
     // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
-    if (_scanMode === 'info' && _recExpress && _recExpress.mode === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
+    if (_scanMode === 'info' && _recExpress && _recExpress.etape === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
     if (_scanMode === 'info' && _departScanUid && selectionDepartParCode(code)) { bipScan(true); return; }
     if (/^LIG-\d+$/i.test(code)) {
       // QR d'une ligne de la fiche A4 (hors réception / départ en cours) : on va à
@@ -15628,7 +15628,7 @@
       const receptionPossible = r && (statut === 'En attente réception' || statut === 'Réception partielle') && !fiche.sansFormulaire;
       // Colis qui arrive : panneau « réception express » (conforme / non conforme)
       // au-dessus de la fiche ; le formulaire détaillé reste accessible dessous.
-      _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', ecarts: {}, selection: null } : null;
+      _recExpress = receptionPossible ? { id: r.id, uid: r.id + '-scan', mode: 'choix', etape: 'choix', voie: null, photoBL: null, ecarts: {}, selection: null } : null;
       el.innerHTML = r ? `<div id="rx-panel"></div><div id="scan-stock-articles"></div>${renderCarteCommande(r, estProfilPrix(), 'scan')}` : '<div class="feuille-empty">Commande introuvable.</div>';
       if (r && !receptionPossible && (estStatutCommandeReceptionne(statut) || estCommandePartielle(r))) afficherStockArticlesCommandeScan(r, fiche).catch(e => console.warn('Stock articles scan', e));
       if (receptionPossible) renderRecExpress();
@@ -15762,34 +15762,67 @@
     if (selectionLigneExpressParCode(code)) bipScan(true);
     else { bipScan(false); setMessageScan(`❌ « ${code} » ne correspond à aucune ligne attendue de cette commande`, '#c0392b'); }
   }
+  // ── RÉCEPTION EXPRESS EN ÉTAPES ──
+  //   ✅ Conforme      : 1. photo du BL → 2. emplacement sur le plan → valider
+  //   ⚠️ Non conforme  : 1. photo du BL → 2. articles non conformes → 3. emplacement → valider
+  function demarrerVoieRec(voie) {
+    const rx = _recExpress; if (!rx) return;
+    rx.voie = voie; rx.etape = 'bl';
+    if (voie === 'conforme') rx.ecarts = {};
+    renderRecExpress();
+  }
+  function etapeRec(etape) {
+    const rx = _recExpress; if (!rx) return;
+    rx.etape = etape;
+    if (etape === 'nc') { modeRecExpress('nc'); return; }           // caméra prête pour scanner les lignes
+    rx.mode = etape === 'choix' ? 'choix' : rx.mode;
+    if (etape === 'choix') { rx.voie = null; rx.ecarts = {}; rx.photoBL = null; masquerCameraScan().catch(() => {}); }
+    renderRecExpress();
+    if (etape === 'plan' && !document.getElementById('reception-plan-x-' + rx.uid)?.value) setTimeout(() => ouvrirPlanPoint(rx.uid), 250);
+  }
+  function photoBLChoisie(input) {
+    const rx = _recExpress; if (!rx) return;
+    rx.photoBL = input.files && input.files[0] ? input.files[0] : null;
+    if (rx.photoBL) etapeRec(rx.voie === 'nc' ? 'nc' : 'plan');
+    else renderRecExpress();
+  }
   function renderRecExpress() {
     const rx = _recExpress, panel = document.getElementById('rx-panel');
     if (!rx || !panel) return;
     const r = trouverCommandeParCode('CMD-' + rx.id);
     if (!r) { panel.innerHTML = ''; return; }
+    if (!rx.etape) rx.etape = rx.mode === 'nc' ? 'nc' : 'choix';
     const esc = echapperHtmlNote;
     const stock = estCommandeStockAtelier(r);
     const lieuDefaut = (document.getElementById('rx-lieu')?.value) ?? (r['Lieu de réception'] || (stock ? 'Stock atelier' : ''));
     const partielle = estCommandePartielle(r);
     const lignes = lignesAttendues(r);
     const nbEcarts = Object.keys(rx.ecarts).length;
-    let html = `<div style="background:#f4f8f3;border:1.5px solid var(--vert);border-radius:12px;padding:12px;margin-bottom:10px">
-      <div style="font-size:13px;font-weight:800;color:var(--vert);margin-bottom:6px">📦 Réception ${partielle ? '— complément (réception partielle en cours)' : ''}</div>
-      ${(() => {
-        // Emplacement du colis : point obligatoire sur le plan de l'atelier
-        const place = !!document.getElementById('reception-plan-x-' + rx.uid)?.value;
-        return `<button type="button" onclick="ouvrirPlanPoint('${rx.uid}')" style="width:100%;margin:2px 0 6px;padding:12px;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;${place
-          ? 'background:#e8f0e7;border:1.5px solid var(--vert);color:var(--vert)">✅ Colis placé sur le plan — modifier'
-          : 'background:#fff;border:2px dashed var(--vert);color:var(--vert)">🗺️ Placer le colis sur le plan'}</button>`;
-      })()}
-      <input type="text" id="rx-lieu" value="${esc(lieuDefaut).replace(/"/g, '&quot;')}" placeholder="Précision (facultatif) : quai, rack B…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;margin:0 0 8px" />`;
-    if (rx.mode === 'choix') {
+    const etapes = rx.voie === 'nc' ? ['bl', 'nc', 'plan'] : ['bl', 'plan'];
+    const nomsEtapes = { bl: '📷 Photo du BL', nc: '⚠️ Articles non conformes', plan: '🗺️ Emplacement' };
+    const fil = rx.etape === 'choix' ? '' : `<div style="display:flex;gap:4px;margin:2px 0 10px">${etapes.map((e, k) => {
+      const actif = e === rx.etape, fait = etapes.indexOf(rx.etape) > k;
+      return `<div style="flex:1;text-align:center;font-size:10px;font-weight:800;padding:5px 2px;border-radius:6px;background:${actif ? 'var(--vert)' : fait ? '#d9e8d5' : '#eee'};color:${actif ? '#fff' : fait ? 'var(--vert)' : '#999'}">${k + 1}. ${nomsEtapes[e]}${fait ? ' ✓' : ''}</div>`;
+    }).join('')}</div>`;
+    const btnRetour = (cible, lib) => `<button onclick="etapeRec('${cible}')" style="flex:1;background:var(--beige-clair);border:none;border-radius:10px;padding:12px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">${lib || '← Retour'}</button>`;
+    let html = `<div style="background:#f4f8f3;border:1.5px solid ${rx.voie === 'nc' ? '#f0b46b' : 'var(--vert)'};border-radius:12px;padding:12px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:800;color:${rx.voie === 'nc' ? '#a35a00' : 'var(--vert)'};margin-bottom:6px">📦 Réception ${rx.voie === 'nc' ? 'NON CONFORME' : rx.voie === 'conforme' ? 'conforme' : ''}${partielle ? ' — complément (réception partielle en cours)' : ''}</div>${fil}`;
+
+    if (rx.etape === 'choix') {
       html += `<div style="font-size:12px;color:#555;margin-bottom:8px">${lignes.length} ligne(s) attendue(s). Tout est-il présent et en bon état ?</div>
         <div style="display:flex;gap:8px">
-          <button onclick="validerRecExpress(false)" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:800;cursor:pointer">✅ Conforme — tout réceptionner</button>
-          <button onclick="modeRecExpress('nc')" style="flex:1;background:#fff3e0;color:#a35a00;border:1.5px solid #f0b46b;border-radius:10px;padding:14px;font-size:13px;font-weight:800;cursor:pointer">⚠️ Non conforme</button>
+          <button onclick="demarrerVoieRec('conforme')" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:800;cursor:pointer">✅ Conforme</button>
+          <button onclick="demarrerVoieRec('nc')" style="flex:1;background:#fff3e0;color:#a35a00;border:1.5px solid #f0b46b;border-radius:10px;padding:14px;font-size:13px;font-weight:800;cursor:pointer">⚠️ Non conforme</button>
         </div>`;
-    } else {
+    } else if (rx.etape === 'bl') {
+      html += `<div style="font-size:13px;color:#333;margin-bottom:8px">Prenez en photo le <b>bon de livraison</b> du fournisseur.</div>
+        <label style="display:block;text-align:center;background:var(--vert);color:#fff;border-radius:10px;padding:16px;font-size:15px;font-weight:800;cursor:pointer;margin-bottom:8px">📷 ${rx.photoBL ? 'Reprendre la photo' : 'Photographier le BL'}<input type="file" accept="image/*" capture="environment" style="display:none" onchange="photoBLChoisie(this)" /></label>
+        ${rx.photoBL ? `<div style="font-size:12px;color:var(--vert);font-weight:700;margin-bottom:8px">✅ ${esc(rx.photoBL.name || 'Photo du BL')}</div>` : ''}
+        <div style="display:flex;gap:8px">
+          ${btnRetour('choix')}
+          <button onclick="etapeRec('${rx.voie === 'nc' ? 'nc' : 'plan'}')" style="flex:2;background:#fff;border:1.5px solid #ccc;border-radius:10px;padding:12px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">${rx.photoBL ? 'Suivant →' : 'Pas de BL — passer →'}</button>
+        </div>`;
+    } else if (rx.etape === 'nc') {
       html += `<div style="font-size:12px;color:#a35a00;font-weight:700;margin-bottom:6px">⚠️ Scannez sur la fiche A4 chaque ligne manquante ou non conforme (ou touchez-la) : puis indiquez le nombre de pièces manquantes (à la douchette, chaque nouveau scan de la ligne ajoute 1). Les lignes non signalées sont réceptionnées en totalité.</div>
         <input type="text" placeholder="🔫 Scanner une ligne / un article…" autocomplete="off" onkeydown="scanSaisieExpress(event, this)" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px dashed #f0b46b;border-radius:8px;font-size:12px;margin-bottom:6px" />
         <div style="max-height:46vh;overflow-y:auto">` + lignes.map(l => {
@@ -15815,11 +15848,39 @@
             </div>`;
         }).join('') + `</div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button onclick="modeRecExpress('choix'); _recExpress.ecarts = {}; renderRecExpress()" style="flex:1;background:var(--beige-clair);border:none;border-radius:10px;padding:12px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">Annuler</button>
-          <button onclick="validerRecExpress(true)" ${nbEcarts ? '' : 'disabled'} style="flex:2;background:#e67e22;opacity:${nbEcarts ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:800;cursor:pointer">Valider la réception (${nbEcarts} écart${nbEcarts > 1 ? 's' : ''})</button>
+          ${btnRetour('bl')}
+          <button onclick="masquerCameraScan().catch(() => {}); etapeRec('plan')" ${nbEcarts ? '' : 'disabled'} style="flex:2;background:#e67e22;opacity:${nbEcarts ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:12px;font-size:13px;font-weight:800;cursor:pointer">Suivant : emplacement → (${nbEcarts} écart${nbEcarts > 1 ? 's' : ''})</button>
+        </div>`;
+    } else if (rx.etape === 'plan') {
+      const place = !!document.getElementById('reception-plan-x-' + rx.uid)?.value;
+      html += `<button type="button" onclick="ouvrirPlanPoint('${rx.uid}')" style="width:100%;margin:2px 0 6px;padding:14px;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;${place
+          ? 'background:#e8f0e7;border:1.5px solid var(--vert);color:var(--vert)">✅ Colis placé sur le plan — modifier'
+          : 'background:#fff;border:2px dashed var(--vert);color:var(--vert)">🗺️ Placer le colis sur le plan'}</button>
+        <input type="text" id="rx-lieu" value="${esc(lieuDefaut)}" placeholder="Précision (facultatif) : quai, rack B…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;margin:0 0 8px" />
+        <div style="font-size:11px;color:#666;margin-bottom:8px">${rx.photoBL ? '📷 Photo du BL prête' : '📷 Sans photo de BL'}${rx.voie === 'nc' ? ` · ⚠️ ${nbEcarts} écart(s) signalé(s)` : ' · ✅ tout conforme'}</div>
+        <div style="display:flex;gap:8px">
+          ${btnRetour(rx.voie === 'nc' ? 'nc' : 'bl')}
+          <button onclick="validerRecExpress(${rx.voie === 'nc'})" ${place ? '' : 'disabled'} style="flex:2;background:${rx.voie === 'nc' ? '#e67e22' : 'var(--vert)'};opacity:${place ? 1 : .5};color:#fff;border:none;border-radius:10px;padding:14px;font-size:14px;font-weight:800;cursor:pointer">✅ Valider la réception</button>
         </div>`;
     }
     panel.innerHTML = html + '</div>';
+  }
+
+  // Photo du BL jointe à la commande (colonne Partagé), après une réception validée
+  async function joindrePhotoBLCommande(r, fichier) {
+    const fd = new FormData();
+    const nom = `BL ${r['Numero commande'] || ''} ${new Date().toLocaleDateString('fr-FR').replace(/\//g, '-')}.jpg`.replace(/\s+/g, ' ');
+    fd.append('file', new File([fichier], nom, { type: fichier.type || 'image/jpeg' }));
+    const rUpload = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+    if (!rUpload.ok) throw new Error('envoi de la photo refusé (' + rUpload.status + ')');
+    const nouveau = { name: (await rUpload.json()).name, visible_name: nom };
+    const c = CHAMPS_NOTES_DOCS.public;
+    const actuel = await lireCommandeFraiche(r.id);
+    const existants = (actuel[c.docs] || []).map(f => ({ name: f.name, visible_name: f.visible_name }));
+    const payload = { [c.docs]: [...existants, nouveau] };
+    if (c.notes in actuel) payload[c.notes] = [String(actuel[c.notes] || '').trim(), ligneNoteCommande('📎 ' + nom + ' ajouté')].filter(Boolean).join('\n');
+    const rPatch = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${r.id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(payload) });
+    if (!rPatch.ok) throw new Error('Baserow ' + rPatch.status);
   }
 
   async function validerRecExpress(avecEcarts) {
@@ -15864,6 +15925,10 @@
     // dans le champ Note du formulaire) : s'il y a échec ou abandon, rien ne reste.
     const ok = await validerReception(uid, r.id, { noteAuto: resume ? 'Réception non conforme :\n' + resume : '' });
     if (!ok) return;
+    if (rx.photoBL) {
+      try { await joindrePhotoBLCommande(r, rx.photoBL); await rafraichirApresActionCommande(); }
+      catch (e) { console.error('Photo BL', e); alert('⚠️ Réception enregistrée, mais la photo du BL n\'a pas pu être jointe : ' + e.message + '\nAjoutez-la depuis la commande (📎 Ajouter un document).'); }
+    }
     const nc = ids.filter(lid => ecarts[lid].motif !== 'Manquant');
     if (nc.length) {
       try { await enregistrerNonConformites(r, nc.map(lid => ({ ligne: lignes.find(x => x.id === lid), ...ecarts[lid] }))); }
