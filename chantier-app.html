@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V11';
+  const APP_VERSION = 'V12';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13677,8 +13677,34 @@
       if (!r.ok) return;
       const d = await r.json();
       if (Array.isArray(d.generiques)) { ARTICLES_GENERIQUES = d.generiques; try { localStorage.setItem('gb_generiques', JSON.stringify(d.generiques)); } catch (e) {} }
+      if (Array.isArray(d.materiels)) { ARTICLES_MATERIEL = d.materiels.map(Number); try { localStorage.setItem('gb_materiels', JSON.stringify(ARTICLES_MATERIEL)); } catch (e) {} }
     } catch (e) {}
   }
+  // ── ARTICLE GÉRÉ COMME MATÉRIEL INTERNE (kit interne d'un seul article) ──
+  // Outillage, échafaudage, caisse… : il sort vers un chantier puis revient au stock, SANS être
+  // compté comme un coût du chantier (mouvements notés « Kit … », comme les kits d'ouvrage).
+  let ARTICLES_MATERIEL = (() => { try { return (JSON.parse(localStorage.getItem('gb_materiels') || '[]') || []).map(Number); } catch (e) { return []; } })();
+  function estMateriel(a) { return !!a && ARTICLES_MATERIEL.includes(Number(a.id)); }
+  async function basculerMateriel(articleId) {
+    if (!(connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire')) return;
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    const deja = estMateriel(a);
+    if (!confirm(deja
+      ? `Retirer « ${a['Designation'] || ''} » du matériel interne ?\n\nSes sorties redeviendront des consommations imputées au chantier.`
+      : `Gérer « ${a['Designation'] || ''} » comme MATÉRIEL INTERNE ?\n\nIl sortira vers un chantier puis reviendra au stock, sans être compté comme un coût du chantier. Au scan de son étiquette, l'écran sortie / retour s'ouvre directement.`)) return;
+    await chargerParametresApp();
+    const liste = deja ? ARTICLES_MATERIEL.filter(n => n !== a.id) : [...ARTICLES_MATERIEL, a.id];
+    try {
+      const r = await _fetchNatifBrut(GB_WORKER + '/parametres', { method: 'POST', headers: { ...headersWorker(), 'Content-Type': 'application/json' }, body: JSON.stringify({ materiels: liste }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + ' (Worker à mettre à jour ?)'));
+      ARTICLES_MATERIEL = (d.materiels || liste).map(Number);
+      try { localStorage.setItem('gb_materiels', JSON.stringify(ARTICLES_MATERIEL)); } catch (e) {}
+      try { rafraichirFicheArticleOuverte(); } catch (e) {}
+    } catch (e) { alert('❌ ' + e.message); }
+  }
+
   async function basculerCodeGenerique(code) {
     if (!estProfilPrix()) return;
     const deja = estCodeGenerique(code);
@@ -14444,14 +14470,14 @@
   async function ouvrirKit(articleId, mode) {
     const a = (_articlesCache || []).find(x => x.id === articleId);
     if (!a) return;
-    _kit = { id: a.id, code: String(a['Code EBP'] || '').trim(), designation: a['Designation'] || '', mode: mode || null, chantier: '', sel: {} };
+    _kit = { id: a.id, code: String(a['Code EBP'] || '').trim() || ('ART-' + a.id), designation: a['Designation'] || '', mode: mode || null, chantier: '', sel: {}, materiel: estMateriel(a) && !estKit(a) };
     document.getElementById('modal-kit').style.display = 'flex';
     document.getElementById('kit-contenu').innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:16px">⏳ Chargement du kit…</div>';
     if (fermerFicheArticle) try { fermerFicheArticle(); } catch (e) {}
     await Promise.all([
       chargerCatalogueLocal().catch(() => {}),
       stockTablesConfigurees() ? chargerStock(true).catch(() => {}) : null,
-      chargerNomenclatureAsync(_kit.code)
+      _kit.materiel ? null : chargerNomenclatureAsync(_kit.code)
     ]);
     // mode par défaut : retour si du matériel du kit est encore sur un chantier
     if (!_kit.mode) _kit.mode = chantiersAvecKit().length ? 'retour' : 'sortie';
@@ -14461,6 +14487,11 @@
   function fermerKit() { document.getElementById('modal-kit').style.display = 'none'; _kit = null; }
   // Composants du kit suivis au stock (les autres ne peuvent pas sortir)
   function composantsKit() {
+    if (_kit && _kit.materiel) {
+      // Matériel interne : le « kit » est l'article lui-même
+      const a = (_articlesCache || []).find(x => x.id === _kit.id);
+      return a ? [{ c: { code: a['Code EBP'] || '', designation: a['Designation'] || '', quantite: 1, unite: a['Unite'] || 'u' }, a }] : [];
+    }
     const n = _nomenclatures.get(_kit.code);
     const parCode = new Map((_articlesCache || []).filter(y => y['Code EBP'] && !estKit(y)).map(y => [normRef(y['Code EBP']), y]));
     return ((n && n.composants) || []).filter(c => !c.non_inclus).map(c => ({ c, a: parCode.get(normRef(c.code)) || null }));
@@ -14513,7 +14544,7 @@
     const pointKit = kitRow && !isNaN(parseFloat(kitRow['Plan_X'])) && !isNaN(parseFloat(kitRow['Plan_Y']));
     const gestionKit = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris)">${esc(_kit.designation)}</div>
-      <div style="font-size:11px;color:#999;margin:2px 0 6px">Ouvrage EBP ${esc(_kit.code)}</div>
+      <div style="font-size:11px;color:#999;margin:2px 0 6px">${_kit.materiel ? '🧰 Matériel interne' + (_kit.code && !/^ART-/.test(_kit.code) ? ' · ' + esc(_kit.code) : '') : 'Ouvrage EBP ' + esc(_kit.code)}</div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
         ${empKit ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#fdf3e0;border:1px solid #f0d9a8;font-size:12px;font-weight:700;color:#a5761f">📍 ${esc(empKit)}</span>` : '<span style="font-size:11px;color:#bbb">📍 Emplacement non défini</span>'}
         ${pointKit ? `<button onclick="voirArticleSurPlan(${kitRow.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
@@ -14740,6 +14771,9 @@
         ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
         ${code && estCodeGenerique(code) ? '<span title="Code « divers » : ses lignes de commande ne sont pas rattachées à cet article" style="background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🏷️ code générique</span>' : ''}
+        ${a && estMateriel(a) ? '<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧰 matériel interne</span>' : ''}
+        ${a && !estOuvrage && !estKit(a) && (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? `<button onclick="basculerMateriel(${a.id})" style="background:#fff;border:1px solid #d1c4e9;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#5e35b1;cursor:pointer">${estMateriel(a) ? '↩️ Retirer du matériel' : '🧰 Gérer comme matériel'}</button>` : ''}
+        ${a && estMateriel(a) ? `<button onclick="ouvrirKit(${a.id})" style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:3px 10px;font-size:11px;font-weight:800;cursor:pointer">🧰 Sortie / retour</button>` : ''}
         ${code && !estOuvrage && estProfilPrix() ? `<button onclick="basculerCodeGenerique('${esc(code)}')" style="background:#fff;border:1px solid #e0d6c4;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#8a7a5c;cursor:pointer">${estCodeGenerique(code) ? '↩️ Retirer des génériques' : '🏷️ Marquer générique'}</button>` : ''}
       </div>`;
 
@@ -15063,8 +15097,8 @@
     }
     const a = trouverArticleParCode(code);
     if (!a) { bipScan(false); setMessageScan(`❌ Aucun article ni commande ne correspond au code « ${code} » (article pas encore suivi au stock ?)`, '#c0392b'); return; }
-    if (estKit(a)) {
-      // Kit interne (ouvrage EBP) : écran de sortie / retour des composants
+    if (estKit(a) || estMateriel(a)) {
+      // Kit interne (ouvrage EBP) ou matériel interne : écran de sortie / retour
       if (_scanMode !== 'info') { bipScan(false); setMessageScan('ℹ️ Kit : utilisez le 📷 du bandeau pour l\'ouvrir', '#a5761f'); return; }
       bipScan(true);
       try { arreterCamera(); } catch (e) {}
