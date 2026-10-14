@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V8';
+  const APP_VERSION = 'V9';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13554,13 +13554,13 @@
       groupeCourant.items.push(l);
     });
 
-    const nbColonnes = peutVoirPrix ? (estAdmin ? 6 : 5) : (estAdmin ? 5 : 4);
+    const nbColonnes = peutVoirPrix ? (estAdmin ? 7 : 6) : (estAdmin ? 5 : 4);
     const entetes = `<tr style="background:#f5f5f5">
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Réf.</th>
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Description</th>
       <th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Qté</th>
       <th style="text-align:left;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee">Unité</th>
-      ${peutVoirPrix ? '<th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Montant HT</th>' : ''}
+      ${peutVoirPrix ? '<th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">PU HT</th><th style="text-align:right;padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;white-space:nowrap">Montant HT</th>' : ''}
       ${estAdmin ? '<th style="padding:3px 4px;font-size:9px;color:#999;font-weight:700;border-bottom:1px solid #eee;text-align:center">Actions</th>' : ''}
     </tr>`;
 
@@ -13573,6 +13573,10 @@
         const montantHtVal = Number(l['Montant HT'] || 0);
         const montantLigne = (peutVoirPrix && l['Montant HT'] !== undefined && l['Montant HT'] !== null && l['Montant HT'] !== '' && montantHtVal !== 0)
           ? montantHtVal.toFixed(2) + ' €' : '';
+        // Prix unitaire HT = montant net de la ligne (remise incluse) ÷ quantité, par unité de commande
+        const qteNum = parseFloat(String(qte).replace(',', '.'));
+        const puLigne = (peutVoirPrix && montantHtVal && qteNum > 0)
+          ? (montantHtVal / qteNum).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: (montantHtVal / qteNum) < 1 ? 4 : 2 }) + ' €' : '';
         const ligneBaserowId = l['id'] || l.id;
         const estManquante = enPartielle && !!l['Non réceptionné'];
         const badgeEtat = enPartielle
@@ -13592,7 +13596,7 @@
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${lienFicheArticleLigne(l)}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${uniteApresQte(l['Unite'])}</td>
-          ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
+          ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#777;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${puLigne}</td><td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
           ${actionsAdmin}
         </tr>`;
       }).join('');
