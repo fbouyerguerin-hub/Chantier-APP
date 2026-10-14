@@ -760,7 +760,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V5';
+  const APP_VERSION = 'V7';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -9530,6 +9530,99 @@
 
   let chantiersAvecCommandesCollectif = new Set();
 
+  // ── CHANTIERS À PLANIFIER (planning collectif, Administrateur / Gestionnaire) ──
+  // Chantiers dont la phase POSE du plan de charge tombe dans la semaine affichée, avec l'état
+  // de leur planification : jours de pose prévus cette semaine vs jours où une équipe est affectée.
+  let _planningSemaineCollectif = [], _aPlanifier = [], _srcAPlanifier = null;
+  async function chargerSourceAPlanifier() {
+    const gest = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+    const btn = document.getElementById('btn-a-planifier');
+    if (btn) btn.style.display = gest ? '' : 'none';
+    if (!gest) return;
+    try {
+      const [affairesBrutes, collabsBruts, idsTermines] = await Promise.all([
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200'),
+        fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200'),
+        obtenirIdsChantiersTermines()
+      ]);
+      _srcAPlanifier = { affaires: filtrerAffairesChantiersActifs(affairesBrutes, idsTermines), collabs: collabsBruts };
+      calculerChantiersAPlanifier();
+    } catch (e) { console.warn('Chantiers à planifier', e); }
+  }
+  // Recalcul instantané (sans relecture) à chaque rendu du planning : l'état suit les affectations
+  function calculerChantiersAPlanifier() {
+    const gest = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+    if (!gest || !joursCollectif.length || !_srcAPlanifier) return;
+    try {
+      const affaires = _srcAPlanifier.affaires, collabsBruts = _srcAPlanifier.collabs;
+      const jours = joursCollectif.map(d => dateYMD(d)).filter(j => !estJourFerie(j));
+      const dDeb = jours[0], dFin = jours[jours.length - 1];
+      const liste = [];
+      affaires.forEach(a => {
+        const per = calculerPeriodesAffaire(a, collabsBruts);
+        const pose = per && per['Pose'];
+        if (!pose || !pose.jours || pose.fin < dDeb || pose.debut > dFin) return;
+        const ch = (a['Chantier'] || [])[0];
+        const nom = ch?.value || a['Nom'] || a['Nom affaire'] || ('Affaire #' + a.id);
+        const joursPrevus = jours.filter(j => j >= pose.debut && j <= pose.fin);
+        const joursPlanifies = joursPrevus.filter(j => (planningCollectifData || []).some(p =>
+          String(p['Date'] || '').slice(0, 10) === j && (p['Collaborateurs'] || []).length &&
+          (p['Chantier'] || []).some(c => (ch && c.id === ch.id) || normRechCmd(c.value) === normRechCmd(nom))));
+        liste.push({ nom, chantierId: ch?.id || null, pose, joursPrevus, joursPlanifies,
+          personnes: parseFloat(a['Personnes Pose']) || 0, heures: parseFloat(a['Heures Pose']) || 0,
+          etat: !joursPlanifies.length ? 'aucun' : joursPlanifies.length < joursPrevus.length ? 'partiel' : 'ok' });
+      });
+      const ordre = { aucun: 0, partiel: 1, ok: 2 };
+      _aPlanifier = liste.sort((x, y) => ordre[x.etat] - ordre[y.etat] || x.pose.debut.localeCompare(y.pose.debut) || x.nom.localeCompare(y.nom, 'fr'));
+      const nbAFaire = _aPlanifier.filter(x => x.etat !== 'ok').length;
+      const badge = document.getElementById('badge-a-planifier');
+      if (badge) badge.innerHTML = _aPlanifier.length ? `<span style="background:${nbAFaire ? '#c0392b' : '#2e7d32'};border-radius:9px;padding:0 6px;margin-left:2px">${nbAFaire || '✓'}</span>` : '';
+      if (document.getElementById('modal-a-planifier')) ouvrirChantiersAPlanifier(true);
+    } catch (e) { console.warn('Chantiers à planifier', e); }
+  }
+  function ouvrirChantiersAPlanifier(rafraichir) {
+    if (!rafraichir && document.getElementById('modal-a-planifier')) return;
+    let m = document.getElementById('modal-a-planifier');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-a-planifier';
+      m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
+      m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+      document.body.appendChild(m);
+    }
+    const esc = echapperHtmlNote;
+    const fd = d => new Date(d + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+    const lab = j => new Date(j + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'short' }).replace('.', '');
+    const etats = { aucun: ['⚠️ Non planifié', '#c0392b', '#fdecea'], partiel: ['🟡 Partiellement', '#a5761f', '#fff8e1'], ok: ['✅ Planifié', '#2e7d32', '#e8f5e9'] };
+    const semaine = joursCollectif.length ? `${joursCollectif[0].toLocaleDateString('fr-FR')} au ${joursCollectif[4].toLocaleDateString('fr-FR')}` : '';
+    m.innerHTML = `<div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #eee">
+        <div><div style="font-size:15px;font-weight:800;color:var(--gris)">📋 Chantiers à planifier</div><div style="font-size:11px;color:#999">Pose prévue au plan de charge · semaine du ${esc(semaine)}</div></div>
+        <button onclick="document.getElementById('modal-a-planifier').remove()" style="background:#f0f0f0;border:none;border-radius:50%;width:30px;height:30px;cursor:pointer">✕</button>
+      </div>
+      <div style="padding:10px 14px 18px;overflow-y:auto">
+        ${_aPlanifier.length ? _aPlanifier.map(x => {
+          const [libE, coul, fond] = etats[x.etat];
+          const puces = x.joursPrevus.map(j => `<span style="display:inline-block;min-width:30px;text-align:center;border-radius:6px;padding:2px 4px;margin:2px 2px 0 0;font-size:10px;font-weight:800;background:${x.joursPlanifies.includes(j) ? '#d9e8d5' : '#fdecea'};color:${x.joursPlanifies.includes(j) ? '#2e7d32' : '#c0392b'}">${lab(j)}</span>`).join('');
+          return `<div onclick="allerChantierAPlanifier(${JSON.stringify(x.nom).replace(/"/g, '&quot;')})" style="cursor:pointer;border:1px solid #eee;border-left:5px solid ${coul};border-radius:10px;padding:10px 12px;margin-bottom:8px;background:#fff">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+              <b style="font-size:13px;color:var(--gris)">${esc(x.nom)}</b>
+              <span style="flex:0 0 auto;font-size:11px;font-weight:800;color:${coul};background:${fond};border-radius:10px;padding:2px 8px">${libE}</span>
+            </div>
+            <div style="font-size:11px;color:#777;margin-top:3px">🏗️ Pose du ${fd(x.pose.debut)} au ${fd(x.pose.fin)} · ${x.pose.jours} jour(s)${x.personnes ? ' · ' + x.personnes + ' pers.' : ''}</div>
+            <div style="margin-top:4px">${puces}<span style="font-size:10px;color:#999;margin-left:4px">${x.joursPlanifies.length}/${x.joursPrevus.length} jour(s) avec équipe</span></div>
+          </div>`;
+        }).join('') : '<div class="feuille-empty">Aucune pose prévue au plan de charge cette semaine.</div>'}
+        <div style="font-size:10px;color:#aaa;margin-top:6px">Touchez un chantier pour l'afficher dans le planning.</div>
+      </div>
+    </div>`;
+  }
+  function allerChantierAPlanifier(nom) {
+    document.getElementById('modal-a-planifier')?.remove();
+    const inp = document.getElementById('search-chantier-collectif');
+    if (inp) { inp.value = nom; try { filtrerChantiersCollectif(); } catch (e) {} }
+  }
+
   function urlSemainePlanningCollectif(table, dateDebut, dateFin) {
     return 'https://api.baserow.io/api/database/rows/table/' + table + '/?user_field_names=true&size=200&filter__Date__date_after_or_equal=' + dateDebut + '&filter__Date__date_before_or_equal=' + dateFin;
   }
@@ -9573,6 +9666,7 @@
       fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_VEHICULES_COLLECTIF + '/?user_field_names=true&size=200'),
     ]);
 
+    _planningSemaineCollectif = planningSemaine;
     // Collaborateurs, en excluant ceux dont l'utilisateur est inactif
     const postes = new Set();
     const inactifsIdsCollectif = getInactifsCollabIds(usersDataActif, allCollabsCollectif);
@@ -9618,6 +9712,7 @@
 
     prechargerSemainesVoisinesCollectif();
     renderPlanningCollectifGrid();
+    chargerSourceAPlanifier(); // 📋 chantiers à planifier (pose du plan de charge) — en arrière-plan
 
     // Icône 📦 sur les étiquettes collaborateur (Gestionnaire/Administrateur
     // uniquement) : chargé après le premier rendu, sans bloquer l'affichage.
@@ -9999,6 +10094,7 @@
     }
     table.appendChild(tbody);
     appliquerVueMobileCollectif(isGestAdmin);
+    try { calculerChantiersAPlanifier(); } catch (e) {}
   }
 
   // ── PLANNING COLLECTIF SUR TÉLÉPHONE (Administrateur / Gestionnaire) ──
@@ -14879,7 +14975,9 @@
       if (_departScanUid && _scanFiche && _scanFiche.type === 'commande' && _scanFiche.id === r.id) return;
       bipScan(true);
       setMessageScan(`✅ ${r['Numero commande'] || ''} · ${r['Fournisseur'] || ''}`, 'var(--vert)');
-      afficherFicheScan({ type: 'commande', id: r.id });
+      // Statut relu dans Baserow avant d'afficher : une commande réceptionnée juste avant (sur ce
+      // téléphone ou un autre) ouvre directement le DÉPART SUR CHANTIER, pas une nouvelle réception.
+      actualiserCommandeScannee(r.id).finally(() => afficherFicheScan({ type: 'commande', id: r.id }));
       return;
     }
     const a = trouverArticleParCode(code);
@@ -18444,6 +18542,18 @@
     </div>`;
   }
 
+  async function actualiserCommandeScannee(id) {
+    try {
+      try { viderCacheBaserow(); } catch (e) {}
+      const frais = await lireCommandeFraiche(id);
+      const remplacer = liste => { const k = (liste || []).findIndex(c => c.id === id); if (k >= 0) liste[k] = frais; return k >= 0; };
+      const dansCmd = remplacer(_commandesCache), dansModal = remplacer(_modalCommandesCache);
+      if (!dansCmd && !dansModal) _modalCommandesCache = [...(_modalCommandesCache || []), frais];
+      const rs = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`, { headers: HEADERS });
+      const lignes = (await rs.json()).results;
+      if (Array.isArray(lignes)) _commandesLignesCache[id] = lignes;
+    } catch (e) { console.warn('Relecture de la commande scannée', e); }
+  }
   async function lireCommandeFraiche(id) {
     const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS });
     if (!r.ok) throw new Error('Lecture de la commande impossible (' + r.status + ')');
@@ -22897,6 +23007,7 @@
       <button onclick="changerSemaineCollectif(1)" style="background:rgba(255,255,255,0.15);border:none;border-radius:6px;padding:4px 10px;color:#fff;font-size:16px;cursor:pointer">›</button>
     </div>
     <div style="display:flex;align-items:center;gap:6px">
+      <button id="btn-a-planifier" onclick="ouvrirChantiersAPlanifier()" title="Chantiers prévus en pose cette semaine (plan de charge)" style="display:none;background:rgba(224,163,58,0.9);border:none;border-radius:6px;padding:4px 9px;color:#fff;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">📋 À planifier <span id="badge-a-planifier"></span></button>
       <button onclick="ouvrirFiltrePoste()" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:6px;padding:4px 10px;color:#fff;font-size:11px;cursor:pointer;white-space:nowrap" id="btn-filtre-poste">🔽 Postes</button>
       <button onclick="exportExcelCollectif()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:5px 8px;font-size:11px;font-weight:700;cursor:pointer">📥</button>
     </div>
