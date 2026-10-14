@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V12';
+  const APP_VERSION = 'V13';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14550,7 +14550,8 @@
         ${pointKit ? `<button onclick="voirArticleSurPlan(${kitRow.id})" style="background:#f0f7ee;border:1.5px solid #c5d9c3;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:#4a7c3f;cursor:pointer">🗺️ Voir sur le plan</button>` : ''}
         ${gestionKit && kitRow ? `<button onclick="ouvrirEditionArticle(${kitRow.id})" style="background:var(--beige-clair);border:none;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">✏️ ${empKit || pointKit ? 'Modifier' : 'Définir'} l'emplacement</button>` : ''}
       </div>`;
-    if (!n || n.erreur || !(n.composants || []).length) { el.innerHTML = html + '<div style="color:#a35a00;font-size:12px">⚠️ Nomenclature du kit indisponible.</div>'; return; }
+    // Matériel interne (article seul) : pas de nomenclature, le composant est l'article lui-même
+    if (!_kit.materiel && (!n || n.erreur || !(n.composants || []).length)) { el.innerHTML = html + '<div style="color:#a35a00;font-size:12px">⚠️ Nomenclature du kit indisponible.</div>'; return; }
     const onglet = (m, lib) => `<button onclick="kitMode('${m}')" style="flex:1;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;background:${_kit.mode === m ? 'var(--vert)' : '#f1f5f9'};color:${_kit.mode === m ? '#fff' : 'var(--gris)'}">${lib}</button>`;
     const enCours = chantiersAvecKit();
     html += `<div style="display:flex;gap:6px;margin-bottom:10px">${onglet('sortie', '➖ Sortie vers un chantier')}${onglet('retour', `↩️ Retour atelier${enCours.length ? ' (' + enCours.length + ')' : ''}`)}</div>`;
