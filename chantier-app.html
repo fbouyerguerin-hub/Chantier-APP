@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V9';
+  const APP_VERSION = 'V11';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1249,6 +1249,8 @@
     if (!/T\d{2}:\d{2}/.test(s)) return new Date(s.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR');
     const dt = new Date(s);
     if (isNaN(dt)) return s.slice(0, 10);
+    // Date enregistrée avant l'activation de l'heure dans Baserow (minuit UTC) : pas d'heure fictive « 02:00 »
+    if (/T00:00(:00(\.0+)?)?Z?$/.test(s)) return new Date(s.slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR');
     return dt.toLocaleDateString('fr-FR') + ' à ' + dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   }
   const _reDateHeureJson = /"(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"/g;
@@ -13912,9 +13914,10 @@
       if (type !== 'Retour') return;
       if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel de kit interne, pas du réemploi
       const aid = (m['Article'] || [])[0]?.id; if (!aid) return;
-      const x = idx[aid] || (idx[aid] = { qte: 0, chantiers: new Set(), derniere: '' });
+      const x = idx[aid] || (idx[aid] = { qte: 0, chantiers: new Set(), derniere: '', retours: [] });
       x.qte += Number(m['Quantite']) || 0;
       if (m['Chantier']) x.chantiers.add(m['Chantier']);
+      x.retours.push({ commande: m['Commande'] || '', chantier: m['Chantier'] || '', date: m['Date'] || '', qte: Number(m['Quantite']) || 0 });
       if ((m['Date'] || '') > x.derniere) x.derniere = m['Date'] || '';
     });
     _retoursIdx = idx; _retoursIdxSrc = _mouvementsCache;
@@ -13924,7 +13927,49 @@
     const x = indexRetoursChantier()[a.id];
     const stock = _stockParArticle[a.id] || 0;
     if (!x || x.qte <= 0 || stock <= 0) return null;
-    return { qte: Math.min(stock, x.qte), chantiers: [...x.chantiers], derniere: x.derniere };
+    return { qte: Math.min(stock, x.qte), chantiers: [...x.chantiers], derniere: x.derniere, retours: x.retours || [] };
+  }
+  // Clic sur « En stock » (Dispo. stock) : stock revenu d'un chantier → la commande d'origine du
+  // retour ; sinon → la fiche de l'article (stock, emplacement, mouvements).
+  function ouvrirOrigineStock(articleId) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    const re = reemploiDisponible(a);
+    const retours = (re && re.retours || []).filter(x => x.commande).sort((x, y) => String(y.date).localeCompare(String(x.date)));
+    if (!retours.length) { ouvrirFicheArticle(articleId); return; }
+    document.getElementById('modal-origine-stock')?.remove();
+    const m = document.createElement('div');
+    m.id = 'modal-origine-stock';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
+    m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+    const esc = echapperHtmlNote;
+    const vus = new Set();
+    m.innerHTML = `<div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:520px;padding:16px 16px 22px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <b style="font-size:14px;color:var(--gris)">📦 ${esc(a['Designation'] || '')}</b>
+        <button onclick="document.getElementById('modal-origine-stock').remove()" style="background:#f0f0f0;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer">✕</button>
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px">Stock revenu de chantier : ouvrir la commande concernée par le retour</div>
+      ${retours.filter(x => { const k = x.commande; if (vus.has(k)) return false; vus.add(k); return true; }).map(x => `<button onclick="document.getElementById('modal-origine-stock').remove();ouvrirCommandeParNumero(${JSON.stringify(x.commande).replace(/"/g, '&quot;')})" style="width:100%;text-align:left;background:#fdf3e0;border:1px solid #f0d9a8;border-radius:10px;padding:10px 12px;margin-bottom:6px;cursor:pointer">
+          <div style="font-size:13px;font-weight:800;color:#7c5200">🔄 Commande ${esc(x.commande)}</div>
+          <div style="font-size:11px;color:#8a7a5c">${esc(x.chantier || '')}${x.date ? ' · retour le ' + esc(new Date(String(x.date).slice(0, 10) + 'T12:00:00').toLocaleDateString('fr-FR')) : ''} · ${fmtQte(x.qte)} ${esc(uniteApresQte(a['Unite'] || ''))}</div>
+        </button>`).join('')}
+      <button onclick="document.getElementById('modal-origine-stock').remove();ouvrirFicheArticle(${articleId})" style="width:100%;background:var(--beige-clair);border:none;border-radius:10px;padding:10px;font-size:13px;font-weight:700;color:var(--gris);cursor:pointer;margin-top:4px">📦 Fiche de l'article (stock, emplacement, mouvements)</button>
+    </div>`;
+    document.body.appendChild(m);
+  }
+  async function ouvrirCommandeParNumero(num) {
+    let r = trouverCommandeParCode(num);
+    if (!r) {
+      try {
+        const res = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=5&filter__Numero%20commande__equal=${encodeURIComponent(num)}`, { headers: HEADERS });
+        r = ((await res.json()).results || [])[0] || null;
+      } catch (e) {}
+    }
+    if (!r) { alert('Commande ' + num + ' introuvable.'); return; }
+    const ch = (r['Chantier'] || [])[0];
+    if (ch) ouvrirCommandesChantier(ch.id, ch.value, r.id);
+    else alert('Commande ' + num + ' sans chantier rattaché.');
   }
   // Badge « en stock » sur une ligne de commande pas encore reçue : vérifier
   // l'atelier avant d'acheter (surtout le matériel revenu des chantiers).
@@ -13938,7 +13983,8 @@
     const q = a ? (_stockParArticle[a.id] || 0) : 0;
     if (q <= 0) return '';
     const re = reemploiDisponible(a);
-    return ` <span title="${re ? 'Dont matériel revenu de chantier : ' + fmtQte(re.qte) : 'Disponible au stock atelier'}" style="display:inline-block;padding:1px 6px;border-radius:8px;background:${re ? '#fde8c3' : '#e8f0e7'};color:${re ? '#7c5200' : 'var(--vert)'};font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">${re ? '↩️' : '📦'} ${fmtQte(q)} en stock</span>`;
+    // Cliquable : commande d'origine du retour chantier, ou fiche de l'article
+    return ` <span onclick="event.stopPropagation();event.preventDefault();ouvrirOrigineStock(${a.id})" title="${re ? 'Dont matériel revenu de chantier : ' + fmtQte(re.qte) + ' — toucher pour voir la commande du retour' : 'Disponible au stock atelier — toucher pour voir la fiche article'}" style="cursor:pointer;display:inline-block;padding:1px 6px;border-radius:8px;background:${re ? '#fde8c3' : '#e8f0e7'};color:${re ? '#7c5200' : 'var(--vert)'};font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap;text-decoration:underline">${re ? '↩️' : '📦'} ${fmtQte(q)} en stock</span>`;
   }
 
   function renderStock() {
@@ -17191,7 +17237,7 @@
         const idIn = `dispo-qte-${l.id}`;
         lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
-          <div style="font-size:11px;color:#555;margin-top:2px">Commandé : <b>${fmtQte(qCmd)} ${esc(unite)}</b> · En stock : <b style="color:var(--vert)">${fmtQte(dispo)} ${esc(uniteApresQte(a['Unite'] || l['Unite']))}</b>${re ? ` <span style="background:#fde8c3;color:#7c5200;border-radius:6px;padding:0 5px;font-weight:700">dont ${fmtQte(re.qte)} revenu(s) de chantier</span>` : ''}${libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
+          <div style="font-size:11px;color:#555;margin-top:2px">Commandé : <b>${fmtQte(qCmd)} ${esc(unite)}</b> · En stock : <b onclick="ouvrirOrigineStock(${a.id})" title="${re ? 'Voir la commande du retour chantier' : 'Voir la fiche de l\'article'}" style="color:var(--vert);cursor:pointer;text-decoration:underline">${fmtQte(dispo)} ${esc(uniteApresQte(a['Unite'] || l['Unite']))}</b>${re ? ` <span style="background:#fde8c3;color:#7c5200;border-radius:6px;padding:0 5px;font-weight:700">dont ${fmtQte(re.qte)} revenu(s) de chantier</span>` : ''}${libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
           <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
             <input id="${idIn}" type="number" min="0" step="any" value="${propose}" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px" />
             <span style="font-size:11px;color:#888">${esc(unite)}</span>
