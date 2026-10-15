@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V14';
+  const APP_VERSION = 'V15';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22644,6 +22644,7 @@
           const montant = Number(String(r['Montant HT'] ?? '').replace(',', '.')) || 0;
           if (!commandesClientsParChantier[nom]) commandesClientsParChantier[nom] = [];
           commandesClientsParChantier[nom].push({
+            id: r.id,
             date: (r['Date commande'] || '').split('T')[0],
             client: r['Client'] || '',
             numero: r['Numero commande'] || '',
@@ -22919,6 +22920,7 @@
     try {
       const [deb, fin] = bornesPeriodeRenta(_rentaPeriode);
       _rentaDonnees = await chargerDonneesAnalyseChantier(deb, fin) || { vide: true };
+      await chargerOptionsStatutCC().catch(() => {});
       renderRentabilite();
     } catch (e) {
       _rentaDonnees = null;
@@ -22931,6 +22933,49 @@
     if (!el) return;
     el.innerHTML = RENTA_PERIODES.map(([k, lib]) => `<button onclick="chargerRentabilite('${k}')" style="padding:6px 12px;border-radius:16px;border:1.5px solid ${k === _rentaPeriode ? 'var(--vert)' : '#ddd5c5'};background:${k === _rentaPeriode ? 'var(--vert)' : '#fff'};color:${k === _rentaPeriode ? '#fff' : 'var(--gris)'};font-size:12px;font-weight:600;cursor:pointer">${lib}</button>`).join('')
       + `<button onclick="chargerRentabilite(_rentaPeriode)" title="Recharger" style="padding:6px 10px;border-radius:16px;border:1.5px solid #ddd5c5;background:#fff;font-size:12px;cursor:pointer">🔄</button>`;
+  }
+
+  // ── STATUT DES COMMANDES CLIENTS (Rentabilité) : affiché et modifiable ──
+  // Options lues dans le champ « Statut » de la table Commandes clients (Baserow) ; à défaut, liste usuelle.
+  let _optionsStatutCC = null;
+  const STATUTS_CC_DEFAUT = ['En cours', 'Livrée', 'Facturée', 'Soldée', 'Annulée'];
+  async function chargerOptionsStatutCC() {
+    if (_optionsStatutCC) return _optionsStatutCC;
+    try {
+      const r = await fetch(`https://api.baserow.io/api/database/fields/table/${TABLE_COMMANDES_CLIENTS}/`, { headers: HEADERS });
+      if (r.ok) {
+        const champs = await r.json();
+        const f = (champs || []).find(c => c.name === 'Statut');
+        if (f && Array.isArray(f.select_options) && f.select_options.length) _optionsStatutCC = f.select_options.map(o => o.value);
+      }
+    } catch (e) {}
+    if (!_optionsStatutCC) _optionsStatutCC = STATUTS_CC_DEFAUT.slice();
+    return _optionsStatutCC;
+  }
+  function selectStatutCmdClientRenta(x) {
+    if (!x || !x.id) return '';
+    const opts = [...new Set([...(_optionsStatutCC || STATUTS_CC_DEFAUT), ...(x.statut ? [x.statut] : [])])];
+    const coul = x.statut ? couleurStatutCommande(x.statut) : '#999';
+    return `<select onclick="event.stopPropagation()" onchange="event.stopPropagation();modifierStatutCmdClientRenta(${x.id}, this)" title="Statut de la commande client" style="max-width:120px;border:1px solid ${coul};background:${coul}18;color:${coul};border-radius:10px;padding:2px 6px;font-size:11px;font-weight:700;cursor:pointer">
+      ${x.statut ? '' : '<option value="" selected>— statut —</option>'}${opts.map(o => `<option ${o === x.statut ? 'selected' : ''}>${escRenta(o)}</option>`).join('')}</select>`;
+  }
+  async function modifierStatutCmdClientRenta(id, sel) {
+    const v = sel.value;
+    if (!v) return;
+    sel.disabled = true;
+    try {
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/${id}/?user_field_names=true`, {
+        method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Statut': v })
+      });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+      // Mise à jour locale (sans recharger la rentabilité)
+      Object.values((_rentaDonnees && _rentaDonnees.commandesClientsParChantier) || {}).forEach(l => l.forEach(x => { if (x.id === id) x.statut = v; }));
+      try { (_commandesClientsCache || []).forEach(c => { if (c.id === id) c['Statut'] = { value: v }; }); } catch (e) {}
+      renderRentabilite();
+    } catch (e) {
+      alert('❌ Statut non enregistré : ' + e.message + (/option|select/i.test(e.message) ? '\n\nAjoutez cette valeur aux options du champ « Statut » de la table Commandes clients dans Baserow.' : ''));
+      sel.disabled = false;
+    }
   }
 
   function calculerRentaChantiers(d, taux, coef) {
@@ -23085,7 +23130,7 @@
           ${c.sorties.length ? `<div style="font-weight:700;margin:8px 0 4px">🗄️ Sorties du stock atelier (${c.sorties.length})</div>
             ${c.sorties.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : ''} · ${escRenta(x.article)} · ${String(Math.round(x.qte * 1000) / 1000).replace('.', ',')} ${escRenta(uniteApresQte(x.unite))}${x.type === 'Retour' ? ' (retour)' : ''}</span><span style="white-space:nowrap">${x.cout === null ? '<span style="color:#c0392b">sans prix</span>' : (x.estime ? '~ ' : '') + eurRenta(x.cout)}</span></div>`).join('')}` : ''}
           ${c.cmdClients.length ? `<div style="font-weight:700;margin:8px 0 4px">🧾 Commandes clients EBP (${c.cmdClients.length})</div>
-            ${c.cmdClients.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.client)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
+            ${c.cmdClients.map(x => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.client)}${x.numero ? ' · ' + escRenta(x.numero) : ''}</span><span style="display:flex;align-items:center;gap:6px;white-space:nowrap">${selectStatutCmdClientRenta(x)}${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
         </div>` : '';
       return `<div onclick="toggleRentaChantier('${id}')" style="cursor:pointer;background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;border-left:4px solid ${c.horsAnalyse ? '#ccc' : coul};padding:10px 12px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px">
