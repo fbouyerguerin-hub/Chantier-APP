@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V13';
+  const APP_VERSION = 'V14';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12783,6 +12783,7 @@
           <div style="text-align:right;flex-shrink:0">
             ${prive && prix ? `<div style="font-size:12px;font-weight:800;color:#2e7d32">${fmtEur(prix)}</div><div style="font-size:9px;color:#999">PA HT / ${esc(libUnite((x && x.unite) || (a && a['Unite']) || 'u'))}</div>` : ''}
             ${x && x.ouvrage ? `<button onclick="event.stopPropagation(); imprimerNomenclatureOuvrage('${String(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="Imprimer la nomenclature" style="background:#ede7f6;border:none;border-radius:8px;padding:5px 8px;font-size:13px;cursor:pointer;margin-bottom:2px">🖨️</button>` : ''}
+            ${x && x.ouvrage ? `<button onclick="event.stopPropagation(); imprimerEtiquettesComposantsOuvrage('${String(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" title="Étiquettes des composants" style="background:#ede7f6;border:none;border-radius:8px;padding:5px 8px;font-size:13px;cursor:pointer;margin-bottom:2px">🏷️</button>` : ''}
             <div style="font-size:16px;color:#ccc">›</div>
           </div>
         </div>`;
@@ -14799,6 +14800,7 @@
       else if (gestion) html += `<button onclick="activerKit('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin-top:12px;background:#ede7f6;color:#5e35b1;border:1.5px dashed #5e35b1;border-radius:8px;padding:10px;font-size:12px;font-weight:800;cursor:pointer">🧰 Gérer cet ouvrage comme kit interne (matériel des poseurs)</button>`;
       html += titreSection('Nomenclature');
       html += `<button id="btn-actualiser-ebp" onclick="actualiserArticleDepuisEbp('${esc(code).replace(/'/g, "\\'")}')" title="Nomenclature modifiée dans EBP ? Relecture immédiate, sans attendre la synchronisation" style="width:100%;margin:0 0 6px;background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer">🔄 Relire la nomenclature EBP</button>`;
+      html += `<button onclick="imprimerEtiquettesComposantsOuvrage('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 6px;background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:9px;font-size:12px;font-weight:800;cursor:pointer">🏷️ Imprimer les étiquettes des composants</button>`;
       html += `<button onclick="imprimerNomenclatureOuvrage('${esc(code).replace(/'/g, "\\'")}')" style="width:100%;margin:0 0 8px;background:#ede7f6;color:#5e35b1;border:none;border-radius:8px;padding:9px;font-size:12px;font-weight:800;cursor:pointer">🖨️ Imprimer la nomenclature (QR + composants)</button>`;
       html += renderNomenclatureFiche(code);
     }
@@ -15380,6 +15382,26 @@
   // Seuls les articles référencés dans EBP (champ « Code EBP » renseigné) reçoivent
   // une étiquette QR ; les articles « hors EBP » sont écartés.
   function aCodeEbp(a) { return !!String(a?.['Code EBP'] || '').trim(); }
+  // Étiquettes QR de tous les composants d'un ouvrage (articles suivis au stock ou simple
+  // référence du catalogue EBP), sans doublon ; les lignes hors catalogue / non incluses sont ignorées.
+  async function imprimerEtiquettesComposantsOuvrage(code) {
+    code = String(code || '').trim();
+    if (!code) return;
+    try {
+      await Promise.all([chargerCatalogueLocal().catch(() => {}), (stockTablesConfigurees() && !_stockCharge) ? chargerStock().catch(() => {}) : null]);
+      const n = await chargerNomenclatureAsync(code);
+      const comps = ((n && n.composants) || []).filter(c => c.code && !c.non_inclus && c.catalogue !== false);
+      if (!comps.length) { alert('Aucun composant étiquetable dans la nomenclature de cet ouvrage.'); return; }
+      const parCode = new Map((_articlesCache || []).filter(y => y['Code EBP']).map(y => [normRef(y['Code EBP']), y]));
+      const vus = new Set(), articles = [];
+      comps.forEach(c => {
+        const k = normRef(c.code);
+        if (vus.has(k)) return; vus.add(k);
+        articles.push(parCode.get(k) || { id: 0, 'Code EBP': c.code, 'Designation': c.designation || c.code, 'Unite': c.unite || '' });
+      });
+      return imprimerEtiquettesArticlesObjets(articles);
+    } catch (e) { alert('❌ Étiquettes impossibles : ' + e.message); }
+  }
   async function imprimerEtiquettesArticlesObjets(articles) {
     const sansCode = articles.filter(a => !aCodeEbp(a));
     articles = articles.filter(aCodeEbp);
