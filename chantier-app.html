@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V17';
+  const APP_VERSION = 'V18';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1838,6 +1838,37 @@
       _tvGestion = d; renderGestionTV();
       alert('✅ Enregistré : la TV l\'affichera sous 2 minutes.');
     } catch (e) { alert('❌ ' + e.message); btn.disabled = false; btn.textContent = '💾 Enregistrer'; }
+  }
+
+  // ── PRÉPARATION BASE SQL D1 (Gestion › Export) ──
+  async function appelAdminWorker(chemin) {
+    const r = await _fetchNatifBrut(GB_WORKER + chemin + (chemin.includes('?') ? '&' : '?') + 't=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + (r.status === 404 ? ' (Worker à mettre à jour)' : '')));
+    return d;
+  }
+  async function verifierBaseD1(btn) {
+    const out = document.getElementById('d1-resultat');
+    btn.disabled = true; out.style.display = 'block'; out.textContent = '⏳ Vérification…';
+    try {
+      const d = await appelAdminWorker('/admin/d1');
+      out.textContent = (d.ok ? '✅ ' : '⚠️ ') + d.message + (d.ok ? '\n\nLignes déjà en base : ' + ((d.lignes_par_table || []).map(x => x.table_id + ' = ' + x.n).join(', ') || 'aucune') : '');
+    } catch (e) { out.textContent = '❌ ' + e.message; }
+    btn.disabled = false;
+  }
+  async function telechargerSchemaD1(btn) {
+    const out = document.getElementById('d1-resultat');
+    btn.disabled = true; out.style.display = 'block'; out.textContent = '⏳ Lecture de la structure Baserow…';
+    try {
+      const d = await appelAdminWorker('/admin/schema');
+      const texte = JSON.stringify(d, null, 2);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([texte], { type: 'application/json' }));
+      a.download = 'structure-tables-d1-' + dateYMD(new Date()) + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      out.textContent = '✅ Fichier téléchargé : envoyez-le pour préparer la migration.\n\n' + d.tables.map(t => `• ${t.nom || t.id} : ${t.nb_lignes ?? '?'} lignes, ${t.champs.length} champs${t.erreur ? ' — ⚠️ ' + t.erreur : ''}`).join('\n');
+    } catch (e) { out.textContent = '❌ ' + e.message; }
+    btn.disabled = false;
   }
 
   // ── SESSION CONSERVÉE AU RECHARGEMENT ──
@@ -23478,6 +23509,15 @@
   </div>
 
   <div id="gestion-export" style="display:none">
+    <div style="margin:0 16px 14px;background:#fff;border-radius:12px;padding:14px;border:1px dashed #cfd6df">
+      <div style="font-weight:800;color:var(--gris);margin-bottom:4px">🗄️ Base SQL (Cloudflare D1) — préparation</div>
+      <div style="font-size:11px;color:#777;margin-bottom:10px">Migration des mouvements de stock puis des commandes fournisseurs hors de Baserow (plus de limite de lignes).</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="verifierBaseD1(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">1. Vérifier / préparer la base</button>
+        <button onclick="telechargerSchemaD1(this)" style="background:#eef1f5;color:#3d4a5c;border:1px solid #cfd6df;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">2. Télécharger la structure des tables</button>
+      </div>
+      <pre id="d1-resultat" style="display:none;margin-top:10px;background:#f6f6f6;border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;max-height:40vh;overflow:auto"></pre>
+    </div>
     <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Exports</div>
     <div style="margin:0 16px;display:flex;flex-direction:column;gap:14px">
 
