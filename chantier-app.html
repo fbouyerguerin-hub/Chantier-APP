@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V19';
+  const APP_VERSION = 'V21';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12476,6 +12476,10 @@
     document.getElementById('commandes-vue-stock').style.display = vue === 'stock' ? 'block' : 'none';
     document.getElementById('commandes-vue-dispo').style.display = vue === 'dispo' ? 'block' : 'none';
     document.getElementById('commandes-vue-mini').style.display = vue === 'mini' ? 'block' : 'none';
+    document.getElementById('commandes-vue-bons').style.display = vue === 'bons' ? 'block' : 'none';
+    document.getElementById('tab-commandes-bons').style.background = vue === 'bons' ? 'var(--vert)' : 'none';
+    document.getElementById('tab-commandes-bons').style.color = vue === 'bons' ? '#fff' : 'var(--gris-moyen)';
+    if (vue === 'bons') ouvrirOngletBonsSortie();
     document.getElementById('tab-commandes-mini').style.background = vue === 'mini' ? 'var(--vert)' : 'none';
     document.getElementById('tab-commandes-mini').style.color = vue === 'mini' ? '#fff' : 'var(--gris-moyen)';
     document.getElementById('tab-commandes-dispo').style.background = vue === 'dispo' ? 'var(--vert)' : 'none';
@@ -13892,6 +13896,7 @@
     const afficher = () => {
       const n = articlesSousMini().filter(x => !x.couvert).length; // à commander
       badge.textContent = n; badge.style.display = n ? 'inline-block' : 'none';
+      try { majBadgeBonsSortie(); } catch (e) {}
     };
     if (charger && !_stockCharge && stockTablesConfigurees()) chargerStock().then(() => chargerLignesEnCours()).then(afficher).catch(() => {});
     else afficher();
@@ -15233,6 +15238,8 @@
     if (!el) return;
     btn.textContent = _panierSortie.length ? `✅ Valider la sortie (${_panierSortie.length} article${_panierSortie.length > 1 ? 's' : ''})` : '✅ Valider la sortie';
     btn.disabled = !_panierSortie.length; btn.style.opacity = _panierSortie.length ? '1' : '0.4';
+    const btnBon = document.getElementById('scan-bon-sortie');
+    if (btnBon) { btnBon.disabled = !_panierSortie.length; btnBon.style.opacity = _panierSortie.length ? '1' : '0.4'; }
     if (!_panierSortie.length) { el.innerHTML = '<div style="color:#bbb;font-size:12px;text-align:center;padding:14px">Scannez des articles : ils s\'ajoutent ici.</div>'; return; }
     el.innerHTML = _panierSortie.map((p, i) => {
       const a = _articlesCache.find(x => x.id === p.articleId) || {};
@@ -15261,6 +15268,185 @@
     const q = parseFloat((v || '').replace(',', '.'));
     if (isNaN(q) || q <= 0) _panierSortie.splice(i, 1); else p.quantite = q;
     renderPanierSortie();
+  }
+
+  // ============================================================
+  // 🧾 BONS DE SORTIE (préparation de stock pour un chantier)
+  // Depuis le panier de sortie : au lieu de sortir tout de suite, on RÉSERVE les articles et on
+  // imprime un bon (QR « BS-… »). Le magasinier prépare, puis scanne le bon : la sortie est validée
+  // (même mécanisme que les prises en stock). Bons repérés par n° « BSM-AAMMJJ-HHMM ».
+  // ============================================================
+  const PREFIXE_BON_SORTIE = 'Bon de sortie';
+  async function creerBonSortieManuel() {
+    if (!_panierSortie.length) return;
+    const chantier = document.getElementById('scan-chantier').value.trim();
+    if (!chantier) { alert('Choisissez le chantier de destination.'); document.getElementById('scan-chantier').focus(); return; }
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    const num = `BSM-${String(d.getFullYear()).slice(2)}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`;
+    const btn = document.getElementById('scan-bon-sortie');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Création du bon…'; }
+    try {
+      const crees = await creerMouvementsStock(_panierSortie.map(p => {
+        const a = _articlesCache.find(x => x.id === p.articleId) || {};
+        return { articleId: p.articleId, type: 'Réservation', quantite: 0, chantier, commande: num,
+                 libelle: `${PREFIXE_BON_SORTIE} ${num} — ${a['Designation'] || ''}`.slice(0, 250),
+                 note: ecrireNotePrise({ qte: p.quantite, statut: 'À sortir', par: connectedCollab || '', le: d.toLocaleDateString('fr-FR') }) };
+      }));
+      localStorage.setItem('gb_scan_chantier', chantier);
+      _panierSortie = [];
+      renderPanierSortie();
+      bipScan(true);
+      setMessageScan(`🧾 Bon ${num} créé (${crees.length} article(s)) : à préparer puis scanner.`, 'var(--vert)');
+      imprimerBonSortieManuel(num);
+      try { renderOngletBonsSortie(); } catch (e) {}
+    } catch (e) { alert('Erreur : ' + e.message); }
+    if (btn) { btn.disabled = false; btn.textContent = '🧾 Faire un bon de sortie (à préparer)'; }
+  }
+  function bonsSortieManuels() {
+    const bons = {};
+    (_mouvementsCache || []).forEach(m => {
+      if (!String(m['Libelle'] || '').startsWith(PREFIXE_BON_SORTIE)) return;
+      const num = m['Commande'] || '';
+      const n = lireNotePrise(m['Note']);
+      const sorti = (Number(m['Quantite']) || 0) < 0;
+      const b = bons[num] || (bons[num] = { num, chantier: m['Chantier'] || '', par: n.par || m['Par'] || '', le: n.le || m['Date'] || '', lignes: [] });
+      b.lignes.push({ m, n, q: sorti ? -(Number(m['Quantite']) || 0) : (Number(n.qte) || 0), statut: n.statut === 'Annulé' ? 'Annulé' : sorti ? 'Sorti' : 'À sortir' });
+    });
+    return Object.values(bons).sort((a, b) => b.num.localeCompare(a.num));
+  }
+  async function imprimerBonSortieManuel(num) {
+    const b = bonsSortieManuels().find(x => x.num === num);
+    if (!b) { alert('Bon ' + num + ' introuvable.'); return; }
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Génération du bon…</p>');
+    await chargerLibScan('qrcode');
+    const tmp = document.createElement('div'); tmp.style.cssText = 'position:fixed;left:-9999px;top:0'; document.body.appendChild(tmp);
+    const aScanner = b.lignes.filter(x => x.statut === 'À sortir');
+    let qr = '';
+    if (aScanner.length) {
+      new QRCode(tmp, { text: 'BS-' + aScanner.map(x => x.m.id).join('.'), width: 260, height: 260, correctLevel: QRCode.CorrectLevel.M });
+      const c = tmp.querySelector('canvas'); qr = c ? c.toDataURL('image/png') : (tmp.querySelector('img')?.src || '');
+    }
+    tmp.remove();
+    const esc = echapperHtmlNote;
+    const lignes = b.lignes.map(x => { const a = _articlesCache.find(y => y.id === (x.m['Article'] || [])[0]?.id); return { ...x, a, empl: a ? libelleEmplacement(a) : '' }; })
+      .sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz'));
+    fen.document.open();
+    fen.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(b.num)}</title><style>
+      @page { size: A4 portrait; margin: 12mm; } body { font-family: Arial, sans-serif; font-size: 10.5pt; color: #000; margin: 0 }
+      .hd { display:flex; justify-content:space-between; gap:8mm; align-items:flex-start; border-bottom:.6mm solid #000; padding-bottom:3mm; margin-bottom:4mm }
+      h1 { font-size: 17pt; margin: 2mm 0 } .info { margin: 1mm 0 } .qr { text-align:center; font-family:monospace; font-size:9pt } .qr img { width: 42mm; height: 42mm; image-rendering: pixelated; display:block }
+      table { width:100%; border-collapse:collapse } th { text-align:left; font-size:8.5pt; color:#444; border-bottom:.4mm solid #000; padding:1.2mm } td { border-bottom:.2mm solid #bbb; padding:2mm 1.2mm; vertical-align:top }
+      td.q { text-align:right; font-weight:bold; white-space:nowrap } td.ok { width:12mm; border-left:.2mm solid #bbb } .st { font-size:8pt; color:#2e7d32; font-weight:bold }
+    </style></head><body>
+      <div class="hd"><div>
+        <img src="${LOGO_URL}" alt="Guérin Bâtiments" style="height:15mm;display:block" onerror="this.style.display='none'" />
+        <h1>🧾 BON DE SORTIE DE STOCK</h1>
+        <div class="info"><b>N° :</b> ${esc(b.num)}</div>
+        <div class="info"><b>Chantier :</b> ${esc(b.chantier || '—')}</div>
+        <div class="info"><b>Demandé par :</b> ${esc(b.par || '—')} · <b>le</b> ${esc(b.le || '')}</div>
+      </div>${qr ? `<div class="qr"><img src="${qr}" /><div>Scanner une fois préparé</div></div>` : '<div class="qr" style="font-weight:bold;color:#2e7d32">✅ Bon entièrement sorti</div>'}</div>
+      <table><tr><th>Emplacement</th><th>Article</th><th style="text-align:right">Quantité</th><th>✓</th></tr>
+      ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span style="font-size:8.5pt;color:#666;font-family:monospace">${esc(x.a?.['Code EBP'] || '')}</span>${x.statut !== 'À sortir' ? `<div class="st">${x.statut === 'Sorti' ? '✅ Sorti' + (x.n.sorti_le ? ' le ' + esc(x.n.sorti_le) : '') : '⛔ Annulé'}</div>` : ''}</td><td class="q">${fmtQte(x.q)} ${esc(uniteApresQte(x.a?.['Unite'] || ''))}</td><td class="ok"></td></tr>`).join('')}
+      </table>
+      <div style="margin-top:8mm;display:flex;justify-content:space-between;font-size:9pt"><span>Préparé par : ____________________</span><span>Date : ____ / ____ / ________</span></div>
+      <script>window.onload = () => setTimeout(() => window.print(), 400);<\/script></body></html>`);
+    fen.document.close();
+  }
+  async function annulerBonSortieManuel(num) {
+    const b = bonsSortieManuels().find(x => x.num === num);
+    const aAnnuler = (b ? b.lignes : []).filter(x => x.statut === 'À sortir');
+    if (!aAnnuler.length) return;
+    if (!confirm(`Annuler le bon ${num} ? Les ${aAnnuler.length} article(s) non sortis redeviennent disponibles.`)) return;
+    for (const x of aAnnuler) {
+      try { await majMouvementPrise(x.m.id, { 'Note': ecrireNotePrise({ ...x.n, statut: 'Annulé', annule_par: connectedCollab || '', annule_le: new Date().toLocaleDateString('fr-FR') }) }); } catch (e) { console.error(e); }
+    }
+    if (document.getElementById('modal-bons-sortie')) ouvrirListeBonsSortie();
+    try { renderOngletBonsSortie(); } catch (e) {}
+  }
+  // ── Onglet « 🧾 Bons de sortie » des commandes ──
+  let _filtreBons = 'ouverts';
+  function setFiltreBons(f) {
+    _filtreBons = f;
+    document.querySelectorAll('.bons-filtre-btn').forEach(b => { const a = b.dataset.f === f; b.style.background = a ? 'var(--vert)' : '#fff'; b.style.color = a ? '#fff' : 'var(--gris-moyen)'; });
+    renderOngletBonsSortie();
+  }
+  async function ouvrirOngletBonsSortie() {
+    const el = document.getElementById('bons-liste');
+    if (!stockTablesConfigurees()) { el.innerHTML = '<div class="feuille-empty">⚙️ Module stock non configuré.</div>'; return; }
+    if (!_stockCharge) el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try { await chargerStock(true); } catch (e) {}
+    renderOngletBonsSortie();
+  }
+  function majBadgeBonsSortie() {
+    const b = document.getElementById('badge-bons-sortie');
+    if (!b) return;
+    const n = bonsSortieManuels().filter(x => x.lignes.some(l => l.statut === 'À sortir')).length;
+    b.innerHTML = n ? `<span style="background:#c25e00;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800">${n}</span>` : '';
+  }
+  function renderOngletBonsSortie() {
+    const el = document.getElementById('bons-liste');
+    if (!el) return;
+    majBadgeBonsSortie();
+    const esc = echapperHtmlNote;
+    const gestion = connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire';
+    const q = normRechCmd(document.getElementById('bons-recherche')?.value || '').split(/\s+/).filter(Boolean);
+    let bons = bonsSortieManuels().filter(b => {
+      const ouvert = b.lignes.some(x => x.statut === 'À sortir');
+      if (_filtreBons === 'ouverts' && !ouvert) return false;
+      if (_filtreBons === 'sortis' && ouvert) return false;
+      const t = normRechCmd([b.num, b.chantier, b.par, ...b.lignes.map(x => (_articlesCache.find(a => a.id === (x.m['Article'] || [])[0]?.id) || {})['Designation'])].join(' '));
+      return q.every(m => t.includes(m));
+    });
+    if (!bons.length) { el.innerHTML = `<div class="feuille-empty">${_filtreBons === 'ouverts' ? 'Aucun bon à préparer.' : 'Aucun bon de sortie.'}<br><span style="font-size:11px">➕ Nouveau bon : ajoutez les articles puis « 🧾 Faire un bon de sortie ».</span></div>`; return; }
+    const etat = b => { const s = b.lignes.map(x => x.statut); return s.every(x => x === 'Annulé') ? ['⛔ Annulé', '#999'] : s.some(x => x === 'À sortir') ? (s.some(x => x === 'Sorti') ? ['🟡 Partiel', '#a5761f'] : ['⏳ À préparer', '#c25e00']) : ['✅ Sorti', '#2e7d32']; };
+    el.innerHTML = bons.map(b => {
+      const [lib, coul] = etat(b), ouvert = b.lignes.some(x => x.statut === 'À sortir');
+      const lignes = b.lignes.map(x => { const a = _articlesCache.find(y => y.id === (x.m['Article'] || [])[0]?.id) || {}; return { ...x, a, empl: libelleEmplacement(a) }; })
+        .sort((x, y) => (x.empl || 'zzz').localeCompare(y.empl || 'zzz'));
+      return `<div style="background:#fff;border:1px solid #eee;border-left:5px solid ${coul};border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+          <div><b style="font-size:13px">${esc(b.num)}</b><div style="font-size:11px;color:#777">🏗️ ${esc(b.chantier || '—')} · ${esc(b.par)} ${esc(b.le)}</div></div>
+          <span style="font-size:11px;font-weight:800;color:${coul};white-space:nowrap">${lib}</span>
+        </div>
+        <div style="margin:6px 0">${lignes.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px dotted #eee;${x.statut !== 'À sortir' ? 'color:#999' : ''}">
+            <span>${x.statut === 'Sorti' ? '✅ ' : x.statut === 'Annulé' ? '⛔ ' : ''}${esc(x.a['Designation'] || '')}${x.empl ? ` <span style="color:#a5761f;font-size:10px">📍 ${esc(x.empl)}</span>` : ''}</span>
+            <b style="white-space:nowrap">${esc(fmtQteUnite(x.q, x.a['Unite'] || ''))}</b></div>`).join('')}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button onclick="imprimerBonSortieManuel('${esc(b.num)}')" style="background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ ${ouvert ? 'Imprimer' : 'Réimprimer'}</button>
+          ${ouvert && gestion ? `<button onclick="annulerBonSortieManuel('${esc(b.num)}')" style="background:#fff;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">Annuler</button>` : ''}
+          ${ouvert ? '<span style="font-size:10px;color:#999;align-self:center">Préparé ? Scannez le QR du bon avec le 📷</span>' : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+  async function ouvrirListeBonsSortie() {
+    if (stockTablesConfigurees() && !_stockCharge) { try { await chargerStock(); } catch (e) {} }
+    const bons = bonsSortieManuels();
+    const esc = echapperHtmlNote;
+    let m = document.getElementById('modal-bons-sortie');
+    if (!m) {
+      m = document.createElement('div'); m.id = 'modal-bons-sortie';
+      m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
+      m.addEventListener('click', e => { if (e.target === m) m.remove(); });
+      document.body.appendChild(m);
+    }
+    const etat = b => { const s = b.lignes.map(x => x.statut); return s.every(x => x === 'Annulé') ? ['⛔ Annulé', '#999'] : s.some(x => x === 'À sortir') ? (s.some(x => x === 'Sorti') ? ['🟡 Partiel', '#a5761f'] : ['⏳ À préparer', '#c25e00']) : ['✅ Sorti', '#2e7d32']; };
+    m.innerHTML = `<div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:600px;max-height:85vh;display:flex;flex-direction:column">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #eee">
+        <b style="font-size:15px;color:var(--gris)">🧾 Bons de sortie</b>
+        <button onclick="document.getElementById('modal-bons-sortie').remove()" style="background:#f0f0f0;border:none;border-radius:50%;width:30px;height:30px;cursor:pointer">✕</button>
+      </div>
+      <div style="padding:10px 14px 18px;overflow-y:auto">
+        ${bons.length ? bons.map(b => { const [lib, coul] = etat(b); const ouvert = b.lignes.some(x => x.statut === 'À sortir'); return `<div style="border:1px solid #eee;border-left:5px solid ${coul};border-radius:10px;padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">${esc(b.num)}</b><span style="font-size:11px;font-weight:800;color:${coul}">${lib}</span></div>
+          <div style="font-size:11px;color:#777;margin:2px 0 6px">${esc(b.chantier)} · ${b.lignes.length} article(s) · ${esc(b.par)} ${esc(b.le)}</div>
+          <div style="display:flex;gap:6px">
+            <button onclick="imprimerBonSortieManuel('${esc(b.num)}')" style="background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ ${ouvert ? 'Imprimer' : 'Réimprimer'}</button>
+            ${ouvert ? `<button onclick="annulerBonSortieManuel('${esc(b.num)}')" style="background:#fff;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">Annuler</button>` : ''}
+          </div></div>`; }).join('') : '<div class="feuille-empty">Aucun bon de sortie. Créez-en un depuis 📷 Sortie : ajoutez les articles puis « 🧾 Faire un bon de sortie ».</div>'}
+      </div></div>`;
   }
 
   async function validerPanierSortie() {
@@ -17622,6 +17808,7 @@
     }
     setMessageScan(ok === aSortir.length ? `✅ Sortie validée : ${ok} ligne(s) sortie(s) du stock.` : `⚠️ ${ok}/${aSortir.length} ligne(s) enregistrée(s) : réessayez le scan.`, ok === aSortir.length ? 'var(--vert)' : '#c0392b');
     if (document.getElementById('commandes-vue-dispo')?.style.display === 'block') renderCommandesDispoStock();
+    try { if (document.getElementById('commandes-vue-bons')?.style.display === 'block') renderOngletBonsSortie(); else majBadgeBonsSortie(); } catch (e) {}
   }
 
   // Liste de préparation imprimable (prises « à préparer »), triée par emplacement
@@ -24460,6 +24647,7 @@
       <button id="tab-commandes-retour" onclick="switchCommandesVue('retour')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔄 Retour chantier</button>
       <button id="tab-commandes-dispo" onclick="switchCommandesVue('dispo')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🔁 Dispo. stock</button>
       <button id="tab-commandes-mini" onclick="switchCommandesVue('mini')" style="display:none;flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">⚠️ Stock mini <span id="badge-stock-mini" style="display:none;background:#c0392b;color:#fff;border-radius:9px;padding:1px 6px;font-size:10px;font-weight:800;margin-left:2px"></span></button>
+      <button id="tab-commandes-bons" onclick="switchCommandesVue('bons')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">🧾 Bons de sortie <span id="badge-bons-sortie"></span></button>
       <button id="tab-commandes-stock" onclick="switchCommandesVue('stock')" style="flex:0 0 auto;white-space:nowrap;padding:8px 12px;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;background:none;color:var(--gris-moyen)">📚 Stock atelier</button>
     </div>
   </div>
@@ -24566,6 +24754,22 @@
     <div id="commandes-dispo-liste" style="padding:8px 16px 80px"></div>
   </div>
 
+  <!-- Vue Bons de sortie : préparation de stock pour les chantiers (QR à scanner une fois préparé) -->
+  <div id="commandes-vue-bons" style="display:none">
+    <div class="filtre-fige" style="padding:10px 16px 2px">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <input type="text" id="bons-recherche" placeholder="🔍 N° de bon, chantier, demandeur…" oninput="renderOngletBonsSortie()" style="flex:1;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+        <button onclick="ouvrirScanSortie()" style="flex:0 0 auto;background:#c25e00;color:#fff;border:none;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer">➕ Nouveau bon</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:4px;overflow-x:auto">
+        <button class="bons-filtre-btn" data-f="ouverts" onclick="setFiltreBons('ouverts')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">⏳ À préparer</button>
+        <button class="bons-filtre-btn" data-f="sortis" onclick="setFiltreBons('sortis')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">✅ Sortis</button>
+        <button class="bons-filtre-btn" data-f="tous" onclick="setFiltreBons('tous')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">Tous</button>
+      </div>
+    </div>
+    <div id="bons-liste" style="padding:8px 16px 80px"></div>
+  </div>
+
   <!-- Vue Stock mini : articles du stock atelier à ou sous leur stock minimum (Administrateur / Gestionnaire) -->
   <div id="commandes-vue-mini" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
@@ -24588,6 +24792,7 @@
       <button onclick="ouvrirRetourChantier()" style="width:100%;background:#fff;color:var(--vert);border:1.5px solid var(--vert);border-radius:10px;padding:10px;font-size:13px;font-weight:800;cursor:pointer;margin-bottom:8px">↩️ Retour chantier</button>
       <div id="stock-outils-gestion" style="display:none;gap:8px;margin-bottom:8px">
         <button onclick="ouvrirEditionArticle(null)" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">➕ Article hors EBP</button>
+        <button onclick="ouvrirListeBonsSortie()" title="Bons de sortie : à préparer, sortis, réimpression" style="flex:1;background:#fdf3e0;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:#a5761f;cursor:pointer">🧾 Bons de sortie</button>
         <button onclick="imprimerEtiquettesListe()" title="Imprimer les étiquettes QR des articles affichés" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">🏷️ Étiquettes</button>
         <button onclick="ouvrirCoutsChantiers()" title="Coût du stock consommé par chantier" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">💶 Coûts</button>
       </div>
@@ -24847,6 +25052,7 @@
   <div id="scan-panier" style="flex:1;overflow-y:auto;padding:4px 16px"></div>
   <div id="scan-pied" style="padding:10px 16px calc(14px + env(safe-area-inset-bottom, 0px));border-top:1px solid #eee">
     <button id="scan-valider" onclick="validerPanierSortie()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:14px;font-size:15px;font-weight:700;cursor:pointer">✅ Valider la sortie</button>
+    <button id="scan-bon-sortie" onclick="creerBonSortieManuel()" style="width:100%;margin-top:8px;background:#fff;color:#c25e00;border:1.5px solid #f0c08a;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">🧾 Faire un bon de sortie (à préparer)</button>
   </div>
 </div>
 
