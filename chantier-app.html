@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V21';
+  const APP_VERSION = 'V23';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14206,6 +14206,7 @@
         ${gestion ? btn('➕ Entrée', `ouvrirMouvementStock(${a.id},'Entrée')`, 'var(--vert)', '#e8f0e7') : ''}
         ${btn('➖ Sortie', `ouvrirMouvementStock(${a.id},'Sortie')`)}
         ${btn('↩️ Retour', `ouvrirMouvementStock(${a.id},'Retour')`)}
+        ${btn('🧾 Bon', `bonSortieDepuisArticle(${a.id})`, '#c25e00', '#fdf3e0')}
         ${gestion ? btn('📋 Inventaire', `ouvrirMouvementStock(${a.id},'Inventaire')`) : ''}
         ${gestion ? btn('✏️', `ouvrirEditionArticle(${a.id})`, 'var(--vert)', '#e8f0e7') : ''}
         ${btn(ouvert ? '▲' : '🕘', `toggleDetailArticle(${a.id})`, 'var(--gris-moyen)', '#f1f5f9')}
@@ -14949,6 +14950,7 @@
           ${gestion ? b('➕ Entrée', `ouvrirMouvementStock(${a.id},'Entrée')`, '#e8f0e7', 'var(--vert)') : ''}
           ${b('➖ Sortie', `ouvrirMouvementStock(${a.id},'Sortie')`)}
           ${b('↩️ Retour', `ouvrirMouvementStock(${a.id},'Retour')`)}
+          ${b('🧾 Bon de sortie', `bonSortieDepuisArticle(${a.id})`, '#fdf3e0', '#c25e00')}
           ${gestion ? b('📋 Inventaire', `ouvrirMouvementStock(${a.id},'Inventaire')`) : ''}
           ${gestion ? b('✏️ Modifier', `ouvrirEditionArticle(${a.id})`) : ''}
           ${gestion && aCodeEbp(a) ? b('🏷️ Étiquette', `imprimerEtiquettesArticles([${a.id}])`) : ''}
@@ -15277,6 +15279,20 @@
   // (même mécanisme que les prises en stock). Bons repérés par n° « BSM-AAMMJJ-HHMM ».
   // ============================================================
   const PREFIXE_BON_SORTIE = 'Bon de sortie';
+  const horodatageBon = () => { const d = new Date(); return d.toLocaleDateString('fr-FR') + ' ' + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); };
+  // Depuis une fiche ou une carte article : ouvre la Sortie avec l'article déjà dans le panier,
+  // on ajuste la quantité, on ajoute d'autres articles si besoin, puis « 🧾 Faire un bon de sortie »
+  async function bonSortieDepuisArticle(articleId) {
+    try { fermerFicheArticle(); } catch (e) {}
+    try { ['modal-fiche-article', 'modal-article-stock'].forEach(id => { const m = document.getElementById(id); if (m) m.style.display = 'none'; }); } catch (e) {}
+    await ouvrirScanSortie();
+    if (!_panierSortie.some(p => p.articleId === articleId)) _panierSortie.push({ articleId, quantite: 1 });
+    renderPanierSortie();
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    setMessageScan(`🧾 ${a ? a['Designation'] : 'Article'} ajouté — ajustez la quantité, choisissez le chantier puis « Faire un bon de sortie »`, '#c25e00');
+    const btn = document.getElementById('scan-bon-sortie');
+    if (btn) { btn.style.boxShadow = '0 0 0 3px #f0c08a'; setTimeout(() => { btn.style.boxShadow = ''; }, 2500); }
+  }
   async function creerBonSortieManuel() {
     if (!_panierSortie.length) return;
     const chantier = document.getElementById('scan-chantier').value.trim();
@@ -15290,7 +15306,7 @@
         const a = _articlesCache.find(x => x.id === p.articleId) || {};
         return { articleId: p.articleId, type: 'Réservation', quantite: 0, chantier, commande: num,
                  libelle: `${PREFIXE_BON_SORTIE} ${num} — ${a['Designation'] || ''}`.slice(0, 250),
-                 note: ecrireNotePrise({ qte: p.quantite, statut: 'À sortir', par: connectedCollab || '', le: d.toLocaleDateString('fr-FR') }) };
+                 note: ecrireNotePrise({ qte: p.quantite, statut: 'À sortir', par: connectedCollab || '', le: horodatageBon() }) };
       }));
       localStorage.setItem('gb_scan_chantier', chantier);
       _panierSortie = [];
@@ -15351,6 +15367,7 @@
       ${lignes.map(x => `<tr><td>${esc(x.empl || '—')}</td><td><b>${esc(x.a?.['Designation'] || '')}</b><br><span style="font-size:8.5pt;color:#666;font-family:monospace">${esc(x.a?.['Code EBP'] || '')}</span>${x.statut !== 'À sortir' ? `<div class="st">${x.statut === 'Sorti' ? '✅ Sorti' + (x.n.sorti_le ? ' le ' + esc(x.n.sorti_le) : '') : '⛔ Annulé'}</div>` : ''}</td><td class="q">${fmtQte(x.q)} ${esc(uniteApresQte(x.a?.['Unite'] || ''))}</td><td class="ok"></td></tr>`).join('')}
       </table>
       <div style="margin-top:8mm;display:flex;justify-content:space-between;font-size:9pt"><span>Préparé par : ____________________</span><span>Date : ____ / ____ / ________</span></div>
+      ${b.lignes.some(x => x.statut !== 'À sortir') ? `<div style="margin-top:5mm;font-size:8.5pt;color:#444;border-top:.2mm solid #bbb;padding-top:2mm"><b>Traçabilité :</b> créé le ${esc(b.le || '')} par ${esc(b.par || '')}${[...new Set(b.lignes.filter(x => x.statut === 'Sorti').map(x => ' · sorti le ' + (x.n.sorti_le || '') + ' par ' + (x.n.sorti_par || '')))].map(esc).join('')}${[...new Set(b.lignes.filter(x => x.statut === 'Annulé').map(x => ' · annulé le ' + (x.n.annule_le || '') + ' par ' + (x.n.annule_par || '')))].map(esc).join('')}</div>` : ''}
       <script>window.onload = () => setTimeout(() => window.print(), 400);<\/script></body></html>`);
     fen.document.close();
   }
@@ -15360,7 +15377,7 @@
     if (!aAnnuler.length) return;
     if (!confirm(`Annuler le bon ${num} ? Les ${aAnnuler.length} article(s) non sortis redeviennent disponibles.`)) return;
     for (const x of aAnnuler) {
-      try { await majMouvementPrise(x.m.id, { 'Note': ecrireNotePrise({ ...x.n, statut: 'Annulé', annule_par: connectedCollab || '', annule_le: new Date().toLocaleDateString('fr-FR') }) }); } catch (e) { console.error(e); }
+      try { await majMouvementPrise(x.m.id, { 'Note': ecrireNotePrise({ ...x.n, statut: 'Annulé', annule_par: connectedCollab || '', annule_le: horodatageBon() }) }); } catch (e) { console.error(e); }
     }
     if (document.getElementById('modal-bons-sortie')) ouvrirListeBonsSortie();
     try { renderOngletBonsSortie(); } catch (e) {}
@@ -15378,6 +15395,49 @@
     if (!_stockCharge) el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try { await chargerStock(true); } catch (e) {}
     renderOngletBonsSortie();
+  }
+  // Traçabilité d'un bon : création, chaque sortie (qui / quand / quoi), annulations
+  function traceBonSortie(b) {
+    const esc = echapperHtmlNote;
+    const ev = [{ t: b.le, ic: '🧾', txt: `Créé par <b>${esc(b.par || '?')}</b> pour ${esc(b.chantier || '—')}` }];
+    const grouper = (statut, clePar, cleLe, ic, verbe) => {
+      const g = {};
+      b.lignes.filter(x => x.statut === statut).forEach(x => { const k = (x.n[cleLe] || '') + '|' + (x.n[clePar] || ''); (g[k] = g[k] || []).push(x); });
+      Object.entries(g).forEach(([k, xs]) => { const [le, par] = k.split('|'); ev.push({ t: le, ic, txt: `${verbe} par <b>${esc(par || '?')}</b> · ${xs.length} article(s)` }); });
+    };
+    grouper('Sorti', 'sorti_par', 'sorti_le', '✅', 'Sorti du stock');
+    grouper('Annulé', 'annule_par', 'annule_le', '⛔', 'Annulé');
+    const cle = t => { const m = String(t || '').match(/(\d{2})\/(\d{2})\/(\d{4})\s*(\d{2}:\d{2})?/); return m ? `${m[3]}${m[2]}${m[1]}${m[4] || ''}` : String(t || ''); };
+    ev.sort((a, b2) => cle(a.t).localeCompare(cle(b2.t)));
+    return `<details style="margin:0 0 6px"><summary style="cursor:pointer;font-size:11px;color:#888;font-weight:700">🕓 Traçabilité (${ev.length})</summary>
+      <div style="margin-top:4px;border-left:2px solid #e0d6c4;padding-left:8px">${ev.map(e => `<div style="font-size:11px;color:#555;padding:2px 0">${e.ic} <span style="color:#999">${esc(e.t || '')}</span> — ${e.txt}</div>`).join('')}</div></details>`;
+  }
+  // Export Excel de tous les bons (une ligne par article) avec la traçabilité complète
+  async function exporterBonsSortieExcel() {
+    if (stockTablesConfigurees() && !_stockCharge) { try { await chargerStock(); } catch (e) {} }
+    const bons = bonsSortieManuels();
+    if (!bons.length) { alert('Aucun bon de sortie.'); return; }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Bons de sortie');
+    ws.columns = [
+      { header: 'N° bon', key: 'num', width: 18 }, { header: 'Chantier', key: 'ch', width: 34 }, { header: 'Créé par', key: 'par', width: 18 }, { header: 'Créé le', key: 'le', width: 17 },
+      { header: 'Article', key: 'art', width: 38 }, { header: 'Code EBP', key: 'code', width: 12 }, { header: 'Quantité', key: 'q', width: 10 }, { header: 'Unité', key: 'u', width: 10 },
+      { header: 'Statut', key: 'st', width: 11 }, { header: 'Sorti par', key: 'sp', width: 18 }, { header: 'Sorti le', key: 'sl', width: 17 }, { header: 'Annulé par', key: 'ap', width: 18 }, { header: 'Annulé le', key: 'al', width: 17 }
+    ];
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    ws.getRow(1).eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A7C3F' } }; });
+    bons.forEach(b => b.lignes.forEach(x => {
+      const a = _articlesCache.find(y => y.id === (x.m['Article'] || [])[0]?.id) || {};
+      ws.addRow({ num: b.num, ch: b.chantier, par: b.par, le: b.le, art: a['Designation'] || '', code: a['Code EBP'] || '', q: x.q, u: uniteApresQte(a['Unite'] || ''),
+        st: x.statut, sp: x.n.sorti_par || '', sl: x.n.sorti_le || '', ap: x.n.annule_par || '', al: x.n.annule_le || '' });
+    }));
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 13 } };
+    const buf = await wb.xlsx.writeBuffer();
+    const lien = document.createElement('a');
+    lien.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    lien.download = `Bons_de_sortie_${dateYMD(new Date())}.xlsx`;
+    document.body.appendChild(lien); lien.click(); lien.remove();
   }
   function majBadgeBonsSortie() {
     const b = document.getElementById('badge-bons-sortie');
@@ -15413,6 +15473,7 @@
         <div style="margin:6px 0">${lignes.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px dotted #eee;${x.statut !== 'À sortir' ? 'color:#999' : ''}">
             <span>${x.statut === 'Sorti' ? '✅ ' : x.statut === 'Annulé' ? '⛔ ' : ''}${esc(x.a['Designation'] || '')}${x.empl ? ` <span style="color:#a5761f;font-size:10px">📍 ${esc(x.empl)}</span>` : ''}</span>
             <b style="white-space:nowrap">${esc(fmtQteUnite(x.q, x.a['Unite'] || ''))}</b></div>`).join('')}</div>
+        ${traceBonSortie(b)}
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button onclick="imprimerBonSortieManuel('${esc(b.num)}')" style="background:var(--beige-clair);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨️ ${ouvert ? 'Imprimer' : 'Réimprimer'}</button>
           ${ouvert && gestion ? `<button onclick="annulerBonSortieManuel('${esc(b.num)}')" style="background:#fff;border:1px solid #e5b8b8;color:#c0392b;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">Annuler</button>` : ''}
@@ -17801,7 +17862,7 @@
         await majMouvementPrise(x.m.id, {
           'Type': 'Sortie', 'Quantite': -x.q, 'Date': dateYMD(new Date()), 'Par': connectedCollab || '',
           'Article': [(x.m['Article'] || [])[0]?.id].filter(Boolean),
-          'Note': ecrireNotePrise({ ...x.n, statut: 'Sorti', sorti_par: connectedCollab || '', sorti_le: new Date().toLocaleDateString('fr-FR') })
+          'Note': ecrireNotePrise({ ...x.n, statut: 'Sorti', sorti_par: connectedCollab || '', sorti_le: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) })
         });
         ok++;
       } catch (e) { console.error('Sortie bon', e); }
@@ -24760,6 +24821,7 @@
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
         <input type="text" id="bons-recherche" placeholder="🔍 N° de bon, chantier, demandeur…" oninput="renderOngletBonsSortie()" style="flex:1;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
         <button onclick="ouvrirScanSortie()" style="flex:0 0 auto;background:#c25e00;color:#fff;border:none;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:800;cursor:pointer">➕ Nouveau bon</button>
+        <button onclick="exporterBonsSortieExcel()" title="Export Excel de tous les bons avec leur traçabilité" style="flex:0 0 auto;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:9px 10px;font-size:12px;font-weight:800;cursor:pointer">📥</button>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:4px;overflow-x:auto">
         <button class="bons-filtre-btn" data-f="ouverts" onclick="setFiltreBons('ouverts')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">⏳ À préparer</button>
