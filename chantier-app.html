@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V16';
+  const APP_VERSION = 'V17';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14501,6 +14501,7 @@
     // mode par défaut : retour si du matériel du kit est encore sur un chantier
     if (!_kit.mode) _kit.mode = chantiersAvecKit().length ? 'retour' : 'sortie';
     if (_kit.mode === 'retour') { const en = chantiersAvecKit(); if (en.length === 1) _kit.chantier = en[0]; }
+    preselectionMateriel();
     renderKit();
   }
   function fermerKit() { document.getElementById('modal-kit').style.display = 'none'; _kit = null; }
@@ -14530,12 +14531,26 @@
   function kitMode(mode) {
     _kit.mode = mode; _kit.chantier = ''; _kit.sel = {};
     if (mode === 'retour') { const en = chantiersAvecKit(); if (en.length === 1) _kit.chantier = en[0]; }
+    preselectionMateriel();
     renderKit();
   }
   function kitChantier(v) {
     _kit.chantier = (v || '').trim();
     if (_kit.mode === 'retour') _kit.sel = {}; // en sortie, les composants déjà cochés sont conservés
+    preselectionMateriel();
     renderKit();
+  }
+  // Matériel interne (un seul article) : rien à « vérifier », l'article est coché d'office —
+  // 1 unité en sortie, la quantité sortie sur le chantier au retour.
+  function preselectionMateriel() {
+    if (!_kit || !_kit.materiel) return;
+    const a = (_articlesCache || []).find(x => x.id === _kit.id);
+    if (!a || _kit.sel[a.id]) return;
+    if (_kit.mode === 'sortie') _kit.sel[a.id] = Math.min(1, Math.max(0, _stockParArticle[a.id] || 0)) || 1;
+    else if (_kit.mode === 'retour' && _kit.chantier) {
+      const s = soldesChantierStock(_kit.chantier).find(x => x.articleId === a.id);
+      if (s && s.solde > 0) _kit.sel[a.id] = s.solde;
+    }
   }
   function kitQte(articleId, v, max) {
     let q = parseFloat(String(v).replace(',', '.'));
@@ -14615,7 +14630,7 @@
     if (total) {
       const pct = Math.round(coches / total * 100), complet = coches === total;
       html += `<div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:${complet ? '#e8f5e9' : '#fff8e1'};font-size:12px;font-weight:800;color:${complet ? '#2e7d32' : '#a5761f'}">
-          ${complet ? '✅ Kit complet' : `⏳ ${coches} / ${total} composant(s) vérifié(s) — ${total - coches} manquant(s)`}
+          ${complet ? (_kit.materiel ? '✅ Prêt à valider' : '✅ Kit complet') : `☑️ ${coches} / ${total} composant(s) coché(s) — ${total - coches} à cocher`}
           <div style="height:6px;background:#eee;border-radius:3px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${complet ? '#2e7d32' : '#e0a33a'}"></div></div>
         </div>`;
     }
