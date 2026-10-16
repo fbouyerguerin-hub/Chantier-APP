@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V15';
+  const APP_VERSION = 'V16';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -9771,6 +9771,15 @@
       const statutOk = filtreStatutCollectif === 'tous' || c.statue === filtreStatutCollectif;
       return nomOk && statutOk;
     });
+    // Chantiers ayant au moins une affectation cette semaine regroupés EN HAUT du tableau
+    // (ordre d'origine conservé à l'intérieur de chaque groupe)
+    {
+      const affectes = new Set((planningCollectifData || []).filter(p => (p['Collaborateurs'] || []).length)
+        .flatMap(p => (p['Chantier'] || []).map(c => c.id)));
+      const avec = chantiersAffiches.filter(c => affectes.has(c.id)), sans = chantiersAffiches.filter(c => !affectes.has(c.id));
+      chantiersAffiches.length = 0; chantiersAffiches.push(...avec, ...sans);
+      chantiersAffiches._nbAffectes = avec.length;
+    }
 
     table.innerHTML = '';
 
@@ -9816,8 +9825,17 @@
       tr.appendChild(td);
       tbody.appendChild(tr);
     } else {
-      chantiersAffiches.forEach(chantier => {
+      chantiersAffiches.forEach((chantier, idxCh) => {
         const tr = document.createElement('tr');
+        // Séparation entre les chantiers affectés (en haut) et les autres
+        if (idxCh > 0 && idxCh === chantiersAffiches._nbAffectes) {
+          const trSep = document.createElement('tr');
+          const tdSep = document.createElement('td');
+          tdSep.colSpan = 1 + (joursCollectif || []).length;
+          tdSep.style.cssText = 'padding:3px 8px;font-size:10px;font-weight:800;color:#888;background:#eee;letter-spacing:.3px';
+          tdSep.textContent = '— Chantiers sans affectation cette semaine —';
+          trSep.appendChild(tdSep); tbody.appendChild(trSep);
+        }
         // Cellule nom
         const tdNom = document.createElement('td');
         tdNom.style.cssText = 'padding:4px 6px;font-size:9px;font-weight:700;color:var(--gris);background:#fafafa;border-right:2px solid #ddd;border-top:2px solid #e0e0e0;position:sticky;left:0;z-index:2;vertical-align:middle;min-width:80px;padding-top:6px';
