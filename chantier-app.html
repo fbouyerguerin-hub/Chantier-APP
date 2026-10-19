@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V23';
+  const APP_VERSION = 'V24';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13454,6 +13454,9 @@
         livChantier: estLivraisonSurChantier(r) ? 'Oui' : '',
         nbArt: lignesDe(r).length || null,
         reste: estCommandePartielle(r) ? resteDe(r) : '',
+        // Notes partagées de la commande (sans l'historique automatique des pièces jointes)
+        notes: String(r[CHAMPS_NOTES_DOCS.public.notes] || '').split('\n').map(t => t.trim())
+          .filter(t => t && !/(📎|🗑️)\s.*\s(ajouté|supprimé)\s*$/.test(t)).join('\n'),
         montant: prix ? (Number(r['Montant total HT']) || null) : undefined
       };
     }).sort((a, b) => (b.retard || 0) - (a.retard || 0) || a.fournisseur.localeCompare(b.fournisseur, 'fr'));
@@ -13474,6 +13477,7 @@
       { header: 'Livraison chantier', key: 'livChantier', width: 10 },
       { header: 'Nb articles', key: 'nbArt', width: 9 },
       { header: 'Reste à recevoir', key: 'reste', width: 40 },
+      { header: 'Notes (partagées)', key: 'notes', width: 60 },
       ...(prix ? [{ header: 'Montant HT', key: 'montant', width: 12, style: { numFmt: '#,##0.00 €' } }] : [])
     ];
     const remplir = (ws, lignes, titre) => {
