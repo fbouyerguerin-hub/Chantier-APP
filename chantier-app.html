@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V24';
+  const APP_VERSION = 'V26';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1871,6 +1871,80 @@
       try { _stockCharge = false; } catch (e) {}
     } catch (e) { out.textContent = '❌ ' + e.message; }
     btn.disabled = false;
+  }
+  // Phase 2 : copie des commandes PUIS des lignes, et bascule immédiate des deux (pas de trou)
+  async function migrerCommandesD1(btn) {
+    if (!confirm('Migrer les commandes fournisseurs et leurs lignes vers D1 ?\n\n1. Copie des commandes (mêmes numéros, QR CMD-… valables)\n2. Copie des lignes (QR LIG-… valables)\n3. Bascule immédiate des deux tables\n\nÀ faire à un moment calme : ni réception ni synchro EBP pendant l\'opération (1 à 2 minutes).')) return;
+    const out = document.getElementById('d1-resultat');
+    btn.disabled = true; out.style.display = 'block';
+    try {
+      out.textContent = '⏳ 1/3 Copie des commandes…';
+      const c = await appelAdminWorker('/admin/d1-migrer?table=' + TABLE_COMMANDES_FOURNISSEURS);
+      out.textContent = `✅ ${c.copiees} commande(s) copiée(s)\n⏳ 2/3 Copie des lignes…`;
+      const l = await appelAdminWorker('/admin/d1-migrer?table=' + TABLE_COMMANDES_FOURNISSEURS_LIGNES);
+      out.textContent = `✅ ${c.copiees} commande(s) copiée(s)\n✅ ${l.copiees} ligne(s) copiée(s)\n⏳ 3/3 Bascule…`;
+      await appelAdminWorker('/admin/d1-bascule?table=' + TABLE_COMMANDES_FOURNISSEURS + '&actif=1');
+      const d = await appelAdminWorker('/admin/d1-bascule?table=' + TABLE_COMMANDES_FOURNISSEURS_LIGNES + '&actif=1');
+      out.textContent = `✅ ${c.copiees} commande(s) et ${l.copiees} ligne(s) copiées.\n✅ Commandes et lignes servies par D1.\nTables sur D1 : ${(d.tables_d1 || []).join(', ')}\n\nRechargez l'appli puis vérifiez l'onglet Commandes.`;
+      try { _commandesCache = []; _commandesLignesCache = {}; } catch (e) {}
+    } catch (e) { out.textContent += '\n❌ ' + e.message + '\n(Rien n\'est basculé tant que l\'étape 3/3 n\'est pas atteinte : relancez sans risque.)'; }
+    btn.disabled = false;
+  }
+  async function retourCommandesBaserow(btn) {
+    if (!confirm('Revenir sur Baserow pour les commandes et leurs lignes ?\n\n⚠️ Les commandes, lignes et changements faits dans D1 depuis la bascule ne seront PAS dans Baserow.')) return;
+    const out = document.getElementById('d1-resultat');
+    btn.disabled = true; out.style.display = 'block'; out.textContent = '⏳ Retour…';
+    try {
+      await appelAdminWorker('/admin/d1-bascule?table=' + TABLE_COMMANDES_FOURNISSEURS + '&actif=0');
+      const d = await appelAdminWorker('/admin/d1-bascule?table=' + TABLE_COMMANDES_FOURNISSEURS_LIGNES + '&actif=0');
+      out.textContent = '↩️ Commandes de nouveau servies par Baserow.\nTables sur D1 : ' + ((d.tables_d1 || []).join(', ') || 'aucune');
+    } catch (e) { out.textContent = '❌ ' + e.message; }
+    btn.disabled = false;
+  }
+  // ── Bascule simple Baserow ⇄ SQL (D1), un bouton par groupe de tables ──
+  const GROUPES_D1 = () => [
+    { cle: 'mouvements', nom: '📦 Mouvements de stock', tables: [TABLE_MOUVEMENTS_STOCK] },
+    { cle: 'commandes', nom: '🧾 Commandes fournisseurs + lignes', tables: [TABLE_COMMANDES_FOURNISSEURS, TABLE_COMMANDES_FOURNISSEURS_LIGNES] }
+  ];
+  async function afficherBasculesD1() {
+    const zone = document.getElementById('d1-bascules');
+    if (!zone) return;
+    let etat;
+    try { etat = await appelAdminWorker('/admin/d1'); }
+    catch (e) { zone.innerHTML = `<div style="font-size:12px;color:#c0392b">❌ ${echapperHtmlNote(e.message)}</div>`; return; }
+    if (!etat.ok) { zone.innerHTML = `<div style="font-size:12px;color:#a35a00">⚠️ ${echapperHtmlNote(etat.message)}</div>`; return; }
+    const surD1 = new Set((etat.tables_d1 || []).map(String));
+    zone.innerHTML = GROUPES_D1().map(g => {
+      const sql = g.tables.every(t => surD1.has(String(t)));
+      return `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;background:#f7f7f7;border-radius:10px;padding:9px 12px">
+        <div><div style="font-size:13px;font-weight:700;color:var(--gris)">${g.nom}</div>
+          <div style="font-size:11px;font-weight:800;color:${sql ? '#5e35b1' : '#4a7c3f'}">${sql ? '🟣 Base SQL (D1)' : '🟢 Baserow'}</div></div>
+        <button onclick="basculerGroupeD1('${g.cle}', ${!sql}, this)" title="${sql ? 'Revenir sur Baserow' : 'Copier puis passer sur la base SQL'}" style="flex:0 0 auto;background:${sql ? '#fff' : '#5e35b1'};color:${sql ? '#c0392b' : '#fff'};border:${sql ? '1px solid #e5b8b8' : 'none'};border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">⇄ ${sql ? 'Baserow' : 'SQL'}</button>
+      </div>`;
+    }).join('');
+  }
+  async function basculerGroupeD1(cle, versSql, btn) {
+    const g = GROUPES_D1().find(x => x.cle === cle);
+    if (!g) return;
+    if (!confirm(versSql
+      ? `Passer « ${g.nom.replace(/^\S+\s/, '')} » sur la base SQL ?\n\nLes données sont d'abord copiées depuis Baserow (mêmes numéros, QR valables), puis l'appli bascule. À faire à un moment calme.`
+      : `Revenir sur Baserow pour « ${g.nom.replace(/^\S+\s/, '')} » ?\n\n⚠️ Ce qui a été saisi dans la base SQL depuis la bascule ne sera PAS dans Baserow.`)) return;
+    const out = document.getElementById('d1-resultat');
+    btn.disabled = true; out.style.display = 'block'; out.textContent = '⏳ En cours…';
+    try {
+      if (versSql) {
+        const res = [];
+        for (const t of g.tables) { const d = await appelAdminWorker('/admin/d1-migrer?table=' + t); res.push(d.copiees); out.textContent = `⏳ ${res.reduce((a, b) => a + b, 0)} ligne(s) copiée(s)…`; }
+        for (const t of g.tables) await appelAdminWorker('/admin/d1-bascule?table=' + t + '&actif=1');
+        out.textContent = `✅ ${res.reduce((a, b) => a + b, 0)} ligne(s) copiée(s) — ${g.nom} sur la base SQL.\nRechargez l'appli sur les autres appareils.`;
+      } else {
+        for (const t of g.tables) await appelAdminWorker('/admin/d1-bascule?table=' + t + '&actif=0');
+        out.textContent = `↩️ ${g.nom} de nouveau sur Baserow.`;
+      }
+      try { _stockCharge = false; _commandesCache = []; _commandesLignesCache = {}; } catch (e) {}
+    } catch (e) { out.textContent = '❌ ' + e.message + (versSql ? '\n(La bascule n\'a lieu qu\'après la copie complète : relancez sans risque.)' : ''); }
+    btn.disabled = false;
+    afficherBasculesD1();
   }
   async function verifierBaseD1(btn) {
     const out = document.getElementById('d1-resultat');
@@ -23515,6 +23589,7 @@
     if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
     if (tab === 'tv') chargerGestionTV();
     if (tab === 'export') {
+      try { afficherBasculesD1(); } catch (e) {}
       chargerSelectCollaborateursExport();
       initExportCongesSelects();
     }
@@ -23787,18 +23862,8 @@
 
   <div id="gestion-export" style="display:none">
     <div style="margin:0 16px 14px;background:#fff;border-radius:12px;padding:14px;border:1px dashed #cfd6df">
-      <div style="font-weight:800;color:var(--gris);margin-bottom:4px">🗄️ Base SQL (Cloudflare D1) — préparation</div>
-      <div style="font-size:11px;color:#777;margin-bottom:10px">Migration des mouvements de stock puis des commandes fournisseurs hors de Baserow (plus de limite de lignes).</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="verifierBaseD1(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">1. Vérifier / préparer la base</button>
-        <button onclick="telechargerSchemaD1(this)" style="background:#eef1f5;color:#3d4a5c;border:1px solid #cfd6df;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">2. Télécharger la structure des tables</button>
-      </div>
-      <div style="font-weight:800;color:var(--gris);font-size:12px;margin:12px 0 6px">Phase 1 — Mouvements de stock</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="migrerTableD1(this, 'mouvements')" style="background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">3. Copier les mouvements dans D1</button>
-        <button onclick="basculerTableD1(this, 'mouvements', true)" style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:800;cursor:pointer">4. Basculer les mouvements sur D1</button>
-        <button onclick="basculerTableD1(this, 'mouvements', false)" style="background:#fff;color:#c0392b;border:1px solid #e5b8b8;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">↩️ Revenir sur Baserow</button>
-      </div>
+      <div style="font-weight:800;color:var(--gris);margin-bottom:8px">🗄️ Stockage des données (Baserow ⇄ base SQL)</div>
+      <div id="d1-bascules" style="display:flex;flex-direction:column;gap:8px"><div style="font-size:12px;color:#999">⏳ Lecture de l'état…</div></div>
       <pre id="d1-resultat" style="display:none;margin-top:10px;background:#f6f6f6;border-radius:8px;padding:10px;font-size:11px;white-space:pre-wrap;max-height:40vh;overflow:auto"></pre>
     </div>
     <div style="margin:0 16px 12px;font-size:13px;font-weight:700;color:var(--gris)">Exports</div>
