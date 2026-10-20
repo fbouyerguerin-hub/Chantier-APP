@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V31';
+  const APP_VERSION = 'V32';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15310,7 +15310,8 @@
     const mots = normTexte(v).split(' ').filter(Boolean);
     const res = _articlesCache.filter(a => a['Actif'] !== false && !estFicheOuvrage(a) && mots.every(m => normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur']].join(' ')).includes(m)));
     if (res.length === 1) traiterCodeScanne(codeBarreArticle(res[0]));
-    else { bipScan(false); setMessageScan(res.length ? `🔎 ${res.length} articles correspondent — précisez` : `❌ Aucun article pour « ${v} »`, '#c0392b'); }
+    else if (res.length) ouvrirChoixArticlesScan(v);
+    else { bipScan(false); setMessageScan(`❌ Aucun article pour « ${v} »`, '#c0392b'); }
   }
 
   function renderPanierSortie() {
@@ -16235,6 +16236,83 @@
     a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     a.download = `doublons_articles_${stock ? 'stock' : 'catalogue-ebp'}_${dateYMD(new Date())}.xlsx`;
     document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  // ── V32 : choix des articles dans une liste (sortie / bon de sortie sans scanner) ──
+  let _choixScanFiltre = '', _choixScanEnStock = true;
+  function ouvrirChoixArticlesScan(filtre = '') {
+    let m = document.getElementById('modal-choix-articles-scan');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-choix-articles-scan';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:466;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) fermerChoixArticlesScan(); };
+      m.innerHTML = `<div style="background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:600px;height:88vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px 8px">
+          <div style="font-size:15px;font-weight:800;color:var(--gris)">📋 Choisir les articles</div>
+          <button onclick="fermerChoixArticlesScan()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+        </div>
+        <div style="padding:0 16px 8px;border-bottom:1px solid #eee">
+          <input type="text" id="choix-scan-filtre" oninput="_choixScanFiltre=this.value;renderChoixArticlesScan()" placeholder="🔍 Désignation, code EBP, référence, emplacement…" autocomplete="off"
+            style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:13px;outline:none">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gris-moyen);margin-top:6px;cursor:pointer">
+            <input type="checkbox" id="choix-scan-enstock" onchange="_choixScanEnStock=this.checked;renderChoixArticlesScan()"> En stock uniquement</label>
+          <div style="font-size:11px;color:var(--gris-moyen);margin-top:4px">Touchez un article pour l'ajouter (chaque touche ajoute 1). Les quantités s'ajustent ensuite dans le panier.</div>
+        </div>
+        <div id="choix-scan-liste" style="flex:1;overflow-y:auto;padding:4px 16px"></div>
+        <div style="padding:10px 16px calc(14px + env(safe-area-inset-bottom, 0px));border-top:1px solid #eee">
+          <button id="choix-scan-termine" onclick="fermerChoixArticlesScan()" style="width:100%;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:14px;font-weight:700;cursor:pointer">✔ Terminé</button>
+        </div>
+      </div>`;
+      document.body.appendChild(m);
+    }
+    _choixScanFiltre = filtre;
+    document.getElementById('choix-scan-filtre').value = filtre;
+    document.getElementById('choix-scan-enstock').checked = _choixScanEnStock;
+    m.style.display = 'flex';
+    renderChoixArticlesScan();
+    if (!('ontouchstart' in window)) setTimeout(() => document.getElementById('choix-scan-filtre')?.focus(), 50);
+  }
+  function fermerChoixArticlesScan() {
+    const m = document.getElementById('modal-choix-articles-scan');
+    if (m) m.style.display = 'none';
+  }
+  function renderChoixArticlesScan() {
+    const el = document.getElementById('choix-scan-liste');
+    if (!el) return;
+    const esc = echapperHtmlNote;
+    const mots = normTexte(_choixScanFiltre).split(' ').filter(Boolean);
+    const dansPanier = id => (_panierSortie.find(p => p.articleId === id) || {}).quantite || 0;
+    const res = (_articlesCache || []).filter(a => a['Actif'] !== false && !estFicheOuvrage(a) && !estKit(a) && !estMateriel(a)
+      && (!_choixScanEnStock || (_stockParArticle[a.id] || 0) > 0)
+      && (!mots.length || mots.every(m => normTexte([a['Designation'], a['Code EBP'], a['Reference fournisseur'], a['Fournisseur'], libelleEmplacement(a)].join(' ')).includes(m))))
+      .sort((a, b) => (a['Designation'] || '').localeCompare(b['Designation'] || '', 'fr'));
+    const nbPanier = _panierSortie.length;
+    document.getElementById('choix-scan-termine').textContent = nbPanier ? `✔ Terminé — ${nbPanier} article${nbPanier > 1 ? 's' : ''} dans le panier` : '✔ Terminé';
+    if (!res.length) { el.innerHTML = `<div class="feuille-empty">Aucun article${_choixScanEnStock ? ' en stock' : ''} ne correspond.</div>`; return; }
+    el.innerHTML = res.slice(0, 200).map(a => {
+      const q = dansPanier(a.id), st = _stockParArticle[a.id] || 0, empl = libelleEmplacement(a);
+      return `<div onclick="ajouterChoixArticleScan(${a.id})" style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid #f3f3f3;cursor:pointer;${q ? 'background:#eef5ec;' : ''}">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:700;color:var(--gris)">${esc(a['Designation'] || '')}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);display:flex;gap:8px;flex-wrap:wrap">
+            ${a['Code EBP'] ? `<span style="font-family:monospace;color:var(--vert);font-weight:700">${esc(a['Code EBP'])}</span>` : ''}
+            <span>Stock : <b style="color:${st > 0 ? 'var(--gris)' : '#c0392b'}">${fmtQte(st)} ${esc(a['Unite'] || '')}</b></span>
+            ${empl ? `<span>📍 ${esc(empl)}</span>` : ''}
+          </div>
+        </div>
+        ${q ? `<span style="flex:0 0 auto;background:var(--vert);color:#fff;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:800">× ${fmtQte(q)}</span>`
+            : '<span style="flex:0 0 auto;font-size:20px;color:var(--vert)">＋</span>'}
+      </div>`;
+    }).join('') + (res.length > 200 ? `<div class="feuille-empty">… ${res.length - 200} article(s) de plus : affinez la recherche.</div>` : '');
+  }
+  function ajouterChoixArticleScan(articleId) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    _dernierScan = { code: '', t: 0 }; // un choix volontaire n'est jamais filtré par l'anti-rebond
+    if (_scanMode !== 'sortie') { fermerChoixArticlesScan(); traiterCodeScanne(codeBarreArticle(a)); return; }
+    traiterCodeScanne(codeBarreArticle(a));
+    renderChoixArticlesScan();
   }
 
   // ── V28 : choix des emplacements sur la planche de 14 (réutiliser une planche entamée) ──
@@ -25550,7 +25628,10 @@
     <div id="scan-camera" style="width:100%;max-width:420px;margin:0 auto;border-radius:12px;overflow:hidden;background:#111"></div>
     <button id="scan-btn-relancer" onclick="relancerCameraScan()" style="display:none;width:100%;max-width:420px;margin:0 auto;background:#f1f5f9;border:none;border-radius:10px;padding:9px;font-size:13px;font-weight:700;color:var(--gris);cursor:pointer">📷 Scanner une autre étiquette</button>
     <div id="scan-message" style="text-align:center;font-size:13px;font-weight:700;padding:8px 0;min-height:18px"></div>
-    <input type="text" id="scan-saisie" onkeydown="saisieManuelleScan(event)" placeholder="⌨️ Saisie manuelle + Entrée" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none" />
+    <div style="display:flex;gap:6px">
+      <input type="text" id="scan-saisie" onkeydown="saisieManuelleScan(event)" placeholder="⌨️ Saisie manuelle + Entrée" autocomplete="off" style="flex:1;min-width:0;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none" />
+      <button onclick="ouvrirChoixArticlesScan()" style="flex:0 0 auto;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:0 12px;font-size:12px;font-weight:700;cursor:pointer">📋 Liste</button>
+    </div>
   </div>
   <div id="scan-panier" style="flex:1;overflow-y:auto;padding:4px 16px"></div>
   <div id="scan-pied" style="padding:10px 16px calc(14px + env(safe-area-inset-bottom, 0px));border-top:1px solid #eee">
