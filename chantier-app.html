@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V29';
+  const APP_VERSION = 'V31';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15623,7 +15623,7 @@
     const objets = ids.map(id => _articlesCache.find(a => a.id === id)).filter(Boolean);
     // Kit interne : modèle A4 à 2 étiquettes avec la nomenclature complète
     if (objets.length === 1 && typeof estKit === 'function' && estKit(objets[0])) return imprimerEtiquetteKit(objets[0].id);
-    return imprimerEtiquettesArticlesObjets(objets.filter(a => !(typeof estKit === 'function' && estKit(a))));
+    return choisirEmplacementsPlanche(objets.filter(a => !(typeof estKit === 'function' && estKit(a))), objets.length === 1 ? (objets[0]['Designation'] || '') : '');
   }
   // ── FICHE NOMENCLATURE D'UN OUVRAGE : A4 portrait, QR de l'ouvrage + détail des composants
   // (désignation, code EBP, réf. fournisseur, quantité, emplacement et stock atelier).
@@ -15814,7 +15814,7 @@
         if (vus.has(k)) return; vus.add(k);
         articles.push(parCode.get(k) || { id: 0, 'Code EBP': c.code, 'Designation': c.designation || c.code, 'Unite': c.unite || '' });
       });
-      return imprimerEtiquettesArticlesObjets(articles);
+      return choisirEmplacementsPlanche(articles, 'ouvrage ' + code);
     } catch (e) { alert('❌ Étiquettes impossibles : ' + e.message); }
   }
   // opts.casesOccupees : positions (0 à 13, lecture gauche → droite puis haut → bas) déjà
@@ -15992,10 +15992,10 @@
   function imprimerPanierCatalogue() {
     const liste = [..._ecPanier.values()];
     if (liste.length > EC_LOT) { alert(`Sélection de ${liste.length} étiquettes : imprimez-la en plusieurs fois (${EC_LOT} au maximum par impression).`); return; }
-    imprimerEtiquettesArticlesObjets(liste);
+    choisirEmplacementsPlanche(liste, 'catalogue EBP');
   }
   function imprimerLotCatalogue(a, b, btn) {
-    imprimerEtiquettesArticlesObjets(_ecSelection.slice(a, b));
+    choisirEmplacementsPlanche(_ecSelection.slice(a, b), `catalogue · ${a + 1} à ${b}`);
     if (btn) { btn.style.background = '#95a5a6'; btn.innerHTML = '✓ ' + btn.innerHTML.replace('🖨️ ', ''); }
   }
 
@@ -16241,14 +16241,16 @@
   // Par défaut, toucher une case = commencer l'impression à cet endroit (cases précédentes
   // grisées). Mode « case par case » : chaque case touchée bascule utilisée / libre, pour une
   // planche entamée dans le désordre. Les étiquettes remplissent les cases libres dans l'ordre.
-  let _plancheArticles = [], _plancheOccupees = new Set(), _plancheModeCase = false;
+  let _plancheArticles = [], _plancheOccupees = new Set(), _plancheModeCase = false, _plancheQtes = [];
   function choisirEmplacementsPlanche(articles, titre) {
-    _plancheArticles = articles; _plancheOccupees = new Set(); _plancheModeCase = false;
+    if (!(articles || []).some(aCodeEbp)) return imprimerEtiquettesArticlesObjets(articles || []); // affiche le message « aucun article »
+    _plancheArticles = articles.filter(aCodeEbp).concat(articles.filter(a => !aCodeEbp(a))); _plancheOccupees = new Set(); _plancheModeCase = false;
+    _plancheQtes = _plancheArticles.map(() => 1);
     let m = document.getElementById('modal-planche-etiq');
     if (!m) {
       m = document.createElement('div');
       m.id = 'modal-planche-etiq';
-      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:320;align-items:flex-end;justify-content:center';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:470;align-items:flex-end;justify-content:center';
       m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
       m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:440px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden">
         <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3">
@@ -16256,6 +16258,14 @@
           <button onclick="document.getElementById('modal-planche-etiq').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button>
         </div>
         <div style="padding:12px 18px;overflow-y:auto">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <div style="font-size:12px;font-weight:800;color:var(--gris)">Nombre d'exemplaires</div>
+            <div id="planche-etiq-qte-tous" style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--gris-moyen)">Pour tous :
+              <button onclick="qtePlancheTous(-1)" style="width:26px;height:26px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer">−</button>
+              <button onclick="qtePlancheTous(1)" style="width:26px;height:26px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer">+</button>
+            </div>
+          </div>
+          <div id="planche-etiq-qtes" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:4px 8px;max-height:170px;overflow-y:auto;margin-bottom:12px"></div>
           <div id="planche-etiq-aide" style="font-size:12px;color:var(--gris-moyen);margin-bottom:6px"></div>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gris);margin-bottom:8px;cursor:pointer"><input type="checkbox" id="planche-etiq-mode" onchange="_plancheModeCase=this.checked;renderPlancheEtiq()"> Sélection case par case</label>
           <div id="planche-etiq-grille" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px;user-select:none"></div>
@@ -16279,7 +16289,17 @@
     document.getElementById('planche-etiq-aide').innerHTML = _plancheModeCase
       ? 'Touchez chaque case <b>déjà utilisée</b> sur votre planche (toucher à nouveau pour la libérer).'
       : 'Touchez la case où doit être imprimée la <b>première étiquette</b>.';
-    const n = _plancheArticles.length;
+    const esc = echapperHtmlNote;
+    const imprimables = _plancheArticles.map((a, i) => ({ a, i })).filter(x => aCodeEbp(x.a));
+    document.getElementById('planche-etiq-qte-tous').style.display = imprimables.length > 1 ? 'flex' : 'none';
+    document.getElementById('planche-etiq-qtes').innerHTML = imprimables.map(({ a, i }) => `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px dotted #eee">
+        <div style="flex:1;min-width:0;font-size:12px;line-height:1.2"><div style="font-weight:700;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a['Designation'] || '')}</div>
+          <div style="font-family:monospace;font-size:10px;color:var(--vert)">${esc(String(a['Code EBP'] || ''))}</div></div>
+        <button onclick="qtePlanche(${i},-1)" style="width:28px;height:28px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:15px;cursor:pointer">−</button>
+        <input type="number" min="0" max="99" value="${_plancheQtes[i]}" onchange="qtePlanche(${i},0,this.value)" style="width:42px;text-align:center;border:1px solid #ddd;border-radius:6px;padding:4px 0;font-size:13px;font-weight:700">
+        <button onclick="qtePlanche(${i},1)" style="width:28px;height:28px;border:1px solid #ddd;border-radius:6px;background:#fff;font-size:15px;cursor:pointer">+</button>
+      </div>`).join('');
+    const n = imprimables.reduce((t, x) => t + _plancheQtes[x.i], 0);
     // Simulation du remplissage de la première planche
     const rempl = {};
     for (let pos = 0, k = 0; pos < ETIQ_PAR_PLANCHE && k < n; pos++) if (!_plancheOccupees.has(pos)) rempl[pos] = ++k;
@@ -16297,6 +16317,15 @@
     document.getElementById('planche-etiq-resume').innerHTML = `${n} étiquette(s) · ${Math.min(n, libres)} sur cette planche`
       + (reste ? ` · <b>${reste}</b> sur ${planches - 1} planche(s) neuve(s)` : '');
   }
+  function qtePlanche(i, delta, valeur) {
+    const v = valeur !== undefined ? parseInt(valeur, 10) : _plancheQtes[i] + delta;
+    _plancheQtes[i] = Math.max(0, Math.min(99, isNaN(v) ? 1 : v));
+    renderPlancheEtiq();
+  }
+  function qtePlancheTous(delta) {
+    _plancheQtes = _plancheQtes.map(q => Math.max(0, Math.min(99, q + delta)));
+    renderPlancheEtiq();
+  }
   function toucherCasePlanche(pos) {
     if (_plancheModeCase) { if (_plancheOccupees.has(pos)) _plancheOccupees.delete(pos); else _plancheOccupees.add(pos); }
     else _plancheOccupees = new Set(Array.from({ length: pos }, (_, i) => i));
@@ -16304,8 +16333,10 @@
   }
   function imprimerPlancheEtiq() {
     if (_plancheOccupees.size >= ETIQ_PAR_PLANCHE) { alert('Toutes les cases sont marquées utilisées : libérez au moins une case ou prenez une planche neuve.'); return; }
+    const liste = _plancheArticles.flatMap((a, i) => aCodeEbp(a) ? Array(_plancheQtes[i]).fill(a) : []);
+    if (!liste.length) { alert('Aucune étiquette à imprimer : indiquez au moins 1 exemplaire.'); return; }
     document.getElementById('modal-planche-etiq').style.display = 'none';
-    imprimerEtiquettesArticlesObjets(_plancheArticles, { casesOccupees: _plancheOccupees });
+    imprimerEtiquettesArticlesObjets(liste, { casesOccupees: _plancheOccupees });
   }
 
   function imprimerEtiquettesListe() {
