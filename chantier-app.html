@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V27';
+  const APP_VERSION = 'V29';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13925,6 +13925,7 @@
     const listeEl = document.getElementById('stock-liste');
     const outils = document.getElementById('stock-outils-gestion');
     { const be = document.getElementById('btn-etiq-catalogue'); if (be) be.style.display = peutGererStock() ? 'block' : 'none'; }
+    { const bd = document.getElementById('btn-doublons-articles'); if (bd) bd.style.display = peutGererStock() ? 'block' : 'none'; }
     if (outils) outils.style.display = peutGererStock() ? 'flex' : 'none';
     if (!stockTablesConfigurees()) {
       listeEl.innerHTML = `<div class="feuille-empty" style="text-align:left;font-size:12px;line-height:1.5">⚙️ Module stock non configuré : créez les tables Baserow <b>Articles</b> et <b>Mouvements stock</b>, puis renseignez TABLE_ARTICLES et TABLE_MOUVEMENTS_STOCK dans l'appli.</div>`;
@@ -15816,7 +15817,10 @@
       return imprimerEtiquettesArticlesObjets(articles);
     } catch (e) { alert('❌ Étiquettes impossibles : ' + e.message); }
   }
-  async function imprimerEtiquettesArticlesObjets(articles) {
+  // opts.casesOccupees : positions (0 à 13, lecture gauche → droite puis haut → bas) déjà
+  // utilisées sur la première planche ; elles sont laissées vides à l'impression.
+  async function imprimerEtiquettesArticlesObjets(articles, opts = {}) {
+    const occupees = [...(opts.casesOccupees || [])].filter(i => i >= 0 && i < ETIQ_PAR_PLANCHE);
     const sansCode = articles.filter(a => !aCodeEbp(a));
     articles = articles.filter(aCodeEbp);
     if (!articles.length) {
@@ -15824,7 +15828,8 @@
       return;
     }
     if (sansCode.length && !confirm(`${sansCode.length} article(s) sans code EBP ne seront pas étiquetés. Imprimer les ${articles.length} autre(s) ?`)) return;
-    if (articles.length > ETIQ_PAR_PLANCHE && !confirm(`${articles.length} étiquettes (${Math.ceil(articles.length / ETIQ_PAR_PLANCHE)} planche(s) A4 de ${ETIQ_PAR_PLANCHE}). Continuer ?`)) return;
+    const nbPlanches = Math.ceil((articles.length + occupees.length) / ETIQ_PAR_PLANCHE);
+    if (nbPlanches > 1 && !confirm(`${articles.length} étiquettes (${nbPlanches} planche(s) A4 de ${ETIQ_PAR_PLANCHE}). Continuer ?`)) return;
     const fen = window.open('', '_blank');
     if (!fen) { alert('Autorisez les fenêtres pop-up pour imprimer.'); return; }
     fen.document.write('<p style="font-family:sans-serif">⏳ Génération des étiquettes…</p>');
@@ -15846,7 +15851,7 @@
       });
       tmp.remove();
       const esc = s => echapperHtmlNote(s || '');
-      const cases = articles.map((a, i) => `<div class="et">
+      const casesArticles = articles.map((a, i) => `<div class="et">
         <img src="${imgs[i]}" />
         <div class="tx">
           <div class="de">${esc(a['Designation'])}</div>
@@ -15854,7 +15859,15 @@
           ${a['Unite'] ? `<div class="un">${estUniteConditionnement(a['Unite']) ? 'Conditionnement : ' : 'Unité : '}<b>${esc(libUnite(a['Unite']))}</b></div>` : ''}
           ${libelleEmplacement(a) ? `<div class="em">📍 ${esc(libelleEmplacement(a))}</div>` : ''}
           <div class="lo">GUÉRIN BÂTIMENTS · stock atelier</div>
-        </div></div>`).join('');
+        </div></div>`);
+      // Cases déjà utilisées de la première planche : emplacements vides
+      const occ = new Set(occupees);
+      const cellules = [];
+      for (let pos = 0, k = 0; k < casesArticles.length; pos++) {
+        if (pos < ETIQ_PAR_PLANCHE && occ.has(pos)) cellules.push('<div class="et vide"></div>');
+        else cellules.push(casesArticles[k++]);
+      }
+      const cases = cellules.join('');
       fen.document.open();
       fen.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Étiquettes stock</title><style>
         /* Avery L7163 : 2 × 7 étiquettes 99,1 × 38,1 mm — marges 15,15 mm (haut) / 4,65 mm (côtés) */
@@ -15869,7 +15882,7 @@
         .em { font-size: 11pt; font-weight: 800; color: #a5761f; }
         .un { font-size: 8pt; color: #333; }
         .lo { font-size: 6pt; color: #888; }
-        @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } }
+        @media screen { body { background: #eee; padding: 10px; } .pl { background: #fff; width: max-content; } .et { outline: 1px dashed #ccc; } .et.vide { background: repeating-linear-gradient(45deg, #f4f4f4 0 6px, #e6e6e6 6px 12px); } }
       </style></head><body><div class="pl">${cases}</div>
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
       fen.document.close();
@@ -16010,7 +16023,289 @@
     if (stockTablesConfigurees() && !_stockCharge) chargerStock().catch(() => {});
     const articles = articlesEtiquettesCommande(r);
     if (!articles.length) { alert('Aucun article avec code EBP dans cette commande (lignes en texte libre ou frais uniquement).'); return; }
-    return imprimerEtiquettesArticlesObjets(articles);
+    return choisirEmplacementsPlanche(articles, r['Numero commande'] || '');
+  }
+
+
+  // ── V29 : recherche des articles en doublon par désignation ──
+  // Deux niveaux : « Identique » = mêmes mots une fois normalisés (accents, casse, ponctuation,
+  // ordre des mots, pluriels, 100 mm = 100mm, 2,5 = 2.5, 6 x 60 = 6x60) ; « Proche » = mêmes
+  // valeurs chiffrées ET (75 % de mots en commun, ou tous les mots de l'une présents dans l'autre). Les chiffres doivent toujours être
+  // identiques : « Vis 6x60 » et « Vis 6x80 » ne sont jamais proposées comme doublons.
+  const DBL_MOTS_VIDES = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'l', 'd', 'en', 'pour', 'avec', 'a', 'au', 'aux', 'et', 'un', 'une', 'sur', 'par']);
+  const CLE_DBL_IGNORES = 'guerin-doublons-ignores';
+  let _dblPortee = 'stock', _dblResultats = null, _dblFiltre = '', _dblIgnores = new Set();
+  try { _dblIgnores = new Set(JSON.parse(localStorage.getItem(CLE_DBL_IGNORES) || '[]')); } catch (e) {}
+
+  function motsDesignation(t) {
+    let x = String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    x = x.replace(/(\d),(\d)/g, '$1.$2')                         // 2,5 → 2.5
+         .replace(/(\d)\s*(x|\*|×)\s*(?=\d)/g, '$1x')            // 6 x 60 → 6x60
+         .replace(/(\d)\s+(mm|cm|m|ml|m2|m3|kg|g|l|t|°)\b/g, '$1$2') // 100 mm → 100mm
+         .replace(/[^a-z0-9.x°]+/g, ' ');
+    return x.split(' ').map(m => m.replace(/^\.+|\.+$/g, '')).filter(m => m && !DBL_MOTS_VIDES.has(m))
+      .map(m => (/^\d/.test(m) ? m.replace(/\.0+(?=\D|$)/, '') : (m.length > 3 ? m.replace(/(s|x)$/, '') : m)));
+  }
+
+  function articlesPourDoublons() {
+    if (_dblPortee === 'catalogue') {
+      return ((_catLocal && _catLocal.items) || []).filter(x => !x.ouvrage).map(x => ({
+        cle: 'C:' + x.code, designation: x.designation || '', code: x.code || '', ref: x.ref || '',
+        fournisseur: x.fournisseur || '', famille: x.famille || '', articleId: null
+      }));
+    }
+    return (_articlesCache || []).filter(a => a['Actif'] !== false && !estKit(a) && !estFicheOuvrage(a)).map(a => ({
+      cle: 'A:' + a.id, designation: a['Designation'] || '', code: a['Code EBP'] || '', ref: a['Reference fournisseur'] || '',
+      fournisseur: a['Fournisseur'] || '', famille: a['Famille'] || '', articleId: a.id,
+      stock: _stockParArticle[a.id] || 0, emplacement: libelleEmplacement(a) || ''
+    }));
+  }
+
+  function calculerDoublons(items) {
+    const parent = items.map((_, i) => i);
+    const trouver = i => (parent[i] === i ? i : (parent[i] = trouver(parent[i])));
+    const unir = (a, b) => { const ra = trouver(a), rb = trouver(b); if (ra !== rb) parent[rb] = ra; };
+    const niveauPaire = new Map(); // racine → 'identique' | 'proche'
+    const infos = items.map(it => {
+      const mots = [...new Set(motsDesignation(it.designation))];
+      const nums = mots.filter(m => /\d/.test(m)).sort().join('|');
+      const txt = mots.filter(m => !/\d/.test(m));
+      return { mots, nums, txt, cle: mots.slice().sort().join(' ') };
+    });
+    // 1) Identiques
+    const parCle = new Map();
+    infos.forEach((f, i) => { if (!f.cle) return; if (parCle.has(f.cle)) unir(parCle.get(f.cle), i); else parCle.set(f.cle, i); });
+    const identiques = new Set();
+    infos.forEach((f, i) => { if (f.cle && trouver(parCle.get(f.cle)) === trouver(i) && parCle.get(f.cle) !== i) { identiques.add(i); identiques.add(parCle.get(f.cle)); } });
+    // 2) Proches : même signature chiffrée, ≥ 80 % de mots communs (index par mot rare)
+    const parNums = new Map();
+    infos.forEach((f, i) => { if (f.txt.length < 2) return; (parNums.get(f.nums) || parNums.set(f.nums, []).get(f.nums)).push(i); });
+    const proches = new Set();
+    parNums.forEach(groupe => {
+      if (groupe.length < 2) return;
+      const index = new Map();
+      groupe.forEach(i => infos[i].txt.forEach(m => (index.get(m) || index.set(m, []).get(m)).push(i)));
+      groupe.forEach(i => {
+        const f = infos[i];
+        const rares = f.txt.slice().sort((a, b) => index.get(a).length - index.get(b).length).slice(0, 2);
+        const vus = new Set();
+        rares.forEach(m => {
+          const liste = index.get(m);
+          if (liste.length > 400) return;
+          liste.forEach(j => {
+            if (j <= i || vus.has(j)) return; vus.add(j);
+            const g = infos[j], setG = new Set(g.txt);
+            const communs = f.txt.filter(x => setG.has(x)).length;
+            const union = new Set([...f.txt, ...g.txt]).size;
+            const inclus = communs === Math.min(f.txt.length, setG.size); // l'une contient tous les mots de l'autre
+            if (union && (communs / union >= 0.75 || inclus)) { unir(i, j); proches.add(i); proches.add(j); }
+          });
+        });
+      });
+    });
+    const groupes = new Map();
+    items.forEach((it, i) => { const r = trouver(i); (groupes.get(r) || groupes.set(r, []).get(r)).push(i); });
+    return [...groupes.values()].filter(g => g.length > 1).map(g => {
+      const membres = g.map(i => items[i]).sort((a, b) => (a.designation || '').localeCompare(b.designation || '', 'fr'));
+      const toutIdentique = g.every(i => identiques.has(i)) && new Set(g.map(i => infos[i].cle)).size === 1;
+      return { id: membres.map(m => m.cle).sort().join(','), niveau: toutIdentique ? 'identique' : 'proche', membres };
+    }).sort((a, b) => (a.niveau === b.niveau ? b.membres.length - a.membres.length : a.niveau === 'identique' ? -1 : 1));
+  }
+
+  async function ouvrirDoublonsArticles() {
+    let m = document.getElementById('modal-doublons-articles');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-doublons-articles';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:310;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      const bt = 'border:1px solid #ddd;border-radius:14px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer';
+      m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:640px;height:90vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
+          <div style="font-size:15px;font-weight:700;color:var(--gris)">🔍 Articles en doublon</div>
+          <button onclick="document.getElementById('modal-doublons-articles').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button>
+        </div>
+        <div style="padding:10px 16px 6px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
+          <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+            <button id="dbl-portee-stock" onclick="changerPorteeDoublons('stock')" style="${bt}">🗄️ Articles du stock</button>
+            <button id="dbl-portee-catalogue" onclick="changerPorteeDoublons('catalogue')" style="${bt}">📚 Catalogue EBP</button>
+            <button onclick="exporterDoublonsExcel()" style="${bt};margin-left:auto;background:var(--beige-clair);color:var(--gris)">📥 Excel</button>
+          </div>
+          <input type="text" id="dbl-filtre" placeholder="🔍 Filtrer (désignation, code, fournisseur…)" oninput="_dblFiltre=this.value;renderDoublons()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:13px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--gris-moyen);margin-top:6px;cursor:pointer"><input type="checkbox" id="dbl-voir-ignores" onchange="renderDoublons()"> Afficher les groupes marqués « pas un doublon »</label>
+          <div id="dbl-resume" style="font-size:12px;color:var(--gris);margin-top:6px"></div>
+        </div>
+        <div id="dbl-liste" style="padding:10px 16px;overflow-y:auto;flex:1"></div>
+      </div>`;
+      document.body.appendChild(m);
+    }
+    m.style.display = 'flex';
+    if (!_dblResultats) await analyserDoublons(); else renderDoublons();
+  }
+
+  async function changerPorteeDoublons(p) {
+    if (p === _dblPortee && _dblResultats) return;
+    _dblPortee = p; _dblResultats = null;
+    await analyserDoublons();
+  }
+
+  async function analyserDoublons() {
+    const liste = document.getElementById('dbl-liste');
+    ['stock', 'catalogue'].forEach(k => {
+      const b = document.getElementById('dbl-portee-' + k);
+      if (b) { b.style.background = k === _dblPortee ? 'var(--vert)' : '#fff'; b.style.color = k === _dblPortee ? '#fff' : 'var(--gris-moyen)'; }
+    });
+    liste.innerHTML = '<div class="feuille-loading">⏳ Analyse des désignations…</div>';
+    document.getElementById('dbl-resume').textContent = '';
+    try {
+      if (_dblPortee === 'catalogue') await chargerCatalogueLocal();
+      else if (stockTablesConfigurees() && !_stockCharge) await chargerStock();
+      await new Promise(r => setTimeout(r, 30)); // laisse s'afficher le message
+      const items = articlesPourDoublons();
+      _dblResultats = { items: items.length, groupes: calculerDoublons(items) };
+      renderDoublons();
+    } catch (e) {
+      liste.innerHTML = '<div style="color:#c0392b;font-size:12px;text-align:center;padding:10px">Erreur de chargement : ' + echapperHtmlNote(e.message) + '</div>';
+    }
+  }
+
+  function groupesDoublonsVisibles() {
+    if (!_dblResultats) return [];
+    const voirIgnores = document.getElementById('dbl-voir-ignores')?.checked;
+    const mots = normTexte(_dblFiltre).split(' ').filter(Boolean);
+    return _dblResultats.groupes.filter(g => (voirIgnores || !_dblIgnores.has(g.id)) &&
+      (!mots.length || g.membres.some(x => { const t = normTexte([x.designation, x.code, x.ref, x.fournisseur, x.famille].join(' ')); return mots.every(m => t.includes(m)); })));
+  }
+
+  function renderDoublons() {
+    const liste = document.getElementById('dbl-liste');
+    if (!liste || !_dblResultats) return;
+    const esc = echapperHtmlNote;
+    const groupes = groupesDoublonsVisibles();
+    const nbId = groupes.filter(g => g.niveau === 'identique').length;
+    const nbArt = groupes.reduce((s, g) => s + g.membres.length, 0);
+    const nbIgn = _dblResultats.groupes.filter(g => _dblIgnores.has(g.id)).length;
+    document.getElementById('dbl-resume').innerHTML = `${_dblResultats.items} article(s) analysé(s) · <b>${groupes.length} groupe(s)</b> (${nbId} identique(s), ${groupes.length - nbId} proche(s)) · ${nbArt} article(s) concerné(s)${nbIgn ? ` · ${nbIgn} ignoré(s)` : ''}`;
+    if (!groupes.length) { liste.innerHTML = '<div class="feuille-empty">Aucun doublon détecté.</div>'; return; }
+    liste.innerHTML = groupes.slice(0, 300).map(g => {
+      const ident = g.niveau === 'identique', ignore = _dblIgnores.has(g.id);
+      return `<div style="background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;border-left:4px solid ${ident ? '#c0392b' : '#e0a33a'};padding:8px 10px;margin-bottom:8px;${ignore ? 'opacity:.55' : ''}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:10px;font-weight:800;color:#fff;background:${ident ? '#c0392b' : '#e0a33a'};border-radius:8px;padding:2px 8px">${ident ? 'Identique' : 'Proche'}</span>
+          <span style="font-size:11px;color:var(--gris-moyen);flex:1">${g.membres.length} articles</span>
+          <button onclick="basculerIgnoreDoublon('${g.id.replace(/'/g, "\\'")}')" style="background:none;border:1px solid #ddd;border-radius:8px;padding:3px 8px;font-size:10px;color:var(--gris-moyen);cursor:pointer">${ignore ? '↺ Réactiver' : '✓ Pas un doublon'}</button>
+        </div>
+        ${g.membres.map(x => `<div onclick="ouvrirFicheArticleModal(${x.articleId || 'null'}, '${String(x.code || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')" style="cursor:pointer;padding:5px 2px;border-top:1px dotted #eee">
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(x.designation)}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);display:flex;gap:10px;flex-wrap:wrap">
+            ${x.code ? `<span style="font-family:monospace;color:var(--vert);font-weight:700">${esc(x.code)}</span>` : '<span style="color:#c0392b">sans code EBP</span>'}
+            ${x.ref ? `<span>Réf. ${esc(x.ref)}</span>` : ''}${x.fournisseur ? `<span>${esc(x.fournisseur)}</span>` : ''}
+            ${_dblPortee === 'stock' ? `<span>Stock : <b>${fmtQte(x.stock)}</b></span>${x.emplacement ? `<span>📍 ${esc(x.emplacement)}</span>` : ''}` : ''}
+          </div></div>`).join('')}
+      </div>`;
+    }).join('') + (groupes.length > 300 ? `<div class="feuille-empty">… ${groupes.length - 300} groupe(s) de plus : affinez avec le filtre ou exportez en Excel.</div>` : '');
+  }
+
+  function basculerIgnoreDoublon(id) {
+    if (_dblIgnores.has(id)) _dblIgnores.delete(id); else _dblIgnores.add(id);
+    try { localStorage.setItem(CLE_DBL_IGNORES, JSON.stringify([..._dblIgnores])); } catch (e) {}
+    renderDoublons();
+  }
+
+  async function exporterDoublonsExcel() {
+    const groupes = groupesDoublonsVisibles();
+    if (!groupes.length) { alert('Aucun doublon à exporter.'); return; }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Doublons');
+    const stock = _dblPortee === 'stock';
+    ws.columns = [
+      { header: 'Groupe', width: 8 }, { header: 'Niveau', width: 11 }, { header: 'Désignation', width: 55 },
+      { header: 'Code EBP', width: 14 }, { header: 'Réf. fournisseur', width: 18 }, { header: 'Fournisseur', width: 22 }, { header: 'Famille', width: 18 },
+      ...(stock ? [{ header: 'Stock', width: 9 }, { header: 'Emplacement', width: 18 }] : [])
+    ];
+    ws.getRow(1).font = { bold: true };
+    groupes.forEach((g, k) => g.membres.forEach(x => {
+      const row = ws.addRow([k + 1, g.niveau === 'identique' ? 'Identique' : 'Proche', x.designation, x.code, x.ref, x.fournisseur, x.famille, ...(stock ? [x.stock, x.emplacement] : [])]);
+      if (k % 2) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F0E8' } }; });
+    }));
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.autoFilter = { from: 'A1', to: { row: 1, column: ws.columns.length } };
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = `doublons_articles_${stock ? 'stock' : 'catalogue-ebp'}_${dateYMD(new Date())}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  // ── V28 : choix des emplacements sur la planche de 14 (réutiliser une planche entamée) ──
+  // Par défaut, toucher une case = commencer l'impression à cet endroit (cases précédentes
+  // grisées). Mode « case par case » : chaque case touchée bascule utilisée / libre, pour une
+  // planche entamée dans le désordre. Les étiquettes remplissent les cases libres dans l'ordre.
+  let _plancheArticles = [], _plancheOccupees = new Set(), _plancheModeCase = false;
+  function choisirEmplacementsPlanche(articles, titre) {
+    _plancheArticles = articles; _plancheOccupees = new Set(); _plancheModeCase = false;
+    let m = document.getElementById('modal-planche-etiq');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-planche-etiq';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:320;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:440px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3">
+          <div id="planche-etiq-titre" style="font-size:15px;font-weight:700;color:var(--gris)"></div>
+          <button onclick="document.getElementById('modal-planche-etiq').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button>
+        </div>
+        <div style="padding:12px 18px;overflow-y:auto">
+          <div id="planche-etiq-aide" style="font-size:12px;color:var(--gris-moyen);margin-bottom:6px"></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--gris);margin-bottom:8px;cursor:pointer"><input type="checkbox" id="planche-etiq-mode" onchange="_plancheModeCase=this.checked;renderPlancheEtiq()"> Sélection case par case</label>
+          <div id="planche-etiq-grille" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px;user-select:none"></div>
+          <div id="planche-etiq-resume" style="font-size:12px;color:var(--gris);margin:10px 0 8px;text-align:center"></div>
+          <div style="display:flex;gap:8px">
+            <button onclick="_plancheOccupees.clear();renderPlancheEtiq()" style="flex:1;background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:11px;font-size:13px;font-weight:700;color:var(--gris);cursor:pointer">↺ Planche neuve</button>
+            <button onclick="imprimerPlancheEtiq()" style="flex:2;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:10px;padding:11px;font-size:14px;font-weight:700;cursor:pointer">🖨️ Imprimer</button>
+          </div>
+        </div>
+      </div>`;
+      document.body.appendChild(m);
+    }
+    document.getElementById('planche-etiq-mode').checked = false;
+    document.getElementById('planche-etiq-titre').textContent = '🏷️ Étiquettes' + (titre ? ' · ' + titre : '');
+    renderPlancheEtiq();
+    m.style.display = 'flex';
+  }
+  function renderPlancheEtiq() {
+    const grille = document.getElementById('planche-etiq-grille');
+    if (!grille) return;
+    document.getElementById('planche-etiq-aide').innerHTML = _plancheModeCase
+      ? 'Touchez chaque case <b>déjà utilisée</b> sur votre planche (toucher à nouveau pour la libérer).'
+      : 'Touchez la case où doit être imprimée la <b>première étiquette</b>.';
+    const n = _plancheArticles.length;
+    // Simulation du remplissage de la première planche
+    const rempl = {};
+    for (let pos = 0, k = 0; pos < ETIQ_PAR_PLANCHE && k < n; pos++) if (!_plancheOccupees.has(pos)) rempl[pos] = ++k;
+    grille.innerHTML = Array.from({ length: ETIQ_PAR_PLANCHE }, (_, pos) => {
+      const occ = _plancheOccupees.has(pos), num = rempl[pos];
+      const fond = occ ? 'repeating-linear-gradient(45deg,#eee 0 6px,#ddd 6px 12px)' : num ? '#e8f0e7' : '#fff';
+      const txt = occ ? '<span style="color:#999">Utilisée</span>' : num ? `<b style="color:var(--vert)">Étiquette ${num}</b>` : '<span style="color:#bbb">Libre</span>';
+      return `<div onclick="toucherCasePlanche(${pos})"
+        style="height:34px;border:1px dashed #ccc;border-radius:6px;background:${fond};display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-size:11px;cursor:pointer">
+        <span style="color:#aaa;font-size:10px">${pos + 1}</span>${txt}</div>`;
+    }).join('');
+    const libres = ETIQ_PAR_PLANCHE - _plancheOccupees.size;
+    const reste = Math.max(0, n - libres);
+    const planches = 1 + Math.ceil(reste / ETIQ_PAR_PLANCHE);
+    document.getElementById('planche-etiq-resume').innerHTML = `${n} étiquette(s) · ${Math.min(n, libres)} sur cette planche`
+      + (reste ? ` · <b>${reste}</b> sur ${planches - 1} planche(s) neuve(s)` : '');
+  }
+  function toucherCasePlanche(pos) {
+    if (_plancheModeCase) { if (_plancheOccupees.has(pos)) _plancheOccupees.delete(pos); else _plancheOccupees.add(pos); }
+    else _plancheOccupees = new Set(Array.from({ length: pos }, (_, i) => i));
+    renderPlancheEtiq();
+  }
+  function imprimerPlancheEtiq() {
+    if (_plancheOccupees.size >= ETIQ_PAR_PLANCHE) { alert('Toutes les cases sont marquées utilisées : libérez au moins une case ou prenez une planche neuve.'); return; }
+    document.getElementById('modal-planche-etiq').style.display = 'none';
+    imprimerEtiquettesArticlesObjets(_plancheArticles, { casesOccupees: _plancheOccupees });
   }
 
   function imprimerEtiquettesListe() {
@@ -24973,6 +25268,7 @@
         <button onclick="ouvrirCoutsChantiers()" title="Coût du stock consommé par chantier" style="flex:1;background:var(--beige-clair);border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer">💶 Coûts</button>
       </div>
       <button id="btn-etiq-catalogue" onclick="ouvrirEtiquettesCatalogue()" style="display:none;width:100%;background:#fff;border:1.5px dashed var(--vert);border-radius:10px;padding:9px;font-size:12px;font-weight:800;color:var(--vert);cursor:pointer;margin-bottom:8px">🖨️ Étiquettes en masse — catalogue EBP</button>
+      <button id="btn-doublons-articles" onclick="ouvrirDoublonsArticles()" style="display:none;width:100%;background:#fff;border:1.5px dashed #a5761f;border-radius:10px;padding:9px;font-size:12px;font-weight:800;color:#a5761f;cursor:pointer;margin-bottom:8px">🔍 Rechercher les articles en doublon (désignations)</button>
       <div id="stock-sync-statut" style="display:none;margin-bottom:8px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600"></div>
   <div class="filtre-fige" style="margin:0 -16px;padding:6px 16px 4px">
       <input type="text" id="stock-recherche" placeholder="🔍 Article, référence, code EBP, zone ou rayon (tout le catalogue)…" oninput="renderStock(); programmerRechercheCatalogue()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
