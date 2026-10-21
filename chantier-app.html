@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V34';
+  const APP_VERSION = 'V36';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1395,6 +1395,9 @@
   async function filtrerResultatsClotures(url, data) {
     if (!data || !Array.isArray(data.results) || !data.results.length) return data;
     if (String(url).includes(MARQUEUR_CLOTURES)) return data;
+    // V35 : les saisies de temps ne sont jamais masquées — un chantier clôturé reste dans
+    // les feuilles d'heures, la validation, les exports, le calcul RTT et la rentabilité.
+    if (String(url).includes('/rows/table/' + TABLE_SAISIE + '/')) return data;
     const tableChantiers = String(url).includes('/rows/table/' + TABLES.Chantiers.id + '/');
     if (tableChantiers) {
       if (!data.results.some(c => estStatutCloture(c['Statue']))) return data;
@@ -13893,7 +13896,7 @@
     const deja = estCodeGenerique(code);
     if (!confirm(deja
       ? `Retirer ${code} des codes génériques ?\n\nSes lignes de commande seront de nouveau rattachées à l'article ${code} (stock, Dispo. stock, scan).`
-      : `Marquer ${code} comme code GÉNÉRIQUE (article « divers ») ?\n\nSes lignes de commande ne seront plus rattachées à cet article : ni proposition Dispo. stock, ni entrée en stock sur ce code. Elles seront traitées par leur désignation.`)) return;
+      : `Marquer ${code} comme code GÉNÉRIQUE (article « divers ») ?\n\nSes lignes de commande ne seront plus rattachées à cet article : ni proposition Dispo. stock, ni entrée en stock, ni rapprochement par désignation : un article « divers » ne gère pas de stock.`)) return;
     await chargerParametresApp();
     const liste = deja ? ARTICLES_GENERIQUES.filter(g => normRef(g) !== normRef(code)) : [...ARTICLES_GENERIQUES, String(code).trim().toUpperCase()];
     try {
@@ -13912,7 +13915,13 @@
   }
   // Rapprochement ligne de commande → article de la bibliothèque :
   // 1) code article EBP (ItemId), 2) réf. fournisseur de la fiche article, 3) désignation exacte.
+  // V36 : une ligne à code GÉNÉRIQUE n'est jamais rattachée au stock (ni proposition
+  // Dispo. stock, ni entrée en stock à la réception, ni rapprochement par désignation).
+  function ligneCodeGenerique(l) {
+    return ['Code article', 'Reference fournisseur', 'Reference', 'Ref'].some(k => estCodeGenerique(String(l[k] || '').trim()));
+  }
   function trouverArticlePourLigne(l) {
+    if (ligneCodeGenerique(l)) return null;
     const code = normRef(codeArticleLigne(l));
     const desc = normTexte(l['Description'] || '');
     if (code) {
@@ -13920,7 +13929,7 @@
              || _articlesCache.find(a => normRef(a['Reference fournisseur']) === code);
       if (a) return a;
     }
-    if (desc) { const a = _articlesCache.find(a => normTexte(a['Designation']) === desc); if (a) return a; }
+    if (desc) { const a = _articlesCache.find(a => normTexte(a['Designation']) === desc && !estCodeGenerique(a['Code EBP'])); if (a) return a; }
     return null;
   }
 
@@ -15017,6 +15026,12 @@
         ${a && estMateriel(a) ? `<button onclick="ouvrirKit(${a.id})" style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:3px 10px;font-size:11px;font-weight:800;cursor:pointer">🧰 Sortie / retour</button>` : ''}
         ${code && !estOuvrage && estProfilPrix() ? `<button onclick="basculerCodeGenerique('${esc(code)}')" style="background:#fff;border:1px solid #e0d6c4;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#8a7a5c;cursor:pointer">${estCodeGenerique(code) ? '↩️ Retirer des génériques' : '🏷️ Marquer générique'}</button>` : ''}
       </div>`;
+    if (a && code && estCodeGenerique(code) && Math.abs(_stockParArticle[a.id] || 0) > 0.0005) {
+      html += `<div style="background:#fff3e0;border:1px solid #f0c48a;border-radius:10px;padding:8px 10px;margin:8px 0;font-size:12px;color:#a2560f">
+        ⚠️ Code générique : cet article ne devrait pas avoir de stock (stock actuel : <b>${fmtQte(_stockParArticle[a.id])}</b>, reliquat d'entrées antérieures au marquage).
+        ${peutGererStock() ? `<button onclick="ouvrirMouvementStock(${a.id},'Inventaire');setTimeout(()=>{const q=document.getElementById('mvt-stock-qte');if(q)q.value='0';},50)" style="display:block;margin-top:6px;background:#a2560f;color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📋 Remettre le stock à 0 (inventaire)</button>` : ''}
+      </div>`;
+    }
 
     // Informations EBP
     html += titreSection('Informations EBP');
@@ -16714,7 +16729,7 @@
     const vus = new Set(), trouves = [];
     (_commandesLignesCache[r.id] || []).forEach(l => {
       const codeL = l['Reference'] || l['Ref'] || l['Code article'] || '';
-      const a = estCodeGenerique(codeL) ? trouverArticlePourLigne(l) : trouverArticleParCode(codeL);
+      const a = (estCodeGenerique(codeL) || ligneCodeGenerique(l)) ? null : trouverArticleParCode(codeL);
       if (a && !vus.has(a.id) && !estKit(a)) { vus.add(a.id); trouves.push({ a, l }); }
     });
     if (!zone()) return;
@@ -18660,6 +18675,7 @@
       const qteCmd = parseFloat(l['Quantite']);
       if (isNaN(qteCmd) || qteCmd <= 0) return;
       if (estLigneFrais(l)) return;
+      if (ligneCodeGenerique(l)) return; // V36 : article « divers » → jamais d'entrée en stock
       // Déjà reçu avant cet arrivage
       let avant = 0;
       if (dejaPartielle) avant = l['Non réceptionné'] ? (lireQteRecue(l) || 0) : qteCmd;
@@ -23454,11 +23470,11 @@
     if (dateDebut) urlSaisiesRenta += '&filter__Date__date_after_or_equal=' + dateDebut;
     if (dateFin) urlSaisiesRenta += '&filter__Date__date_before_or_equal=' + dateFin;
     const pSaisiesRenta = enAttente(fetchToutesLesPages(urlSaisiesRenta));
-    const pCmdRenta = enAttente(fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200'));
+    const pCmdRenta = enAttente(fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_FOURNISSEURS + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES));
     // Tables réservées aux comptes qui voient les prix : lancées dès que le droit est connu
     const siPrix = f => pPrixRenta.then(r => (r.v ? enAttente(f()) : { v: null }));
-    const pCmdClientsRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200'));
-    const pChantiersRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200'));
+    const pCmdClientsRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COMMANDES_CLIENTS + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES));
+    const pChantiersRenta = siPrix(() => fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES));
     const pStockRenta = siPrix(() => stockTablesConfigurees() ? Promise.all([
       fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/?user_field_names=true&size=200`),
       fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/?user_field_names=true&size=200`)
