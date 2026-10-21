@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V36';
+  const APP_VERSION = 'V37';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -21172,7 +21172,7 @@
   const TABLE_CONGES_ADMIN = '1022869';
 
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -21182,7 +21182,7 @@
   async function loadGestion() {
     // Masquer certains onglets pour les Gestionnaires (Export reste accessible)
     const isGestionnaire = connectedDroit === 'Gestionnaire';
-    ['tab-g-utilisateurs', 'tab-g-conges', 'tab-g-planning-admin'].forEach(id => {
+    ['tab-g-utilisateurs', 'tab-g-conges', 'tab-g-conges-groupe', 'tab-g-planning-admin'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = isGestionnaire ? 'none' : '';
     });
@@ -21806,6 +21806,124 @@
       if (!res.ok) throw new Error(await res.text());
       await loadCongesAdmin();
     } catch(e) { alert('Erreur lors de la mise à jour du statut : ' + e.message); }
+  }
+
+
+  // ── V37 : saisie groupée de congés / RTT (Gestion › 👥 Saisie groupée) ──
+  let _cgCollabs = [], _cgSel = new Set(), _cgUnite = 'jour';
+  async function chargerCongesGroupe() {
+    const el = document.getElementById('cg-collabs');
+    try {
+      let liste = (COLLABORATEURS_ADMIN || []).map(c => ({ id: c.collabId, nom: c.nom, poste: c.poste || '' }));
+      if (!liste.length) {
+        const rows = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200');
+        liste = rows.filter(r => r['Actif'] !== false).map(r => ({ id: r.id, nom: r['Nom Complet'] || ('#' + r.id), poste: r['Poste / Métier'] || '' }));
+      }
+      _cgCollabs = liste.filter(c => c.nom).sort((a, b) => a.nom.localeCompare(b.nom, 'fr'));
+      const sel = document.getElementById('cg-poste');
+      const postes = [...new Set(_cgCollabs.map(c => c.poste).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+      sel.innerHTML = '<option value="">Tous les postes</option>' + postes.map(p => `<option value="${echapperHtmlNote(p)}">${echapperHtmlNote(p)}</option>`).join('');
+      renderCollabsCongesGroupe();
+    } catch (e) {
+      el.innerHTML = '<div style="color:#c0392b;font-size:12px">Erreur de chargement des collaborateurs : ' + echapperHtmlNote(e.message) + '</div>';
+    }
+  }
+  function collabsVisiblesCongesGroupe() {
+    const q = normTexte(document.getElementById('cg-filtre')?.value || '');
+    const poste = document.getElementById('cg-poste')?.value || '';
+    return _cgCollabs.filter(c => (!poste || c.poste === poste) && (!q || normTexte(c.nom + ' ' + c.poste).includes(q)));
+  }
+  function renderCollabsCongesGroupe() {
+    const el = document.getElementById('cg-collabs');
+    if (!el) return;
+    const esc = echapperHtmlNote;
+    const liste = collabsVisiblesCongesGroupe();
+    el.innerHTML = liste.length ? liste.map(c => `<label style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #f3f3f3;cursor:pointer;${_cgSel.has(c.id) ? 'background:#eef5ec;' : ''}">
+        <input type="checkbox" ${_cgSel.has(c.id) ? 'checked' : ''} onchange="cocherCongesGroupe(${c.id}, this.checked)" style="width:18px;height:18px;accent-color:var(--vert)">
+        <span style="flex:1;font-size:13px;font-weight:600;color:var(--gris)">${esc(c.nom)}</span>
+        <span style="font-size:11px;color:var(--gris-moyen)">${esc(c.poste)}</span></label>`).join('')
+      : '<div class="feuille-empty">Aucun collaborateur.</div>';
+    majResumeCongesGroupe();
+  }
+  function cocherCongesGroupe(id, oui) { if (oui) _cgSel.add(id); else _cgSel.delete(id); renderCollabsCongesGroupe(); }
+  function toutCocherCongesGroupe(oui) {
+    collabsVisiblesCongesGroupe().forEach(c => { if (oui) _cgSel.add(c.id); else _cgSel.delete(c.id); });
+    renderCollabsCongesGroupe();
+  }
+  function uniteCongesGroupe(u) {
+    _cgUnite = u;
+    document.getElementById('cg-unite-jour').classList.toggle('active', u === 'jour');
+    document.getElementById('cg-unite-heure').classList.toggle('active', u === 'heure');
+    document.getElementById('cg-bloc-fin').style.display = u === 'jour' ? '' : 'none';
+    document.getElementById('cg-bloc-heures').style.display = u === 'heure' ? '' : 'none';
+    majResumeCongesGroupe();
+  }
+  function joursOuvresEntre(d1, d2) {
+    let n = 0; const d = new Date(d1 + 'T12:00:00'), f = new Date(d2 + 'T12:00:00');
+    while (d <= f) { const j = d.getDay(); if (j !== 0 && j !== 6) n++; d.setDate(d.getDate() + 1); }
+    return n;
+  }
+  function majResumeCongesGroupe() {
+    const n = _cgSel.size;
+    const nb = document.getElementById('cg-nb-sel'); if (nb) nb.textContent = n ? `(${n} coché${n > 1 ? 's' : ''})` : '';
+    const r = document.getElementById('cg-resume'); if (!r) return;
+    const debut = document.getElementById('cg-debut').value, fin = _cgUnite === 'jour' ? document.getElementById('cg-fin').value : debut;
+    if (!debut || !fin || !n) { r.innerHTML = ''; return; }
+    const duree = _cgUnite === 'heure' ? `${document.getElementById('cg-heures').value || '?'} h le ${dateCourteFr(debut)}`
+      : `du ${dateCourteFr(debut)} au ${dateCourteFr(fin)} (${joursOuvresEntre(debut, fin)} jour(s) ouvré(s), hors jours fériés)`;
+    r.innerHTML = `➡️ <b>${n} demande(s)</b> « ${echapperHtmlNote(document.getElementById('cg-type').value)} » ${duree}.`;
+  }
+  async function enregistrerCongesGroupe() {
+    const ids = [..._cgSel];
+    const type = document.getElementById('cg-type').value;
+    const statut = document.getElementById('cg-statut').value;
+    const debut = document.getElementById('cg-debut').value;
+    const fin = _cgUnite === 'jour' ? document.getElementById('cg-fin').value : debut;
+    const heures = parseFloat(document.getElementById('cg-heures').value) || 0;
+    const notes = document.getElementById('cg-notes').value.trim();
+    if (!ids.length) { alert('⚠️ Cochez au moins un collaborateur.'); return; }
+    if (!debut || !fin) { alert('⚠️ Indiquez les dates.'); return; }
+    if (fin < debut) { alert('⚠️ La date de fin doit être après la date de début.'); return; }
+    if (_cgUnite === 'heure' && heures <= 0) { alert('⚠️ Indiquez un nombre d\'heures.'); return; }
+    const btn = document.getElementById('cg-btn');
+    btn.disabled = true; btn.textContent = '⏳ Vérification…';
+    try {
+      // Absences déjà posées qui chevauchent la période → proposées à l'exclusion (pas de doublon)
+      const existants = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/?user_field_names=true&size=200');
+      const nom = id => (_cgCollabs.find(c => c.id === id) || {}).nom || ('#' + id);
+      const deja = new Map();
+      existants.forEach(r => {
+        const st = r['Statut']?.value || r['Statut'] || '';
+        if (st === 'Refusé') return;
+        const d = String(r['Date de début'] || '').slice(0, 10), f = String(r['Date de fin journée (inclus)'] || d).slice(0, 10);
+        if (!d || d > fin || f < debut) return;
+        (r['Collaborateurs'] || []).forEach(c => { if (ids.includes(c.id) && !deja.has(c.id)) deja.set(c.id, `${r['Type de demande']?.value || r['Type de demande'] || 'Absence'} du ${dateCourteFr(d)} au ${dateCourteFr(f)}`); });
+      });
+      let cibles = ids;
+      if (deja.size) {
+        const liste = [...deja].map(([id, lib]) => `• ${nom(id)} : ${lib}`).join('\n');
+        const exclure = confirm(`⚠️ ${deja.size} collaborateur(s) ont déjà une absence sur cette période :\n\n${liste}\n\nOK = les EXCLURE de la saisie groupée (recommandé)\nAnnuler = créer quand même pour tous`);
+        if (exclure) cibles = ids.filter(id => !deja.has(id));
+      }
+      if (!cibles.length) { alert('Aucune demande à créer.'); return; }
+      if (!confirm(`Créer ${cibles.length} demande(s) « ${type} » (${statut}) ?`)) return;
+      btn.textContent = '⏳ Enregistrement…';
+      const items = cibles.map(id => ({
+        Collaborateurs: [id], 'Type de demande': type, 'Date de début': debut, 'Date de fin journée (inclus)': fin,
+        ...(_cgUnite === 'heure' ? { "Nombre d'heures": heures } : {}), 'Statut': statut, 'Notes': notes
+      }));
+      let crees = 0;
+      for (let i = 0; i < items.length; i += 100) {
+        const r = await fetch('https://api.baserow.io/api/database/rows/table/' + TABLE_CONGES_ADMIN + '/batch/?user_field_names=true',
+          { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: items.slice(i, i + 100) }) });
+        if (!r.ok) throw new Error(`${crees} demande(s) créée(s), puis refus du serveur (${r.status}) : ` + (await r.text()).slice(0, 200));
+        crees += ((await r.json()).items || []).length;
+      }
+      alert(`✅ ${crees} demande(s) créée(s).`);
+      _cgSel = new Set(); renderCollabsCongesGroupe();
+      try { congesAdminListCache = []; } catch (e) {}
+    } catch (e) { alert('❌ ' + e.message); }
+    finally { btn.disabled = false; btn.textContent = '💾 Enregistrer pour les collaborateurs cochés'; }
   }
 
   const VUE_FEUILLE_HEURES = '1990719';
@@ -24114,12 +24232,13 @@
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','planning-admin','rentabilite','export','tv'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
     });
     if (tab === 'conges-admin') loadCongesAdmin();
+    if (tab === 'conges-groupe') chargerCongesGroupe();
     if (tab === 'utilisateurs') loadUtilisateurs();
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
@@ -24297,6 +24416,7 @@
     <button class="tab-btn active" id="tab-g-utilisateurs" onclick="switchGestionTab('utilisateurs')" style="font-size:11px">👤 Users</button>
     <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
     <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
+    <button class="tab-btn" id="tab-g-conges-groupe" onclick="switchGestionTab('conges-groupe')" style="font-size:11px">👥 Saisie groupée</button>
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
     <button class="tab-btn" id="tab-g-rentabilite" onclick="switchGestionTab('rentabilite')" style="font-size:11px">💶 Renta</button>
     <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
@@ -24337,6 +24457,54 @@
     </div>
   </div>
     <div id="liste-chantiers-gestion"><div class="feuille-loading">⏳ Chargement…</div></div>
+  </div>
+
+  <!-- V37 : SAISIE GROUPÉE CONGÉS / RTT (fermeture entreprise…) -->
+  <div id="gestion-conges-groupe" style="display:none">
+    <div style="margin:0 16px 12px">
+      <div style="font-size:13px;font-weight:700;color:var(--gris);margin-bottom:4px">👥 Saisie groupée de congés / RTT</div>
+      <div style="font-size:12px;color:var(--gris-moyen)">Une même absence pour plusieurs collaborateurs à la fois : fermeture d'entreprise, pont, RTT imposée…</div>
+    </div>
+    <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;padding:14px;margin:0 16px 12px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:160px"><label>Type</label>
+          <select id="cg-type" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none">
+            <option value="Congés payés">🏖️ Congés payés</option><option value="RTT">📅 RTT</option><option value="Formation">🎓 Formation</option>
+            <option value="Sans solde">📋 Sans solde</option><option value="Autre">📌 Autre</option>
+          </select></div>
+        <div class="field" style="flex:1;min-width:140px"><label>Statut</label>
+          <select id="cg-statut" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none"><option value="Approuvé">✅ Approuvé</option><option value="En attente">⏳ En attente</option></select></div>
+      </div>
+      <div class="field"><label>Unité</label>
+        <div class="tabs" style="margin:0">
+          <button type="button" class="tab-btn active" id="cg-unite-jour" onclick="uniteCongesGroupe('jour')">📅 Jour(s)</button>
+          <button type="button" class="tab-btn" id="cg-unite-heure" onclick="uniteCongesGroupe('heure')">⏱️ Heures (1 jour)</button>
+        </div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div class="field" style="flex:1;min-width:140px"><label>Date de début</label><input type="date" id="cg-debut" onchange="majResumeCongesGroupe()" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none"></div>
+        <div class="field" id="cg-bloc-fin" style="flex:1;min-width:140px"><label>Date de fin (incluse)</label><input type="date" id="cg-fin" onchange="majResumeCongesGroupe()" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none"></div>
+        <div class="field" id="cg-bloc-heures" style="flex:1;min-width:120px;display:none"><label>Nombre d'heures</label><input type="number" id="cg-heures" min="0.5" step="0.5" oninput="majResumeCongesGroupe()" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none"></div>
+      </div>
+      <div class="field"><label>Motif / notes</label><input type="text" id="cg-notes" placeholder="Ex. : Fermeture entreprise — fin d'année" style="width:100%;box-sizing:border-box;background:var(--beige-clair);border:1.5px solid #ddd5c5;border-radius:10px;padding:10px 12px;font-size:14px;color:var(--gris);outline:none"></div>
+    </div>
+    <div style="background:#fff;border-radius:14px;border:1.5px solid #ddd5c5;padding:14px;margin:0 16px 12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:800;color:var(--gris)">Collaborateurs <span id="cg-nb-sel" style="color:var(--vert)"></span></div>
+        <div style="display:flex;gap:6px">
+          <button onclick="toutCocherCongesGroupe(true)" style="background:var(--vert-clair);color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">☑ Tous</button>
+          <button onclick="toutCocherCongesGroupe(false)" style="background:var(--beige-clair);color:var(--gris);border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">☐ Aucun</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <input type="text" id="cg-filtre" placeholder="🔍 Rechercher…" oninput="renderCollabsCongesGroupe()" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+        <select id="cg-poste" onchange="renderCollabsCongesGroupe()" style="padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:13px"><option value="">Tous les postes</option></select>
+      </div>
+      <div id="cg-collabs" style="max-height:340px;overflow-y:auto"><div class="feuille-loading">⏳ Chargement…</div></div>
+    </div>
+    <div id="cg-resume" style="margin:0 16px 10px;font-size:12px;color:var(--gris)"></div>
+    <div style="margin:0 16px 30px">
+      <button id="cg-btn" onclick="enregistrerCongesGroupe()" style="width:100%;background:linear-gradient(135deg,var(--vert),#3a6331);color:#fff;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer">💾 Enregistrer pour les collaborateurs cochés</button>
+    </div>
   </div>
 
   <!-- CONGÉS ADMIN -->
