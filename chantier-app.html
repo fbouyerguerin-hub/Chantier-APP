@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V65';
+  const APP_VERSION = 'V67';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22560,16 +22560,16 @@
       if (fait && !reel && x.etat === 'auto' && x.ech) contenu += losange(x.ech, coul, 'Validé par l\'appli');
       const lib = `${fait ? (x.etat === 'na' ? '⊘' : '✅') : x.etat === 'bloque' ? '⛔' : dispo ? '▶' : '○'} ${x.m.fab ? (_jalonGanttSel === x.m.id ? '▾ ' : '▸ ') + (({ pose: '🏗 ', etude: '📐 ' })[x.m.kind] || '🏭 ') + esc(x.m.nom.replace(/^(Fabrication|Pose|Étude) · /, '')) : esc(x.m.id) + ' ' + esc(x.m.nom)}`;
       const rapide = !fait && (dispo || x.etat === 'bloque') && (o.admin || estMoi(x.personnes)) && x.etat !== 'bloque'
-        ? ` <span onclick="event.stopPropagation();actionJalon('${x.m.id}','ok')" title="Valider" style="float:right;cursor:pointer;background:#e8f3e5;border:1px solid #4a7c3f;border-radius:5px;padding:0 5px;font-size:10px;color:#2f5d27;font-weight:800">✓ valider</span>` : '';
+        ? ` <span onclick="event.stopPropagation();actionJalon('${x.m.id}','ok')" title="Cliquer pour valider ce jalon" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.45" style="float:right;cursor:pointer;opacity:.45;background:transparent;border:1px dashed #a5761f;border-radius:5px;padding:0 6px;font-size:10px;color:#a5761f;font-weight:700">☐ à valider</span>` : '';
       html += ligne(lib + rapide, contenu, { click: `_jalonGanttSel=_jalonGanttSel==='${x.m.id}'?null:'${x.m.id}';renderJalonsChantier()`, sel: _jalonGanttSel === x.m.id, couleur: fait ? '#999' : 'var(--gris)', titre: x.m.nom + (x.personnes?.length ? ' · ' + x.personnes.join(', ') : '') });
       if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? esc(x.m.txt || x.m.nom) : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
-        ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : !(dispo || x.etat === 'bloque') ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>' : o.btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
+        ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : !(dispo || x.etat === 'bloque') ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>' : o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
         ${htmlNotesJalon(c, x.m.id)}
         ${o.admin && x.m.fab ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px"><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici</a><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
       if (x.m.fab && _fabToutes && nFab === totalFab && totalFab > NB_PHASES_VISIBLES) html += `<div onclick="_fabToutes=false;renderJalonsChantier()" style="padding:6px 8px;font-size:11px;font-weight:700;color:#8b6340;cursor:pointer;border-top:1px solid #f1ece3;background:#fdf8f0">▾ Masquer les phases supplémentaires</div>`;
     });
-    html += `</div><div style="font-size:10px;color:#999;margin-top:6px">◆ plein = échéance · ◆ vert = date de validation · trait rouge = retard · ligne pointillée = aujourd'hui. ✓ valider = validation en un clic · touchez une ligne pour le détail, le blocage, « sans objet » et les notes.</div>`;
+    html += `</div><div style="font-size:10px;color:#999;margin-top:6px">◆ plein = échéance · ◆ vert = date de validation · trait rouge = retard · ligne pointillée = aujourd'hui. ☐ à valider = cliquer pour valider en un clic · touchez une ligne pour le détail, le blocage, « sans objet » et les notes.</div>`;
 
     // détail du jalon sélectionné
     const idxSel = et.findIndex(x => x.m.id === _jalonGanttSel);
@@ -22578,7 +22578,7 @@
       const peutCe = o.admin || estMoi(x.personnes);
       const actions = fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '')
         : !dispo ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>'
-        : peutCe ? o.btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`) : '';
+        : peutCe ? o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`) : '';
       html += `<div style="background:#fff;border:1.5px solid #e0a33a;border-radius:10px;padding:10px 12px;margin-top:10px">
         <div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:13px;font-weight:700;color:var(--gris)">${x.m.fab ? '🏭 ' + esc(x.m.txt || x.m.nom) : o.titre(x)}</div>
           <div style="font-size:11px;color:#a5761f;text-align:right">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}</div></div>
