@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V69';
+  const APP_VERSION = 'V70';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22015,7 +22015,7 @@
     catch (e) { return { j: {}, resp: {}, fab: c?._fab || [] }; }
   }
   // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
-  let _jalonsCmd = new Map(), _jalonsCmdClients = new Map(), _jalonsCmdClientsListe = [], _jalonsCmdDate = 0, _jalonsPlan = new Map(), _jalonsCollabs = [];
+  let _jalonsCmd = new Map(), _jalonsCmdClients = new Map(), _jalonsCmdClientsListe = [], _jalonsCmdDate = 0, _jalonsPlan = new Map(), _jalonsCollabs = [], _jalonsCollabsActifs = null;
   async function chargerCommandesJalons(force) {
     if (!force && _jalonsCmdDate && Date.now() - _jalonsCmdDate < 120000) return;
     const rows = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`);
@@ -22034,12 +22034,17 @@
     } catch (e) { /* table non accessible pour ce profil : J3 reste manuel */ }
     // V46 : plan de charge (échéances) + collaborateurs (capacité, titulaires des rôles)
     try {
-      const [pc, cl] = await Promise.all([
+      const [pc, cl, us] = await Promise.all([
         fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_PLAN_CHARGE}/?user_field_names=true&size=200`),
-        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/?user_field_names=true&size=200`)
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/?user_field_names=true&size=200`),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`).catch(() => [])
       ]);
       _jalonsPlan = new Map(); pc.forEach(r => { const id = (r['Chantier'] || [])[0]?.id; if (id && r['Date livraison']) _jalonsPlan.set(id, r); });
       _jalonsCollabs = cl;
+      // V70 : capacité calculée sur les collaborateurs ACTIFS, exactement comme le plan de charge
+      // (avant : inactifs comptés → durées de pose/fabrication plus courtes que dans le plan de charge)
+      try { const inact = getInactifsCollabIds(us || [], cl); _jalonsCollabsActifs = cl.filter(c => !inact.has(String(c.id))); }
+      catch (e) { _jalonsCollabsActifs = cl; }
     } catch (e) {}
     _jalonsCmdDate = Date.now();
   }
@@ -22137,7 +22142,7 @@
   function echeancesChantier(c, d) {
     const pc = _jalonsPlan.get(c.id);
     if (!pc || typeof calculerPeriodesAffaire !== 'function') return null;
-    let P = null; try { P = calculerPeriodesAffaire(pc, _jalonsCollabs || []); } catch (e) {}
+    let P = null; try { P = calculerPeriodesAffaire(pc, _jalonsCollabsActifs || _jalonsCollabs || []); } catch (e) {}
     if (!P) return null;
     const appro = Number(d.appro ?? APPRO_SEMAINES_DEFAUT), reserves = Number(d.reserves ?? RESERVES_SEMAINES_DEFAUT);
     const fabs = [P['Fab Acier'], P['Fab Bois']].filter(f => f && f.jours > 0);
