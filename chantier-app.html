@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V43';
+  const APP_VERSION = 'V45';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -21998,7 +21998,7 @@
     { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires" },
     { id: 'J10', phase: 'Production', nom: 'Commandes passées, AR validés', resp: 'Resp. production', auto: 'ar' },
     { id: 'J11', phase: 'Production', nom: 'Matière réceptionnée', resp: 'Atelier', auto: 'recu' },
-    { id: 'J12', phase: 'Production', nom: 'Fabrication terminée', resp: 'Resp. atelier' },
+    { id: 'J12', phase: 'Production', nom: 'Fabrication terminée', resp: 'Resp. atelier', auto: 'fab' },
     { id: 'J13', phase: 'Production', nom: 'Chantier chargé', resp: 'Atelier + poseurs', auto: 'parti' },
     { id: 'J14', phase: 'Chantier',   nom: 'Pose terminée, PV signé', resp: "Chef d'équipe pose" },
     { id: 'J15', phase: 'Chantier',   nom: 'Réserves levées, dossier clos', resp: "Chargé d'affaires" }
@@ -22007,8 +22007,8 @@
     if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
   }
   function lireJalons(c) {
-    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {} }; }
-    catch (e) { return { j: {}, resp: {} }; }
+    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [] }; }
+    catch (e) { return { j: {}, resp: {}, fab: c?._fab || [] }; }
   }
   // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
   let _jalonsCmd = new Map(), _jalonsCmdClients = new Map(), _jalonsCmdDate = 0;
@@ -22046,14 +22046,50 @@
     return null;
   }
   // État calculé de chaque jalon : 'ok' | 'auto' | 'na' | 'bloque' | 'afaire'
+  // V44 : les chapitres (lignes de titre) des commandes clients EBP deviennent des jalons
+  // « Fabrication · <chapitre> », insérés avant J12 ; J12 se valide seul quand ils sont tous franchis.
   function etatsJalons(c) {
     const d = lireJalons(c);
-    return JALONS_MODELE.map(m => {
+    const fabs = (d.fab || []).map(f => ({ id: 'F-' + f.k, phase: 'Production', nom: 'Fabrication · ' + f.nom, resp: 'Resp. atelier', fab: true }));
+    const modele = [];
+    JALONS_MODELE.forEach(m => { if (m.id === 'J12') modele.push(...fabs); modele.push(m); });
+    const res = [];
+    modele.forEach(m => {
       const e = d.j[m.id] || {};
       let etat = e.st || 'afaire', info = '';
-      if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto); if (a) { etat = 'auto'; info = a; } }
-      return { m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp };
+      if (etat === 'afaire' && m.auto === 'fab') {
+        const lf = res.filter(x => x.m.fab);
+        if (lf.length && lf.every(x => x.etat === 'ok' || x.etat === 'na')) { etat = 'auto'; info = `les ${lf.length} phase(s) de fabrication sont validées`; }
+      } else if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto); if (a) { etat = 'auto'; info = a; } }
+      res.push({ m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp });
     });
+    return res;
+  }
+  // Lignes de titre des commandes clients du chantier → phases de fabrication (mémorisées dans « Jalons »)
+  function estLigneTitreCommande(l) {
+    const desc = String(l['Description'] || '').trim();
+    const vide = v => v === undefined || v === null || v === '' || Number(String(v).replace(',', '.')) === 0;
+    return desc && !desc.includes('\n') && !String(l['Reference'] || '').trim() && vide(l['Quantite']) && vide(l['Montant HT'])
+      && !/^(sous[- ]?total|total|tva|remise|acompte|net a payer|conditions?|options?\b|variante)/i.test(normTexte(desc));
+  }
+  async function synchroniserPhasesFab(c) {
+    const cmds = _jalonsCmdClients.get(c.id) || [];
+    if (!cmds.length) return;
+    const titres = [], vus = new Set();
+    for (const r of cmds) {
+      let lignes = [];
+      try { lignes = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${r.id}`); } catch (e) { continue; }
+      lignes.sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0)).filter(estLigneTitreCommande).forEach(l => {
+        const nom = String(l['Description']).trim().replace(/\s+/g, ' ').slice(0, 80);
+        const k = normTexte(nom).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+        if (k && !vus.has(k)) { vus.add(k); titres.push({ k, nom }); }
+      });
+    }
+    const avant = JSON.stringify(lireJalons(c).fab || []);
+    if (JSON.stringify(titres) === avant || !titres.length) return;
+    c._fab = titres;
+    if (_champJalonsDisponible === false) return;
+    try { await ecrireJalons(d => { d.fab = titres; }); } catch (e) {}
   }
   const JALON_FAIT = x => x.etat === 'ok' || x.etat === 'auto' || x.etat === 'na';
   const JALON_STYLE = {
@@ -22095,6 +22131,9 @@
     m.style.display = 'flex';
     try { await chargerCommandesJalons(); } catch (e) {}
     renderJalonsChantier();
+    // V44 : phases de fabrication relues dans la commande client (affichage mis à jour ensuite)
+    const c = chantierJalons();
+    if (c) { try { await synchroniserPhasesFab(c); renderJalonsChantier(); } catch (e) {} }
   }
   function fermerJalons() {
     const m = document.getElementById('modal-jalons'); if (m) m.style.display = 'none';
@@ -22102,37 +22141,66 @@
     try { renderTableauJalons(); } catch (e) {}
   }
   function chantierJalons() { return (chantiersGestionCache || []).find(c => c.id === _jalonsChantierId); }
+  // V45 : on ne montre que les jalons EN COURS (disponibles). Les jalons franchis sont repliés
+  // (cliquer pour les voir) ; ceux qui ne sont pas encore accessibles apparaissent grisés, sans action.
+  let _jalonsVoirFaits = false;
+  function jalonDisponible(et, idx) {
+    return et.slice(0, idx).filter(y => !y.m.fab).every(JALON_FAIT);
+  }
   function renderJalonsChantier() {
     const m = document.getElementById('modal-jalons');
     const c = chantierJalons();
     if (!m || !c) return;
     const esc = echapperHtmlNote;
-    const { et, faits, prochain } = resumeJalons(c);
+    const { et, faits } = resumeJalons(c);
     const peut = peutValiderJalons();
-    let phase = '', html = '';
-    et.forEach((x, i) => {
-      if (x.m.phase !== phase) { phase = x.m.phase; html += `<div style="font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">${esc(phase)}</div>`; }
-      const cle = x === prochain && x.etat === 'afaire' ? 'encours' : x.etat;
-      const st = JALON_STYLE[cle];
-      const e = x.e;
-      const detail = x.etat === 'auto' ? `🤖 Validé par l'appli : ${esc(x.info)}`
-        : x.etat === 'ok' ? `Validé${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''}${e.com ? ' — ' + esc(e.com) : ''}`
-        : x.etat === 'na' ? `Sans objet${e.par ? ' (' + esc(e.par) + (e.le ? ', ' + esc(e.le) : '') + ')' : ''}${e.com ? ' — ' + esc(e.com) : ''}`
-        : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''} : ${esc(e.com || '')}</b>`
-        : cle === 'encours' ? '<b style="color:#a5761f">▶ Étape en cours</b>' : '';
-      const btn = (lib, fn, coul) => `<button onclick="${fn}" style="background:#fff;border:1px solid ${coul || '#ddd'};color:${coul || 'var(--gris)'};border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer">${lib}</button>`;
-      const actions = !peut ? '' : (x.etat === 'afaire' || x.etat === 'bloque')
-        ? btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + (x.m.cond || x.etat === 'afaire' ? btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`) : '')
-        : x.etat === 'auto' ? '' : btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`);
-      html += `<div style="background:${st.fond};border:1.5px solid ${st.bord};border-radius:10px;padding:9px 11px;margin-bottom:6px">
+    const btn = (lib, fn, coul) => `<button onclick="${fn}" style="background:#fff;border:1px solid ${coul || '#ddd'};color:${coul || 'var(--gris)'};border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer">${lib}</button>`;
+    const titre = x => `${x.m.fab ? '🏭' : esc(x.m.id) + ' ·'} ${esc(x.m.nom)}${x.m.fab ? ' <span style="font-size:10px;color:#999;font-weight:600">(chapitre de la commande)</span>' : ''}${x.m.cond ? ' <span style="font-size:10px;color:#999;font-weight:600">(conditionnel)</span>' : ''}`;
+    const detailFait = x => { const e = x.e; return x.etat === 'auto' ? `🤖 Validé par l'appli : ${esc(x.info)}`
+      : x.etat === 'ok' ? `Validé${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''}${e.com ? ' — ' + esc(e.com) : ''}`
+      : `Sans objet${e.par ? ' (' + esc(e.par) + (e.le ? ', ' + esc(e.le) : '') + ')' : ''}${e.com ? ' — ' + esc(e.com) : ''}`; };
+
+    const franchis = [], enCours = [], aVenir = [];
+    et.forEach((x, idx) => {
+      if (JALON_FAIT(x)) franchis.push(x);
+      else if (x.etat === 'bloque' || jalonDisponible(et, idx)) enCours.push(x);
+      else aVenir.push(x);
+    });
+
+    // Jalons franchis : repliés
+    let html = '';
+    if (franchis.length) {
+      html += `<div onclick="_jalonsVoirFaits=!_jalonsVoirFaits;renderJalonsChantier()" style="cursor:pointer;margin:12px 0 6px;font-size:12px;font-weight:800;color:var(--vert)">${_jalonsVoirFaits ? '▾' : '▸'} ✔ ${franchis.length} jalon(s) franchi(s)${_jalonsVoirFaits ? '' : ' — afficher'}</div>`;
+      if (_jalonsVoirFaits) html += franchis.map(x => { const st = JALON_STYLE[x.etat]; return `<div style="background:${st.fond};border:1px solid ${st.bord};border-radius:8px;padding:6px 10px;margin-bottom:4px;opacity:.85">
+          <div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:12px;font-weight:700;color:var(--gris)">${st.ic} ${titre(x)}</div>
+          ${peut && x.etat !== 'auto' ? `<a href="#" onclick="event.preventDefault();actionJalon('${x.m.id}','annuler')" style="font-size:11px;color:#999;white-space:nowrap">↺ annuler</a>` : ''}</div>
+          <div style="font-size:11px;color:#555;margin-top:2px">${detailFait(x)}</div></div>`; }).join('');
+    }
+
+    // Jalons en cours : seuls jalons actionnables
+    html += `<div style="font-size:11px;font-weight:800;color:#a5761f;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">▶ En cours</div>`;
+    html += enCours.length ? enCours.map(x => {
+      const st = JALON_STYLE[x.etat === 'bloque' ? 'bloque' : 'encours'], e = x.e;
+      const detail = x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''} : ${esc(e.com || '')}</b>` : '';
+      const actions = !peut ? '' : btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`);
+      return `<div style="background:${st.fond};border:1.5px solid ${st.bord};border-radius:10px;padding:10px 12px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-          <div style="font-size:13px;font-weight:700;color:var(--gris)">${st.ic} ${esc(x.m.id)} · ${esc(x.m.nom)}${x.m.cond ? ' <span style="font-size:10px;color:#999;font-weight:600">(conditionnel)</span>' : ''}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--gris)">${st.ic} ${titre(x)}</div>
           <div style="font-size:11px;color:#a5761f;white-space:nowrap;text-align:right">👤 ${esc(x.resp)}${x.m.designer && peut ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}</div>
         </div>
-        ${detail ? `<div style="font-size:11px;color:#555;margin-top:3px">${detail}</div>` : ''}
-        ${actions ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${actions}</div>` : ''}
+        <div style="font-size:10px;color:#999;margin-top:2px">${esc(x.m.phase)}</div>
+        ${detail ? `<div style="font-size:11px;margin-top:3px">${detail}</div>` : ''}
+        ${actions ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${actions}</div>` : ''}
       </div>`;
-    });
+    }).join('') : '<div style="font-size:12px;color:var(--vert);font-weight:700;padding:6px 0">✔ Tous les jalons sont franchis.</div>';
+
+    // Jalons à venir : grisés, non disponibles
+    if (aVenir.length) {
+      html += `<div style="font-size:11px;font-weight:800;color:#aaa;text-transform:uppercase;letter-spacing:.5px;margin:16px 0 6px">🔒 À venir (${aVenir.length})</div>`;
+      html += aVenir.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 10px;margin-bottom:3px;border:1px dashed #ddd;border-radius:8px;color:#aaa;font-size:12px">
+          <span>${titre(x)}</span><span style="white-space:nowrap;font-size:11px">${esc(x.resp)}</span></div>`).join('');
+    }
+
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:640px;height:90vh;display:flex;flex-direction:column;overflow:hidden">
       <div style="padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;display:flex;justify-content:space-between;gap:10px;flex-shrink:0">
         <div><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 ${esc(c['Nom du chantier'] || '')}</div>
@@ -22141,6 +22209,7 @@
       </div>
       <div style="padding:4px 14px 20px;overflow-y:auto">${html}</div></div>`;
   }
+
   function peutValiderJalons() { return ['Administrateur', 'Gestionnaire'].includes(connectedDroit); }
   function alertChampJalonsManquant() {
     alert("Le suivi des jalons a besoin d'un champ dans Baserow :\n\nTable « Chantiers » → ajouter un champ de type « Texte long » nommé exactement : Jalons\n\nPuis rechargez l'appli.");
@@ -22166,16 +22235,12 @@
     const et = etatsJalons(c);
     const idx = et.findIndex(x => x.m.id === jid), x = et[idx];
     let com = '';
+    if (['ok', 'na', 'bloque'].includes(action) && x.etat !== 'bloque' && !jalonDisponible(et, idx)) {
+      alert('Ce jalon n\'est pas encore disponible : les étapes précédentes doivent d\'abord être franchies.'); return;
+    }
     if (action === 'ok') {
-      const manquants = et.slice(0, idx).filter(y => !JALON_FAIT(y));
-      if (manquants.length) {
-        com = prompt(`⚠️ Étape(s) précédente(s) non franchie(s) : ${manquants.map(y => y.m.id).join(', ')}.\n\nPour valider ${jid} quand même, indiquez le motif :`, '');
-        if (com === null) return;
-        if (!com.trim()) { alert('Motif obligatoire pour valider sans les étapes précédentes.'); return; }
-      } else {
-        com = prompt(`Valider ${jid} · ${x.m.nom}\n\nCommentaire (facultatif) :`, '');
-        if (com === null) return;
-      }
+      com = prompt(`Valider ${x.m.fab ? '' : jid + ' · '}${x.m.nom}\n\nCommentaire (facultatif) :`, '');
+      if (com === null) return;
     } else if (action === 'bloque') {
       com = prompt(`${jid} · ${x.m.nom} — qu'est-ce qui bloque ?`, x.e.st === 'bloque' ? (x.e.com || '') : '');
       if (com === null) return;
