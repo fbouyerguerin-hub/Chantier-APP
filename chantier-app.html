@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V63';
+  const APP_VERSION = 'V64';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -21998,7 +21998,7 @@
     { id: 'J5',  phase: 'Conception', nom: 'Avant-projet / PC validé client', resp: "Chargé d'affaires", cond: true, roles: ['CA'] },
     { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: 'À désigner', designer: true, cond: true, roles: [] },
     { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production', roles: ['CA', 'Resp. production'] },
-    { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", resp: 'Dessinatrice', roles: ['Dessinatrice'] },
+    { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", auto: 'etude', resp: 'Dessinatrice', roles: ['Dessinatrice'] },
     { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires", roles: ['CA'] },
     { id: 'J10', phase: 'Production', nom: 'Commandes passées, AR validés', resp: 'Resp. production', auto: 'ar', roles: ['Resp. production'] },
     { id: 'J11', phase: 'Production', nom: 'Matière réceptionnée', resp: 'Atelier', auto: 'recu', roles: ['Resp. atelier'] },
@@ -22110,20 +22110,22 @@
     const exclu = new Set(d.fabExclu || []);
     const fabs = (d.fab || []).filter(f => !exclu.has(f.k)).map(f => ({ id: 'F-' + f.k, phase: 'Production', nom: 'Fabrication · ' + f.nom, txt: f.txt || f.nom, resp: 'Resp. atelier', fab: true, kind: 'fab', roles: ['Resp. atelier'] }));
     const poses = (d.fab || []).filter(f => f.pose && !exclu.has(f.k) && !exclu.has('P:' + f.k)).map(f => ({ id: 'P-' + f.k, phase: 'Chantier', nom: 'Pose · ' + f.nom, txt: f.txt || f.nom, resp: "Chef d'équipe pose", fab: true, kind: 'pose', roles: ["Chef d'équipe pose"] }));
+    // V64 : chaque section a aussi sa phase d'ÉTUDE (plans), avant J8
+    const etudes = (d.fab || []).filter(f => !exclu.has(f.k) && !exclu.has('E:' + f.k)).map(f => ({ id: 'E-' + f.k, phase: 'Conception', nom: 'Étude · ' + f.nom, txt: f.txt || f.nom, resp: 'Dessinatrice', fab: true, kind: 'etude', roles: ['Dessinatrice'] }));
     const modele = [];
-    JALONS_MODELE.forEach(m => { if (m.id === 'J12') modele.push(...fabs); if (m.id === 'J14') modele.push(...poses); modele.push(m); });
+    JALONS_MODELE.forEach(m => { if (m.id === 'J8') modele.push(...etudes); if (m.id === 'J12') modele.push(...fabs); if (m.id === 'J14') modele.push(...poses); modele.push(m); });
     const res = [];
     modele.forEach(m => {
       const e = d.j[m.id] || {};
       let etat = e.st || 'afaire', info = '';
-      if (etat === 'afaire' && (m.auto === 'fab' || m.auto === 'pose')) {
+      if (etat === 'afaire' && (m.auto === 'fab' || m.auto === 'pose' || m.auto === 'etude')) {
         const lf = res.filter(x => x.m.kind === m.auto);
-        if (lf.length && lf.every(x => x.etat === 'ok' || x.etat === 'na')) { etat = 'auto'; info = `les ${lf.length} phase(s) de ${m.auto === 'fab' ? 'fabrication' : 'pose'} sont validées`; }
+        if (lf.length && lf.every(x => x.etat === 'ok' || x.etat === 'na')) { etat = 'auto'; info = `les ${lf.length} phase(s) ${({ fab: 'de fabrication', pose: 'de pose', etude: "d'étude" })[m.auto]} sont validées`; }
       } else if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto, c); if (a) { etat = 'auto'; info = a; } }
       res.push({ m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp });
     });
     const ech = echeancesChantier(c, d);
-    res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
+    res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
     return res;
   }
 
@@ -22398,14 +22400,14 @@
       const nbOk = phasesFab.filter(p => JALON_FAIT(p.x)).length;
       html += `<div style="background:#fff;border:1.5px solid #c9b48a;border-radius:12px;padding:10px 12px;margin:16px 0 4px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-          <div style="font-size:12px;font-weight:800;color:#8b6340;text-transform:uppercase;letter-spacing:.5px">🏭 Phases de fabrication et de pose${phasesFab.length ? ` · ${nbOk}/${phasesFab.length}` : ''}</div>
+          <div style="font-size:12px;font-weight:800;color:#8b6340;text-transform:uppercase;letter-spacing:.5px">🏭 Phases d'étude, de fabrication et de pose${phasesFab.length ? ` · ${nbOk}/${phasesFab.length}` : ''}</div>
           ${admin ? `<a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="font-size:11px;color:var(--vert);font-weight:700;white-space:nowrap">+ ajouter</a>` : ''}
         </div>`;
       if (!phasesFab.length) html += htmlDiagPhases(c);
       else html += phasesFab.filter((p, i) => _fabToutes || i < NB_PHASES_VISIBLES).map(({ x, dispo }) => {
         const fait = JALON_FAIT(x), st = JALON_STYLE[fait ? x.etat : x.etat === 'bloque' ? 'bloque' : dispo ? 'encours' : 'afaire'];
         const f = (lireJalons(c).fab || []).find(z => z.k === x.m.id.slice(2)) || {};
-        const nom = (x.m.kind === 'pose' ? '🏗 ' : '') + x.m.nom.replace(/^(Fabrication|Pose) · /, '');
+        const nom = (({ pose: '🏗 ', etude: '📐 ' })[x.m.kind] || '') + x.m.nom.replace(/^(Fabrication|Pose|Étude) · /, '');
         const peutCe = admin || estMoi(x.personnes);
         const actions = fait ? (admin ? `<a href="#" onclick="event.preventDefault();actionJalon('${x.m.id}','annuler')" style="font-size:11px;color:#999">↺</a>` : '')
           : peutCe ? btn('✅', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + btn('⊘', `actionJalon('${x.m.id}','na')`) : '';
@@ -22413,7 +22415,7 @@
           <span style="font-size:14px">${fait || dispo || x.etat === 'bloque' ? st.ic : '○'}</span>
           <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${f.txt && f.txt.length > nom.length ? `<details style="display:inline"><summary style="cursor:pointer">${esc(nom)}…</summary><div style="font-weight:400;color:#555;margin-top:3px;line-height:1.4">${esc(f.txt)}</div></details>` : esc(nom)}${f.manu ? ' <span style="font-size:10px;color:#aaa;font-weight:600">(manuelle)</span>' + (admin ? ` <a href="#" onclick="event.preventDefault();retirerPhaseFab('${f.k}')" style="color:#c0392b;font-size:10px">✕</a>` : '') : ''}</div>
             <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlNotesJalon(c, x.m.id)}</div>
-          <div style="display:flex;gap:4px;flex-shrink:0">${actions}${admin && !f.manu ? `<a href="#" title="Les phases commencent ici" onclick="event.preventDefault();ecarterPhaseFab('${f.k}', true)" style="font-size:12px;color:#8b6340;text-decoration:none">▲</a><a href="#" title="Supprimer cette phase" onclick="event.preventDefault();ecarterPhaseFab('${x.m.kind === 'pose' ? 'P:' : ''}${f.k}', false)" style="font-size:12px;color:#c0392b;text-decoration:none">🗑</a>` : ''}</div>
+          <div style="display:flex;gap:4px;flex-shrink:0">${actions}${admin && !f.manu ? `<a href="#" title="Les phases commencent ici" onclick="event.preventDefault();ecarterPhaseFab('${f.k}', true)" style="font-size:12px;color:#8b6340;text-decoration:none">▲</a><a href="#" title="Supprimer cette phase" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${f.k}', false)" style="font-size:12px;color:#c0392b;text-decoration:none">🗑</a>` : ''}</div>
         </div>`;
       }).join('');
       if (phasesFab.length > NB_PHASES_VISIBLES) html += `<div onclick="_fabToutes=!_fabToutes;renderJalonsChantier()" style="padding:7px 0 0;font-size:11px;font-weight:700;color:#8b6340;cursor:pointer;border-top:1px dotted #e5ded0">${_fabToutes ? '▾ Masquer les phases supplémentaires' : `▸ ${phasesFab.length - NB_PHASES_VISIBLES} autre(s) phase(s) — afficher`}</div>`;
@@ -22465,7 +22467,7 @@
     if (!cles.length) return;
     if (!confirm(avantAussi ? `Écarter les ${cles.length} ligne(s) au-dessus (descriptif) : les phases commenceront à celle-ci ?` : 'Supprimer cette phase de fabrication pour ce chantier ?')) return;
     try {
-      await ecrireJalons(d => { d.fabExclu = [...new Set([...(d.fabExclu || []), ...cles])]; cles.forEach(x => { if (x.startsWith('P:')) delete d.j['P-' + x.slice(2)]; else { delete d.j['F-' + x]; delete d.j['P-' + x]; } }); });
+      await ecrireJalons(d => { d.fabExclu = [...new Set([...(d.fabExclu || []), ...cles])]; cles.forEach(x => { if (x.startsWith('P:')) delete d.j['P-' + x.slice(2)]; else if (x.startsWith('E:')) delete d.j['E-' + x.slice(2)]; else { delete d.j['F-' + x]; delete d.j['P-' + x]; delete d.j['E-' + x]; } }); });
       _jalonGanttSel = null; renderJalonsChantier();
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
@@ -22533,8 +22535,8 @@
     html += ligne('🏗 Pose', barre(P['Pose']?.debut, P['Pose']?.fin, '#6B4EA8', `Pose ${fr(P['Pose']?.debut)} → ${fr(P['Pose']?.fin)}`), { couleur: '#6B4EA8', gras: true });
     // jalons (V58 : seules les 5 premières phases de fabrication, le reste replié)
     let phase = '';
-    const compte = { fab: 0, pose: 0 }, total = { fab: et.filter(x => x.m.kind === 'fab').length, pose: et.filter(x => x.m.kind === 'pose').length };
-    const nomKind = { fab: 'fabrication', pose: 'pose' };
+    const compte = { fab: 0, pose: 0, etude: 0 }, total = { fab: et.filter(x => x.m.kind === 'fab').length, pose: et.filter(x => x.m.kind === 'pose').length, etude: et.filter(x => x.m.kind === 'etude').length };
+    const nomKind = { fab: 'fabrication', pose: 'pose', etude: 'étude' };
     et.forEach((x, idx) => {
       let nFab = 0, totalFab = 0;
       if (x.m.fab) {
@@ -22551,17 +22553,18 @@
       let contenu = '';
       if (x.m.kind === 'fab' && !fait) contenu += barre(ech.debutFab, ech.finFab, 'rgba(139,99,64,.22)', 'Période de fabrication');
       if (x.m.kind === 'pose' && !fait) contenu += barre(P['Pose']?.debut, P['Pose']?.fin, 'rgba(107,78,168,.22)', 'Période de pose');
+      if (x.m.kind === 'etude' && !fait) contenu += barre(ech.debutEtude, ech.finEtude, 'rgba(31,106,165,.2)', "Période d'études");
       if (!fait && x.ech && x.ech < auj) contenu += `<div style="position:absolute;top:50%;height:2px;left:${X(x.ech)}%;width:${X(auj) - X(x.ech)}%;background:#c0392b;opacity:.5"></div>`;
       contenu += losange(x.ech, fait ? '#bbb' : coul, `Échéance ${fr(x.ech)}`, !fait);
       if (fait && reel) contenu += losange(reel, coul, `${x.etat === 'na' ? 'Sans objet' : 'Validé'} le ${fr(reel)}${x.e.par ? ' par ' + x.e.par : ''}`);
       if (fait && !reel && x.etat === 'auto' && x.ech) contenu += losange(x.ech, coul, 'Validé par l\'appli');
-      const lib = `${fait ? (x.etat === 'na' ? '⊘' : '✅') : x.etat === 'bloque' ? '⛔' : dispo ? '▶' : '○'} ${x.m.fab ? (_jalonGanttSel === x.m.id ? '▾ ' : '▸ ') + (x.m.kind === 'pose' ? '🏗 ' : '🏭 ') + esc(x.m.nom.replace(/^(Fabrication|Pose) · /, '')) : esc(x.m.id) + ' ' + esc(x.m.nom)}`;
+      const lib = `${fait ? (x.etat === 'na' ? '⊘' : '✅') : x.etat === 'bloque' ? '⛔' : dispo ? '▶' : '○'} ${x.m.fab ? (_jalonGanttSel === x.m.id ? '▾ ' : '▸ ') + (({ pose: '🏗 ', etude: '📐 ' })[x.m.kind] || '🏭 ') + esc(x.m.nom.replace(/^(Fabrication|Pose|Étude) · /, '')) : esc(x.m.id) + ' ' + esc(x.m.nom)}`;
       html += ligne(lib, contenu, { click: `_jalonGanttSel=_jalonGanttSel==='${x.m.id}'?null:'${x.m.id}';renderJalonsChantier()`, sel: _jalonGanttSel === x.m.id, couleur: fait ? '#999' : 'var(--gris)', titre: x.m.nom + (x.personnes?.length ? ' · ' + x.personnes.join(', ') : '') });
       if (x.m.fab && _jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${esc(x.m.txt || x.m.nom)}
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
         ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : o.btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
         ${htmlNotesJalon(c, x.m.id)}
-        ${o.admin ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px"><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici</a><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.kind === 'pose' ? 'P:' : ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
+        ${o.admin ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px"><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici</a><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
       if (x.m.fab && _fabToutes && nFab === totalFab && totalFab > NB_PHASES_VISIBLES) html += `<div onclick="_fabToutes=false;renderJalonsChantier()" style="padding:6px 8px;font-size:11px;font-weight:700;color:#8b6340;cursor:pointer;border-top:1px solid #f1ece3;background:#fdf8f0">▾ Masquer les phases supplémentaires</div>`;
     });
     html += `</div><div style="font-size:10px;color:#999;margin-top:6px">◆ plein = échéance · ◆ vert = date de validation · trait rouge = retard · ligne pointillée = aujourd'hui. Touchez un jalon pour le détail et les actions.</div>`;
@@ -22582,7 +22585,7 @@
         ${htmlNotesJalon(c, x.m.id)}
         ${x.m.fab && o.admin ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:11px">
           <a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici (écarter le descriptif au-dessus)</a>
-          <a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.kind === 'pose' ? 'P:' : ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
+          <a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
     }
     const nbExclu = (lireJalons(c).fabExclu || []).length;
     if (o.admin) html += `<div style="margin-top:8px;font-size:11px;display:flex;gap:14px;flex-wrap:wrap"><a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="color:var(--vert);font-weight:700">+ ajouter une phase</a>${nbExclu ? `<a href="#" onclick="event.preventDefault();retablirPhasesFab()" style="color:#999">↺ ${nbExclu} phase(s) supprimée(s) — rétablir</a>` : ''}</div>`;
