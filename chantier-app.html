@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V41';
+  const APP_VERSION = 'V43';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12205,8 +12205,10 @@
     const container = document.getElementById('liste-chantiers-gestion');
     container.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
     try {
+      try { await chargerCommandesJalons(); } catch (e) {}
       chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES);
       memoriserCaChantiers(chantiersGestionCache);
+      detecterChampJalons(chantiersGestionCache);
       remplirFiltreCaChantiers();
       filtrerChantiersGestion();
     } catch(e) { container.innerHTML = '<div class="feuille-empty">❌ Erreur</div>'; }
@@ -12276,6 +12278,12 @@
         '<option value="' + STATUT_CLOTURE + '"' + (estStatutCloture(statue) ? ' selected' : '') + '>🔒 Clôturé</option>' +
         '</select>';
       div.appendChild(header);
+      // V42 : avancement des jalons
+      if (_champJalonsDisponible !== false && !estStatutCloture(statue)) {
+        const jr = document.createElement('div');
+        jr.innerHTML = htmlResumeJalons(c);
+        div.appendChild(jr);
+      }
 
       // Chargé d'affaires
       const badgeCa = badgeCaHtml(caDuChantierRow(c)?.nom, statue);
@@ -21217,7 +21225,7 @@
   const TABLE_CONGES_ADMIN = '1022869';
 
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
+    ['utilisateurs','chantiers','jalons','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -21969,6 +21977,275 @@
       try { congesAdminListCache = []; } catch (e) {}
     } catch (e) { alert('❌ ' + e.message); }
     finally { btn.disabled = false; btn.textContent = '💾 Enregistrer pour les collaborateurs cochés'; }
+  }
+
+
+  // ══════════ V42 : JALONS DES CHANTIERS ══════════
+  // Stockage : champ texte long « Jalons » de la table Chantiers (JSON), créé une fois dans Baserow.
+  // { j: { J1: { st: 'ok'|'na'|'bloque', par, le, com } }, resp: { J4: 'Nom', J6: 'Nom' } }
+  // J10, J11, J13 se valident automatiquement à partir des commandes fournisseurs du chantier.
+  const CHAMP_JALONS = 'Jalons';
+  let _champJalonsDisponible = null;
+  const JALONS_MODELE = [
+    { id: 'J1',  phase: 'Commercial', nom: 'Devis signé', resp: "Chargé d'affaires" },
+    { id: 'J2',  phase: 'Commercial', nom: 'Revue de direction', resp: 'Direction' },
+    { id: 'J3',  phase: 'Commercial', nom: 'ARC client validé et envoyé', resp: "Chargé d'affaires", auto: 'arc' },
+    { id: 'J4',  phase: 'Conception', nom: 'Croquis, avant-projet ou PC', resp: 'CA ou dessinatrice', designer: true },
+    { id: 'J5',  phase: 'Conception', nom: 'Avant-projet / PC validé client', resp: "Chargé d'affaires", cond: true },
+    { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: 'À désigner', designer: true, cond: true },
+    { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production' },
+    { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", resp: 'Dessinatrice' },
+    { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires" },
+    { id: 'J10', phase: 'Production', nom: 'Commandes passées, AR validés', resp: 'Resp. production', auto: 'ar' },
+    { id: 'J11', phase: 'Production', nom: 'Matière réceptionnée', resp: 'Atelier', auto: 'recu' },
+    { id: 'J12', phase: 'Production', nom: 'Fabrication terminée', resp: 'Resp. atelier' },
+    { id: 'J13', phase: 'Production', nom: 'Chantier chargé', resp: 'Atelier + poseurs', auto: 'parti' },
+    { id: 'J14', phase: 'Chantier',   nom: 'Pose terminée, PV signé', resp: "Chef d'équipe pose" },
+    { id: 'J15', phase: 'Chantier',   nom: 'Réserves levées, dossier clos', resp: "Chargé d'affaires" }
+  ];
+  function detecterChampJalons(rows) {
+    if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
+  }
+  function lireJalons(c) {
+    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {} }; }
+    catch (e) { return { j: {}, resp: {} }; }
+  }
+  // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
+  let _jalonsCmd = new Map(), _jalonsCmdClients = new Map(), _jalonsCmdDate = 0;
+  async function chargerCommandesJalons(force) {
+    if (!force && _jalonsCmdDate && Date.now() - _jalonsCmdDate < 120000) return;
+    const rows = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/?user_field_names=true&size=200`);
+    _jalonsCmd = new Map();
+    rows.forEach(r => { const id = (r['Chantier'] || [])[0]?.id; if (id) (_jalonsCmd.get(id) || _jalonsCmd.set(id, []).get(id)).push(r); });
+    // V43 : commandes clients EBP (= ARC saisi dans EBP) → jalon J3 automatique
+    _jalonsCmdClients = new Map();
+    try {
+      const cc = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/?user_field_names=true&size=200&${MARQUEUR_CLOTURES}`);
+      cc.forEach(r => {
+        if (/annul/i.test(extraireValeurChamp(r['Statut'], ''))) return;
+        const id = (r['Chantier'] || [])[0]?.id;
+        if (id) (_jalonsCmdClients.get(id) || _jalonsCmdClients.set(id, []).get(id)).push(r);
+      });
+    } catch (e) { /* table non accessible pour ce profil : J3 reste manuel */ }
+    _jalonsCmdDate = Date.now();
+  }
+  function etatAutoJalon(chantierId, type) {
+    if (type === 'arc') {
+      const cc = (_jalonsCmdClients.get(chantierId) || []).slice().sort((a, b) => String(a['Date commande'] || '').localeCompare(String(b['Date commande'] || '')));
+      if (!cc.length) return null;
+      const d = String(cc[0]['Date commande'] || '').slice(0, 10);
+      return `commande client EBP ${cc.map(r => r['Numero commande']).filter(Boolean).join(', ')}${d ? ' du ' + d.split('-').reverse().join('/') : ''}`;
+    }
+    const cmds = (_jalonsCmd.get(chantierId) || []);
+    if (!cmds.length) return null;
+    const st = cmds.map(r => normaliserTexteStatut(extraireValeurChamp(r['Statut'], 'En attente AR')));
+    const dans = liste => st.every(x => liste.map(normaliserTexteStatut).includes(x));
+    if (type === 'ar') return st.every(x => x !== normaliserTexteStatut('En attente AR')) ? `${cmds.length} commande(s), AR validés` : null;
+    if (type === 'recu') return dans(STATUTS_COMMANDE_RECEPTIONNEE) ? `${cmds.length} commande(s) réceptionnée(s)` : null;
+    if (type === 'parti') return dans(['Envoyé sur chantier', 'Réceptionné sur chantier', 'Livrée', 'Facturée']) ? `${cmds.length} commande(s) parties sur chantier` : null;
+    return null;
+  }
+  // État calculé de chaque jalon : 'ok' | 'auto' | 'na' | 'bloque' | 'afaire'
+  function etatsJalons(c) {
+    const d = lireJalons(c);
+    return JALONS_MODELE.map(m => {
+      const e = d.j[m.id] || {};
+      let etat = e.st || 'afaire', info = '';
+      if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto); if (a) { etat = 'auto'; info = a; } }
+      return { m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp };
+    });
+  }
+  const JALON_FAIT = x => x.etat === 'ok' || x.etat === 'auto' || x.etat === 'na';
+  const JALON_STYLE = {
+    ok: { ic: '✅', fond: '#e8f3e5', bord: '#4a7c3f' }, auto: { ic: '🤖', fond: '#e3f2ee', bord: '#0f6e56' },
+    na: { ic: '⊘', fond: '#f1f1f1', bord: '#bbb' }, bloque: { ic: '⛔', fond: '#fdecea', bord: '#c0392b' },
+    afaire: { ic: '○', fond: '#fff', bord: '#ddd5c5' }, encours: { ic: '▶', fond: '#fff8e6', bord: '#e0a33a' }
+  };
+  function resumeJalons(c) {
+    const et = etatsJalons(c);
+    const faits = et.filter(JALON_FAIT).length;
+    const prochain = et.find(x => !JALON_FAIT(x));
+    const bloques = et.filter(x => x.etat === 'bloque');
+    return { et, faits, prochain, bloques };
+  }
+  function htmlResumeJalons(c) {
+    const { et, faits, prochain, bloques } = resumeJalons(c);
+    const esc = echapperHtmlNote;
+    const pastilles = et.map(x => { const st = JALON_STYLE[x === prochain && x.etat === 'afaire' ? 'encours' : x.etat]; return `<span title="${esc(x.m.id + ' · ' + x.m.nom)}" style="flex:1;height:6px;border-radius:3px;background:${x.etat === 'afaire' && x !== prochain ? '#eee' : st.bord}"></span>`; }).join('');
+    return `<div onclick="ouvrirJalonsChantier(${c.id})" style="cursor:pointer;margin:0 0 8px">
+      <div style="display:flex;gap:2px;margin-bottom:4px">${pastilles}</div>
+      <div style="font-size:11px;color:var(--gris-moyen)">🚩 <b>${faits}/${et.length}</b>${prochain ? ` · prochain : <b style="color:var(--gris)">${esc(prochain.m.id)} ${esc(prochain.m.nom)}</b> <span style="color:#a5761f">(${esc(prochain.resp)})</span>` : ' · <b style="color:var(--vert)">tous les jalons sont franchis</b>'}${bloques.length ? ` · <b style="color:#c0392b">⛔ ${bloques.length} bloqué(s)</b>` : ''}</div>
+    </div>`;
+  }
+
+  // ── Fenêtre « frise » d'un chantier ──
+  let _jalonsChantierId = null;
+  async function ouvrirJalonsChantier(id) {
+    if (_champJalonsDisponible === false) { alertChampJalonsManquant(); return; }
+    _jalonsChantierId = id;
+    let m = document.getElementById('modal-jalons');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-jalons';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) fermerJalons(); };
+      document.body.appendChild(m);
+    }
+    m.innerHTML = '<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:640px;height:90vh;display:flex;flex-direction:column;overflow:hidden"><div class="feuille-loading" style="margin-top:40px">⏳ Chargement…</div></div>';
+    m.style.display = 'flex';
+    try { await chargerCommandesJalons(); } catch (e) {}
+    renderJalonsChantier();
+  }
+  function fermerJalons() {
+    const m = document.getElementById('modal-jalons'); if (m) m.style.display = 'none';
+    try { filtrerChantiersGestion(); } catch (e) {}
+    try { renderTableauJalons(); } catch (e) {}
+  }
+  function chantierJalons() { return (chantiersGestionCache || []).find(c => c.id === _jalonsChantierId); }
+  function renderJalonsChantier() {
+    const m = document.getElementById('modal-jalons');
+    const c = chantierJalons();
+    if (!m || !c) return;
+    const esc = echapperHtmlNote;
+    const { et, faits, prochain } = resumeJalons(c);
+    const peut = peutValiderJalons();
+    let phase = '', html = '';
+    et.forEach((x, i) => {
+      if (x.m.phase !== phase) { phase = x.m.phase; html += `<div style="font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">${esc(phase)}</div>`; }
+      const cle = x === prochain && x.etat === 'afaire' ? 'encours' : x.etat;
+      const st = JALON_STYLE[cle];
+      const e = x.e;
+      const detail = x.etat === 'auto' ? `🤖 Validé par l'appli : ${esc(x.info)}`
+        : x.etat === 'ok' ? `Validé${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''}${e.com ? ' — ' + esc(e.com) : ''}`
+        : x.etat === 'na' ? `Sans objet${e.par ? ' (' + esc(e.par) + (e.le ? ', ' + esc(e.le) : '') + ')' : ''}${e.com ? ' — ' + esc(e.com) : ''}`
+        : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué${e.par ? ' par ' + esc(e.par) : ''}${e.le ? ' le ' + esc(e.le) : ''} : ${esc(e.com || '')}</b>`
+        : cle === 'encours' ? '<b style="color:#a5761f">▶ Étape en cours</b>' : '';
+      const btn = (lib, fn, coul) => `<button onclick="${fn}" style="background:#fff;border:1px solid ${coul || '#ddd'};color:${coul || 'var(--gris)'};border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer">${lib}</button>`;
+      const actions = !peut ? '' : (x.etat === 'afaire' || x.etat === 'bloque')
+        ? btn('✅ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + (x.m.cond || x.etat === 'afaire' ? btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`) : '')
+        : x.etat === 'auto' ? '' : btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`);
+      html += `<div style="background:${st.fond};border:1.5px solid ${st.bord};border-radius:10px;padding:9px 11px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+          <div style="font-size:13px;font-weight:700;color:var(--gris)">${st.ic} ${esc(x.m.id)} · ${esc(x.m.nom)}${x.m.cond ? ' <span style="font-size:10px;color:#999;font-weight:600">(conditionnel)</span>' : ''}</div>
+          <div style="font-size:11px;color:#a5761f;white-space:nowrap;text-align:right">👤 ${esc(x.resp)}${x.m.designer && peut ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}</div>
+        </div>
+        ${detail ? `<div style="font-size:11px;color:#555;margin-top:3px">${detail}</div>` : ''}
+        ${actions ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">${actions}</div>` : ''}
+      </div>`;
+    });
+    m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:640px;height:90vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;display:flex;justify-content:space-between;gap:10px;flex-shrink:0">
+        <div><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 ${esc(c['Nom du chantier'] || '')}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);margin-top:2px">${faits}/${et.length} jalons franchis${caDuChantierRow(c)?.nom ? ' · CA : ' + esc(caDuChantierRow(c).nom) : ''}${peut ? '' : ' · lecture seule'}</div></div>
+        <button onclick="fermerJalons()" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer;align-self:flex-start">✕</button>
+      </div>
+      <div style="padding:4px 14px 20px;overflow-y:auto">${html}</div></div>`;
+  }
+  function peutValiderJalons() { return ['Administrateur', 'Gestionnaire'].includes(connectedDroit); }
+  function alertChampJalonsManquant() {
+    alert("Le suivi des jalons a besoin d'un champ dans Baserow :\n\nTable « Chantiers » → ajouter un champ de type « Texte long » nommé exactement : Jalons\n\nPuis rechargez l'appli.");
+  }
+  // Lecture fraîche de la ligne puis écriture : limite les écrasements si deux personnes valident en même temps
+  async function ecrireJalons(modifier) {
+    const id = _jalonsChantierId;
+    const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CHANTIERS_ADMIN}/${id}/?user_field_names=true`;
+    const rg = await fetch(url, { headers: HEADERS });
+    if (!rg.ok) throw new Error('Lecture du chantier impossible (' + rg.status + ')');
+    const row = await rg.json();
+    if (!Object.prototype.hasOwnProperty.call(row, CHAMP_JALONS)) { _champJalonsDisponible = false; alertChampJalonsManquant(); throw new Error('champ Jalons absent'); }
+    const d = lireJalons(row);
+    modifier(d);
+    const rp = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_JALONS]: JSON.stringify(d) }) });
+    if (!rp.ok) throw new Error('Enregistrement refusé (' + rp.status + ') : ' + (await rp.text()).slice(0, 150));
+    const maj = await rp.json();
+    const i = chantiersGestionCache.findIndex(c => c.id === id);
+    if (i >= 0) chantiersGestionCache[i] = { ...chantiersGestionCache[i], ...maj };
+  }
+  async function actionJalon(jid, action) {
+    const c = chantierJalons(); if (!c) return;
+    const et = etatsJalons(c);
+    const idx = et.findIndex(x => x.m.id === jid), x = et[idx];
+    let com = '';
+    if (action === 'ok') {
+      const manquants = et.slice(0, idx).filter(y => !JALON_FAIT(y));
+      if (manquants.length) {
+        com = prompt(`⚠️ Étape(s) précédente(s) non franchie(s) : ${manquants.map(y => y.m.id).join(', ')}.\n\nPour valider ${jid} quand même, indiquez le motif :`, '');
+        if (com === null) return;
+        if (!com.trim()) { alert('Motif obligatoire pour valider sans les étapes précédentes.'); return; }
+      } else {
+        com = prompt(`Valider ${jid} · ${x.m.nom}\n\nCommentaire (facultatif) :`, '');
+        if (com === null) return;
+      }
+    } else if (action === 'bloque') {
+      com = prompt(`${jid} · ${x.m.nom} — qu'est-ce qui bloque ?`, x.e.st === 'bloque' ? (x.e.com || '') : '');
+      if (com === null) return;
+      if (!com.trim()) { alert('Indiquez le motif du blocage.'); return; }
+    } else if (action === 'na') {
+      com = prompt(`${jid} · ${x.m.nom} : sans objet pour ce chantier ?\n\nPrécision (facultatif) :`, '');
+      if (com === null) return;
+    } else if (action === 'annuler') {
+      if (!confirm(`Remettre ${jid} « à faire » ?`)) return;
+    }
+    try {
+      await ecrireJalons(d => {
+        if (action === 'annuler') delete d.j[jid];
+        else d.j[jid] = { st: action, par: connectedCollab || '', le: new Date().toLocaleDateString('fr-FR'), com: String(com || '').trim() };
+      });
+      renderJalonsChantier();
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+  async function designerRespJalon(jid) {
+    const c = chantierJalons(); if (!c) return;
+    const actuel = lireJalons(c).resp[jid] || '';
+    const v = prompt(`Responsable de ${jid} pour ce chantier :`, actuel);
+    if (v === null) return;
+    try {
+      await ecrireJalons(d => { if (v.trim()) d.resp[jid] = v.trim(); else delete d.resp[jid]; });
+      renderJalonsChantier();
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+
+  // ── Onglet Gestion › 🚩 Jalons : matrice chantiers × jalons ──
+  async function chargerTableauJalons() {
+    const el = document.getElementById('jalons-tableau');
+    el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      await chargerCommandesJalons(true);
+      chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200&' + MARQUEUR_CLOTURES);
+      memoriserCaChantiers(chantiersGestionCache);
+      detecterChampJalons(chantiersGestionCache);
+      renderTableauJalons();
+    } catch (e) { el.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement : ' + echapperHtmlNote(e.message) + '</div>'; }
+  }
+  function renderTableauJalons() {
+    const el = document.getElementById('jalons-tableau');
+    const al = document.getElementById('jalons-alerte');
+    if (!el) return;
+    if (_champJalonsDisponible === false) {
+      al.style.display = 'block';
+      al.innerHTML = "⚠️ Pour activer les jalons, ajoutez dans Baserow, table <b>Chantiers</b>, un champ <b>Texte long</b> nommé exactement <b>Jalons</b>, puis rechargez. En attendant, seuls les jalons automatiques (commandes) sont affichés.";
+    } else al.style.display = 'none';
+    const esc = echapperHtmlNote;
+    const q = normTexte(document.getElementById('jalons-recherche')?.value || '');
+    const filtre = document.getElementById('jalons-filtre')?.value || '';
+    const moi = normTexte(connectedCollab || '');
+    const lignes = (chantiersGestionCache || [])
+      .filter(c => { const s = c['Statue']?.value || c['Statue'] || ''; return !estStatutCloture(s) && s !== 'Terminé'; })
+      .map(c => ({ c, r: resumeJalons(c), ca: caDuChantierRow(c)?.nom || '' }))
+      .filter(x => !q || normTexte((x.c['Nom du chantier'] || '') + ' ' + x.ca).includes(q))
+      .filter(x => filtre !== 'bloque' || x.r.bloques.length)
+      .filter(x => filtre !== 'moi' || (x.r.prochain && moi && (normTexte(x.r.prochain.resp).includes(moi) || (normTexte(x.ca).includes(moi) && /charge d.affaires|^ca\b/.test(normTexte(x.r.prochain.resp))))))
+      .sort((a, b) => (b.r.bloques.length - a.r.bloques.length) || (a.r.faits - b.r.faits));
+    if (!lignes.length) { el.innerHTML = '<div class="feuille-empty">Aucun chantier.</div>'; return; }
+    const entete = JALONS_MODELE.map(m => `<th title="${esc(m.nom)}" style="padding:4px 2px;font-size:10px;color:#888;font-weight:700;min-width:26px">${m.id.slice(1)}</th>`).join('');
+    const corps = lignes.map(({ c, r, ca }) => `<tr onclick="ouvrirJalonsChantier(${c.id})" style="cursor:pointer;border-top:1px solid #eee">
+      <td style="padding:6px 8px;min-width:170px"><div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(c['Nom du chantier'] || '')}</div>
+        <div style="font-size:10px;color:#999">${ca ? esc(ca) + ' · ' : ''}${r.faits}/${r.et.length}${r.prochain ? ' · ▶ ' + esc(r.prochain.m.id) + ' ' + esc(r.prochain.resp) : ''}</div></td>
+      ${r.et.map(x => { const st = JALON_STYLE[x === r.prochain && x.etat === 'afaire' ? 'encours' : x.etat]; return `<td title="${esc(x.m.id + ' · ' + x.m.nom + (x.etat === 'bloque' ? ' — ' + (x.e.com || '') : ''))}" style="text-align:center;padding:2px"><span style="display:inline-block;width:22px;height:22px;line-height:22px;border-radius:5px;background:${st.fond};border:1px solid ${st.bord};font-size:11px">${x.etat === 'afaire' && x !== r.prochain ? '' : st.ic}</span></td>`; }).join('')}
+    </tr>`).join('');
+    el.innerHTML = `<div style="background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;overflow-x:auto">
+      <table style="border-collapse:collapse;width:100%"><tr><th style="text-align:left;padding:6px 8px;font-size:10px;color:#888">Chantier</th>${entete}</tr>${corps}</table></div>
+      <div style="font-size:10px;color:#999;margin-top:6px">✅ validé · 🤖 validé par l'appli (commandes) · ⊘ sans objet · ⛔ bloqué · ▶ étape en cours. Survolez une case pour le nom du jalon.</div>`;
   }
 
   const VUE_FEUILLE_HEURES = '1990719';
@@ -24343,7 +24620,7 @@
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
+    ['utilisateurs','chantiers','jalons','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -24353,6 +24630,7 @@
     if (tab === 'utilisateurs') loadUtilisateurs();
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
+    if (tab === 'jalons') chargerTableauJalons();
     if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
     if (tab === 'tv') chargerGestionTV();
     if (tab === 'export') {
@@ -24526,6 +24804,7 @@
   <div class="onglets-gestion" style="display:flex;margin:0 16px 16px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none">
     <button class="tab-btn active" id="tab-g-utilisateurs" onclick="switchGestionTab('utilisateurs')" style="font-size:11px">👤 Users</button>
     <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
+    <button class="tab-btn" id="tab-g-jalons" onclick="switchGestionTab('jalons')" style="font-size:11px">🚩 Jalons</button>
     <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
     <button class="tab-btn" id="tab-g-conges-groupe" onclick="switchGestionTab('conges-groupe')" style="font-size:11px">👥 Saisie groupée</button>
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
@@ -24552,6 +24831,22 @@
     </div>
   </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
+  </div>
+
+  <!-- V42 : JALONS (suivi des étapes de chaque chantier) -->
+  <div id="gestion-jalons" style="display:none">
+    <div style="margin:0 16px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div><div style="font-size:13px;font-weight:700;color:var(--gris)">🚩 Jalons des chantiers en cours</div>
+        <div style="font-size:11px;color:var(--gris-moyen)">Touchez un chantier pour ouvrir sa frise et valider les étapes.</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <input type="text" id="jalons-recherche" placeholder="🔍 Chantier, chargé d'affaires…" oninput="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
+        <select id="jalons-filtre" onchange="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
+          <option value="">Tous</option><option value="bloque">⛔ Avec un blocage</option><option value="moi">👤 Où c'est à moi</option>
+        </select>
+      </div>
+    </div>
+    <div id="jalons-alerte" style="display:none;margin:0 16px 10px;background:#fff3e0;border:1px solid #f0c48a;border-radius:10px;padding:10px 12px;font-size:12px;color:#a2560f"></div>
+    <div id="jalons-tableau" style="margin:0 16px 30px"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
   <!-- CHANTIERS -->
