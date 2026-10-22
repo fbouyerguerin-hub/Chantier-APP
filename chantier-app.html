@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V40';
+  const APP_VERSION = 'V41';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -18118,6 +18118,17 @@
     return estCommandePartielle(r) ? 'Réception partielle' : extraireValeurChamp(r['Statut'], 'En attente AR');
   }
 
+  // V41 : désignation de l'article du stock rapproché de la ligne (la description de la
+  // ligne EBP seule — « 6U de 4265mm » — ne dit pas QUEL article est proposé).
+  function htmlArticleDispo(a, l) {
+    if (!a) return '';
+    const esc = echapperHtmlNote;
+    const des = a['Designation'] || '', empl = libelleEmplacement(a), code = a['Code EBP'] || '';
+    const memeTexte = normTexte(des) === normTexte(l['Description'] || '');
+    return `<div style="font-size:11px;color:#2f5d27;background:#eef5ec;border-radius:6px;padding:3px 8px;margin-top:3px;display:inline-block;max-width:100%">
+      📦 <b onclick="ouvrirFicheArticleModal(${a.id})" style="cursor:pointer;text-decoration:underline">${esc(memeTexte ? 'Fiche article' : des)}</b>${code ? ` · <span style="font-family:monospace">${esc(code)}</span>` : ''}${a['Fournisseur'] ? ` · ${esc(a['Fournisseur'])}` : ''}${empl ? ` · 📍 ${esc(empl)}` : ''}</div>`;
+  }
+
   async function renderCommandesDispoStock() {
     const listeEl = document.getElementById('commandes-dispo-liste');
     const resumeEl = document.getElementById('commandes-dispo-resume');
@@ -18167,6 +18178,7 @@
           if (etat.aSortir) nbASortir++;
           lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
             <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+            ${htmlArticleDispo(a, l)}
             <div style="font-size:11px;color:#555;margin-top:2px">🔒 <b>Pris en stock : ${fmtQte(etat.pris)} ${esc(unite)}</b> ${etat.prises.map(x => `<span style="color:#999">(${esc(x.par)} · ${x.statut === 'Sorti' ? `✅ sorti${x.sortiPar ? ' par ' + esc(x.sortiPar) : ''}${x.sortiLe ? ' le ' + esc(x.sortiLe) : ''}` : '🖨️ bon de sortie à scanner'})</span>`).join(' ')}${a && libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
             ${etat.aReduire
               ? `<div style="margin-top:4px;font-size:11px;font-weight:800;color:#c0392b;background:#fff6f5;border:1px solid #e8a39b;border-radius:6px;padding:4px 8px;display:inline-block">⚠️ À réduire dans EBP : quantité ${fmtQte(etat.actuel)} → ${fmtQte(etat.attendu)} ${esc(unite)}${etat.attendu === 0 ? ' (supprimer la ligne)' : ''}</div>`
@@ -18189,6 +18201,7 @@
           if (!_dispoVoirEcartees) continue;
           lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0;opacity:.75">
             <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+            ${htmlArticleDispo(a, l)}
             <div style="font-size:11px;color:#777;margin-top:2px">🚫 Traité sans prise en stock${ec.par ? ` par ${esc(ec.par)}` : ''}${ec.le ? ` le ${esc(ec.le)}` : ''}${ec.motif ? ` — ${esc(ec.motif)}` : ''} · En stock : ${fmtQte(dispo)}</div>
             <button onclick="retablirPropositionStock(${ec.mvt.id})" style="margin-top:6px;background:#fff;color:var(--gris);border:1px solid #ddd;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">↺ Rétablir la proposition</button>
           </div>`);
@@ -18201,6 +18214,7 @@
         const idIn = `dispo-qte-${l.id}`;
         lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
+          ${htmlArticleDispo(a, l)}
           <div style="font-size:11px;color:#555;margin-top:2px">Commandé : <b>${fmtQte(qCmd)} ${esc(unite)}</b> · En stock : <b onclick="ouvrirOrigineStock(${a.id})" title="${re ? 'Voir la commande du retour chantier' : 'Voir la fiche de l\'article'}" style="color:var(--vert);cursor:pointer;text-decoration:underline">${fmtQte(dispo)} ${esc(uniteApresQte(a['Unite'] || l['Unite']))}</b>${re ? ` <span style="background:#fde8c3;color:#7c5200;border-radius:6px;padding:0 5px;font-weight:700">dont ${fmtQte(re.qte)} revenu(s) de chantier</span>` : ''}${libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
           <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
             <input id="${idIn}" type="number" min="0" step="any" value="${propose}" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px" />
