@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V68';
+  const APP_VERSION = 'V69';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22212,7 +22212,9 @@
       diag.regroupees += lignes.filter(l => String(l['Description'] || '').includes('\n')).length;
       lignes.sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
       if (diag.apercu.length < 25) diag.apercu.push(...lignes.slice(0, 25 - diag.apercu.length).map(l => ({ ref: l['Reference'] || '', desc: String(l['Description'] || '').split('\n')[0].slice(0, 70), qte: l['Quantite'], mt: l['Montant HT'] })));
-      const detaillees = lignes.filter(l => !String(l['Description'] || '').includes('\n'));
+      // V69 : on suit la commande IMPRIMÉE — les lignes masquées (coût de revient) sont ignorées
+      const detaillees = lignes.filter(l => !String(l['Description'] || '').includes('\n') && l['Masque'] !== true);
+      diag.masquees = (diag.masquees || 0) + lignes.filter(l => l['Masque'] === true).length;
       if (detaillees.length > 1) {
         // V61 : si le devis est structuré en sections numérotées (« 1 ) … », « 1/3 ) … »), une phase =
         // une section numérotée contenant au moins une ligne chiffrée ; le descriptif avant « 1) » est ignoré.
@@ -22405,7 +22407,7 @@
       html += `<div style="background:#fff;border:1.5px solid #c9b48a;border-radius:12px;padding:10px 12px;margin:16px 0 4px">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
           <div style="font-size:12px;font-weight:800;color:#8b6340;text-transform:uppercase;letter-spacing:.5px">🏭 Phases d'étude, de fabrication et de pose${phasesFab.length ? ` · ${nbOk}/${phasesFab.length}` : ''}</div>
-          ${admin ? `<a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="font-size:11px;color:var(--vert);font-weight:700;white-space:nowrap">+ ajouter</a>` : ''}
+          ${admin ? `<span style="white-space:nowrap"><a href="#" onclick="event.preventDefault();relireCommandesEbpChantier()" title="Relire la commande depuis EBP" style="font-size:11px;color:#5e35b1;font-weight:700;margin-right:10px">🔄 EBP</a><a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="font-size:11px;color:var(--vert);font-weight:700">+ ajouter</a></span><span id="relire-ebp-etat" style="font-size:10px;color:#999"></span>` : ''}
         </div>`;
       if (!phasesFab.length) html += htmlDiagPhases(c);
       else html += phasesFab.filter((p, i) => _fabToutes || i < NB_PHASES_VISIBLES).map(({ x, dispo }) => {
@@ -22461,7 +22463,7 @@
     const x = normTexte(t).replace(/pose(e|s|es)?\s+(horizontalement|verticalement|a plat|sur chant)/g, '');
     return /\b(pose|posee|poses|posees|poser|mise en oeuvre|montage|monte sur site)\b/.test(x);
   }
-  const RE_SECTION_DEVIS = /^\s*\d+\s*(\/\s*\d+\s*)?(\)|\.(?=\s))\s*[A-Za-zÀ-ÿ"«]/;
+  const RE_SECTION_DEVIS = /^\s*\d+\s*[°º]?\s*(\/\s*\d+\s*)?(\)|\.(?=\s)|-(?=\s)|(?<=[°º])(?=\s))\s*[A-Za-zÀ-ÿ"«]/;
   // V60 : écarter les lignes de descriptif qui ne sont pas des phases
   async function ecarterPhaseFab(k, avantAussi) {
     const c = chantierJalons(); if (!c) return;
@@ -22499,6 +22501,29 @@
       });
       renderJalonsChantier();
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+
+
+  // V69 : relire depuis EBP les commandes clients du chantier ouvert (lignes, lignes masquées, chapitres)
+  async function relireCommandesEbpChantier() {
+    const c = chantierJalons(); if (!c) return;
+    const cmds = commandesClientsDuChantier(c).map(r => r['Numero commande']).filter(Boolean);
+    if (!cmds.length) { alert('Aucune commande client EBP rattachée à ce chantier.'); return; }
+    const z = document.getElementById('relire-ebp-etat');
+    try {
+      for (let i = 0; i < cmds.length; i++) {
+        if (z) z.textContent = `⏳ Lecture EBP ${i + 1}/${cmds.length} (${cmds[i]})…`;
+        const r = await _fetchNatifBrut(GB_WORKER + '/sync-clients?num=' + encodeURIComponent(cmds[i]) + '&t=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || ('Worker ' + r.status));
+        if ((d.erreurs || []).length) throw new Error(d.erreurs.map(e => e.num + ' : ' + e.erreur).join(' · '));
+      }
+      _jalonsCmdDate = 0;
+      await chargerCommandesJalons(true);
+      const c2 = chantierJalons();
+      if (c2) await synchroniserPhasesFab(c2);
+      renderJalonsChantier();
+    } catch (e) { alert('❌ Relecture EBP : ' + e.message); if (z) z.textContent = ''; }
   }
 
   // ── V56 : présentation Gantt des jalons d'un chantier ──
@@ -22594,7 +22619,7 @@
           <a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
     }
     const nbExclu = (lireJalons(c).fabExclu || []).length;
-    if (o.admin) html += `<div style="margin-top:8px;font-size:11px;display:flex;gap:14px;flex-wrap:wrap"><a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="color:var(--vert);font-weight:700">+ ajouter une phase</a>${nbExclu ? `<a href="#" onclick="event.preventDefault();retablirPhasesFab()" style="color:#999">↺ ${nbExclu} phase(s) supprimée(s) — rétablir</a>` : ''}</div>`;
+    if (o.admin) html += `<div style="margin-top:8px;font-size:11px;display:flex;gap:14px;flex-wrap:wrap"><a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="color:var(--vert);font-weight:700">+ ajouter une phase</a><a href="#" onclick="event.preventDefault();relireCommandesEbpChantier()" style="color:#5e35b1;font-weight:700">🔄 Relire la commande depuis EBP</a><span id="relire-ebp-etat" style="color:#999"></span>${nbExclu ? `<a href="#" onclick="event.preventDefault();retablirPhasesFab()" style="color:#999">↺ ${nbExclu} phase(s) supprimée(s) — rétablir</a>` : ''}</div>`;
     return html;
   }
 
