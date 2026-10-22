@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V67';
+  const APP_VERSION = 'V68';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22191,9 +22191,12 @@
     _diagPhases[c.id] = diag;
     if (!cmds.length) return;
     const titres = [], vus = new Set();
-    const ajouterTitre = (nomBrut, pose) => {
-      const txt = String(nomBrut || '').trim().replace(/\s+/g, ' ').slice(0, 1500);
-      const nom = txt.slice(0, 80);
+    // V68 : « detail » = tout le texte de la section (lignes de la commande sous le titre)
+    const ajouterTitre = (nomBrut, pose, detail) => {
+      const titre = String(nomBrut || '').trim().replace(/\s+/g, ' ');
+      const corps = (detail || []).map(t => String(t || '').trim().replace(/\s+/g, ' ')).filter(Boolean);
+      const txt = [titre, ...corps].join('\n').slice(0, 4000);
+      const nom = titre.slice(0, 80);
       const k = normTexte(nom).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
       if (k && !vus.has(k)) { vus.add(k); const o = txt.length > nom.length ? { k, nom, txt } : { k, nom }; if (pose) o.pose = true; titres.push(o); }
     };
@@ -22215,13 +22218,14 @@
         // une section numérotée contenant au moins une ligne chiffrée ; le descriptif avant « 1) » est ignoré.
         const estSection = t => RE_SECTION_DEVIS.test(t);
         if (detaillees.some(l => estSection(String(l['Description'] || '')))) {
-          let section = null, chiffree = false, pose = false;
-          const clore = () => { if (section && chiffree) ajouterTitre(section, pose); };
+          let section = null, chiffree = false, pose = false, corps = [];
+          const clore = () => { if (section && chiffree) ajouterTitre(section, pose, corps); };
+          const ligneTexte = l => { const d = String(l['Description'] || '').trim(), q = l['Quantite'], u = l['Unite'] || ''; return q ? `${d} — ${fmtQte(q)}${u ? ' ' + u : ''}` : d; };
           detaillees.forEach(l => {
             const desc = String(l['Description'] || '').trim();
             if (!desc || estTotal(desc)) return;
-            if (estSection(desc)) { clore(); section = desc; chiffree = false; pose = mentionnePose(desc); }
-            else if (section) { if (prixLigne(l) > 0) chiffree = true; if (mentionnePose(desc)) pose = true; }
+            if (estSection(desc)) { clore(); section = desc; chiffree = false; pose = mentionnePose(desc); corps = []; }
+            else if (section) { corps.push(ligneTexte(l)); if (prixLigne(l) > 0) chiffree = true; if (mentionnePose(desc)) pose = true; }
           });
           clore();
         } else {
@@ -22229,7 +22233,7 @@
           detaillees.forEach(l => {
             const desc = String(l['Description'] || '').trim();
             if (!desc || estTotal(desc)) return;
-            if (prixLigne(l) > 0) { ajouterTitre(texteAuDessus || desc, mentionnePose(desc) || mentionnePose(texteAuDessus)); texteAuDessus = ''; }
+            if (prixLigne(l) > 0) { ajouterTitre(texteAuDessus || desc, mentionnePose(desc) || mentionnePose(texteAuDessus), texteAuDessus ? [desc] : []); texteAuDessus = ''; }
             else texteAuDessus = desc;
           });
         }
@@ -22413,7 +22417,7 @@
           : peutCe ? btn('✅', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + btn('⊘', `actionJalon('${x.m.id}','na')`) : '';
         return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px dotted #e5ded0;${!fait && !dispo ? 'opacity:.6' : ''}">
           <span style="font-size:14px">${fait || dispo || x.etat === 'bloque' ? st.ic : '○'}</span>
-          <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${f.txt && f.txt.length > nom.length ? `<details style="display:inline"><summary style="cursor:pointer">${esc(nom)}…</summary><div style="font-weight:400;color:#555;margin-top:3px;line-height:1.4">${esc(f.txt)}</div></details>` : esc(nom)}${f.manu ? ' <span style="font-size:10px;color:#aaa;font-weight:600">(manuelle)</span>' + (admin ? ` <a href="#" onclick="event.preventDefault();retirerPhaseFab('${f.k}')" style="color:#c0392b;font-size:10px">✕</a>` : '') : ''}</div>
+          <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${f.txt && f.txt.length > nom.length ? `<details style="display:inline"><summary style="cursor:pointer">${esc(nom)}…</summary><div style="font-weight:400;color:#555;margin-top:3px;line-height:1.4;white-space:pre-line">${esc(f.txt)}</div></details>` : esc(nom)}${f.manu ? ' <span style="font-size:10px;color:#aaa;font-weight:600">(manuelle)</span>' + (admin ? ` <a href="#" onclick="event.preventDefault();retirerPhaseFab('${f.k}')" style="color:#c0392b;font-size:10px">✕</a>` : '') : ''}</div>
             <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlNotesJalon(c, x.m.id)}</div>
           <div style="display:flex;gap:4px;flex-shrink:0">${actions}${admin && !f.manu ? `<a href="#" title="Les phases commencent ici" onclick="event.preventDefault();ecarterPhaseFab('${f.k}', true)" style="font-size:12px;color:#8b6340;text-decoration:none">▲</a><a href="#" title="Supprimer cette phase" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${f.k}', false)" style="font-size:12px;color:#c0392b;text-decoration:none">🗑</a>` : ''}</div>
         </div>`;
@@ -22562,7 +22566,7 @@
       const rapide = !fait && (dispo || x.etat === 'bloque') && (o.admin || estMoi(x.personnes)) && x.etat !== 'bloque'
         ? ` <span onclick="event.stopPropagation();actionJalon('${x.m.id}','ok')" title="Cliquer pour valider ce jalon" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.45" style="float:right;cursor:pointer;opacity:.45;background:transparent;border:1px dashed #a5761f;border-radius:5px;padding:0 6px;font-size:10px;color:#a5761f;font-weight:700">☐ à valider</span>` : '';
       html += ligne(lib + rapide, contenu, { click: `_jalonGanttSel=_jalonGanttSel==='${x.m.id}'?null:'${x.m.id}';renderJalonsChantier()`, sel: _jalonGanttSel === x.m.id, couleur: fait ? '#999' : 'var(--gris)', titre: x.m.nom + (x.personnes?.length ? ' · ' + x.personnes.join(', ') : '') });
-      if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? esc(x.m.txt || x.m.nom) : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
+      if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? `<div style="white-space:pre-line">${esc(x.m.txt || x.m.nom)}</div>` : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
         ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : !(dispo || x.etat === 'bloque') ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>' : o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
         ${htmlNotesJalon(c, x.m.id)}
