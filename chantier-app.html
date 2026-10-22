@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V38';
+  const APP_VERSION = 'V40';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -18136,6 +18136,7 @@
     const blocs = [];
     let nbDispo = 0, nbAReduire = 0, nbASortir = 0, nbEcartes = 0;
     const reserves = reservationsParArticle();
+    _dispoPropositions = {};
 
     const commandes = (_commandesCache || [])
       // Propositions : commandes « En attente AR » et « En attente réception ». Après l'AR,
@@ -18194,6 +18195,7 @@
           continue;
         }
         nbDispo++;
+        (_dispoPropositions[r.id] || (_dispoPropositions[r.id] = [])).push({ ligneId: l.id, articleId: a.id });
         const re = reemploiDisponible(a);
         const propose = Math.min(qCmd, dispo);
         const idIn = `dispo-qte-${l.id}`;
@@ -18217,6 +18219,9 @@
         </div>
         <div style="font-size:11px;color:#888;margin:2px 0 4px">🏗 ${esc(chantier || '—')} · commandé le ${r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—'}${retardAR ? ` · <span style="color:#c0392b;font-weight:700">AR attendu depuis ${retardAR} j</span>` : ''}</div>
         ${apresAR && lignesHtml.some(h => h.includes('Prendre en stock')) ? `<div style="font-size:11px;color:#8a5a00;background:#fff8e6;border:1px solid #f0d9a8;border-radius:6px;padding:4px 8px;margin-bottom:4px">⚠️ AR déjà validé : la réduction est à <b>négocier avec le fournisseur</b> (commande peut-être déjà préparée ou expédiée).</div>` : ''}
+        ${(_dispoPropositions[r.id] || []).length > 1 ? `<div style="display:flex;justify-content:flex-end;margin:2px 0 4px">
+          <button onclick="ecarterCommandeStock(${r.id})" title="Toutes les propositions de cette commande : traitées sans prise en stock" style="background:#fff;color:#777;border:1px solid #ddd;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer">🚫 Toute la commande : pas de prise en stock (${_dispoPropositions[r.id].length})</button>
+        </div>` : ''}
         ${lignesHtml.join('')}
       </div>`);
     }
@@ -18281,6 +18286,27 @@
       }]);
       renderCommandesDispoStock();
     } catch (e) { alert('Erreur : ' + e.message); }
+  }
+  // V40 : toute la commande traitée sans prise en stock, en une fois (un mouvement « écarté » par ligne
+  // proposée — chaque ligne reste rétablissable individuellement).
+  let _dispoPropositions = {};
+  async function ecarterCommandeStock(commandeId) {
+    if (!peutGererStock()) return;
+    const r = (_commandesCache || []).find(c => c.id === commandeId);
+    const props = _dispoPropositions[commandeId] || [];
+    if (!r || !props.length) return;
+    const num = r['Numero commande'] || '';
+    const motif = prompt(`Commande ${num} : les ${props.length} proposition(s) de stock seront traitées SANS prise en stock.\n\nMotif (facultatif) :`, '');
+    if (motif === null) return;
+    const note = ['ECARTE', `statut=Écarté`, `par=${connectedCollab || ''}`, `le=${new Date().toLocaleDateString('fr-FR')}`, `motif=${String(motif).replace(/[;=\n]/g, ' ').trim()}`].join(';');
+    try {
+      await creerMouvementsStock(props.map(p => ({
+        articleId: p.articleId, type: 'Sortie', quantite: 0,
+        chantier: (r['Chantier'] || [])[0]?.value || '', commande: num, ligneId: p.ligneId,
+        libelle: `${PREFIXE_ECARTE_STOCK} ${num}`.trim(), note
+      })));
+      renderCommandesDispoStock();
+    } catch (e) { alert('Erreur : ' + e.message); renderCommandesDispoStock(); }
   }
   async function retablirPropositionStock(mvtId) {
     if (!peutGererStock()) return;
@@ -24027,6 +24053,72 @@
     }
   }
 
+
+  // ── V39 : détail des heures par phase / sous-phase depuis Gestion › Renta ──
+  // (même structure que la feuille chantier de l'export Excel : Tâche → Sous-tâche → saisies)
+  function lienRentaHeures(nomChantier, libelle, phase) {
+    const enc = v => encodeURIComponent(v || '').replace(/'/g, '%27');
+    return `<a href="#" onclick="event.preventDefault();event.stopPropagation();ouvrirHeuresRenta(decodeURIComponent('${enc(nomChantier)}'), decodeURIComponent('${enc(phase)}'))" title="Voir les heures par phase et sous-phase" style="color:var(--vert);font-weight:700;text-decoration:underline;cursor:pointer">${libelle}</a>`;
+  }
+  function ouvrirHeuresRenta(nomChantier, phaseOuverte) {
+    const esc = escRenta;
+    const taux = parseFloat(document.getElementById('renta-taux')?.value) || 0;
+    const voirEur = taux > 0;
+    const data = ((_rentaDonnees && _rentaDonnees.dataAnalyse) || []).filter(r => r.chantier === nomChantier && r.heures);
+    const somme = l => l.reduce((t, r) => t + (r.heures || 0), 0);
+    const montant = h => voirEur ? ` · ${eurRenta(h * taux)}` : '';
+    const total = somme(data);
+    const dates = data.map(r => r.date).filter(Boolean).sort();
+    const fr = d => d ? d.split('-').reverse().join('/') : '';
+    const grouper = (l, k) => { const m = new Map(); l.forEach(r => { const v = r[k] || '(Non défini)'; (m.get(v) || m.set(v, []).get(v)).push(r); }); return [...m].sort((a, b) => somme(b[1]) - somme(a[1])); };
+    const barre = (h, max, coul) => `<div style="height:5px;background:#f1ece3;border-radius:3px;margin-top:3px"><div style="height:5px;width:${max ? Math.max(2, h / max * 100) : 0}%;background:${coul};border-radius:3px"></div></div>`;
+    const phases = grouper(data, 'tache');
+    const maxPhase = phases.length ? somme(phases[0][1]) : 0;
+    const htmlPhases = phases.map(([phase, lp]) => {
+      const hp = somme(lp);
+      const sous = grouper(lp, 'sousTache');
+      return `<details ${phase === phaseOuverte ? 'open' : ''} style="background:#fff;border:1.5px solid #ddd5c5;border-left:4px solid var(--vert);border-radius:10px;padding:8px 10px;margin-bottom:8px">
+        <summary style="cursor:pointer;list-style:none">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:800;color:var(--gris)"><span>▸ ${esc(phase)}</span><span style="white-space:nowrap">${hRenta(hp)}<span style="font-weight:600;color:var(--gris-moyen);font-size:11px"> · ${total ? Math.round(hp / total * 100) : 0} %${montant(hp)}</span></span></div>
+          ${barre(hp, maxPhase, 'var(--vert)')}
+        </summary>
+        <div style="margin-top:6px">${sous.map(([st, ls]) => {
+          const hs = somme(ls);
+          const lignes = ls.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+          return `<details style="margin:4px 0 4px 10px;border-top:1px dotted #e5ded0;padding-top:4px">
+            <summary style="cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:700;color:#555"><span>↳ ${esc(st)} <span style="font-weight:500;color:#aaa">(${ls.length})</span></span><span style="white-space:nowrap">${hRenta(hs)}${montant(hs)}</span></summary>
+            <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:11px">
+              <tr style="color:#999;text-align:left"><th style="padding:3px 4px">Date</th><th style="padding:3px 4px">Collaborateur</th><th style="padding:3px 4px">Poste</th><th style="padding:3px 4px">Notes</th><th style="padding:3px 4px;text-align:right">Heures</th></tr>
+              ${lignes.map(r => `<tr style="border-top:1px solid #f4f4f4"><td style="padding:3px 4px;white-space:nowrap">${fr(r.date)}</td><td style="padding:3px 4px">${esc(r.collaborateur)}</td><td style="padding:3px 4px;color:#888">${esc(r.poste)}</td><td style="padding:3px 4px;color:#666">${esc(r.notes)}</td><td style="padding:3px 4px;text-align:right;font-weight:700">${hRenta(r.heures)}</td></tr>`).join('')}
+            </table></div></details>`;
+        }).join('')}</div></details>`;
+    }).join('');
+    // Récapitulatif par collaborateur
+    const parCollab = grouper(data, 'collaborateur');
+    const htmlCollabs = parCollab.map(([n, l]) => `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dotted #eee;font-size:12px"><span>${esc(n)}</span><b>${hRenta(somme(l))}</b></div>`).join('');
+
+    let m = document.getElementById('modal-heures-renta');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-heures-renta';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:720px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0;display:flex;justify-content:space-between;gap:10px">
+        <div><div style="font-size:15px;font-weight:800;color:var(--gris)">⏱️ ${esc(nomChantier)}</div>
+          <div style="font-size:11px;color:var(--gris-moyen);margin-top:2px">${dates.length ? `Du ${fr(dates[0])} au ${fr(dates[dates.length - 1])} · ` : ''}<b>${hRenta(total)}</b>${montant(total)} · ${data.length} saisie(s) · ${phases.length} phase(s)</div></div>
+        <button onclick="document.getElementById('modal-heures-renta').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer;align-self:flex-start">✕</button>
+      </div>
+      <div style="padding:12px 14px;overflow-y:auto">
+        ${htmlPhases || '<div class="feuille-empty">Aucune saisie sur la période.</div>'}
+        ${parCollab.length ? `<details style="background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px 10px;margin-top:4px"><summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--gris)">👷 Par collaborateur (${parCollab.length})</summary><div style="margin-top:6px">${htmlCollabs}</div></details>` : ''}
+        <div style="font-size:10px;color:#aaa;margin-top:8px">Période : celle sélectionnée dans Renta. Touchez une phase puis une sous-phase pour voir les saisies.</div>
+      </div></div>`;
+    m.style.display = 'flex';
+  }
+
   function selectStatutCmdClientRenta(x) {
     if (!x || !x.id) return '';
     const opts = [...new Set([...(_optionsStatutCC || STATUTS_CC_DEFAUT), ...(x.statut ? [x.statut] : [])])];
@@ -24196,7 +24288,7 @@
       const detail = ouvert ? `
         <div style="margin-top:10px;border-top:1px dashed #e5ded0;padding-top:8px;font-size:11px;color:var(--gris)">
           <div style="font-weight:700;margin-bottom:4px">⏱️ Heures par tâche</div>
-          ${Object.entries(c.taches).sort((a, b) => b[1] - a[1]).map(([t, h]) => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px dotted #eee"><span>${escRenta(t)}</span><span>${hRenta(h)} · ${eurRenta(h * taux)}</span></div>`).join('')}
+          ${Object.entries(c.taches).sort((a, b) => b[1] - a[1]).map(([t, h]) => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px dotted #eee"><span>${lienRentaHeures(c.nom, escRenta(t), t)}</span><span>${hRenta(h)} · ${eurRenta(h * taux)}</span></div>`).join('')}
           <div style="color:var(--gris-moyen);margin-top:4px">👷 ${escRenta([...c.collabs].sort().join(', '))}</div>
           ${c.cmds.length ? `<div style="font-weight:700;margin:8px 0 4px">📦 Commandes fournisseurs (${c.cmds.length})</div>
             ${c.cmds.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee"><span>${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('fr-FR') : '—'} · ${escRenta(x.fournisseur)}${x.numero ? ' · ' + lienRentaCmdFournisseur(x, c.nom) : ''}</span><span style="white-space:nowrap">${eurRenta(x.montant)}</span></div>`).join('')}` : ''}
@@ -24213,7 +24305,7 @@
           ${badge}
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:6px;margin-top:8px">
-          ${chiffre('Heures', hRenta(c.heures))}
+          ${chiffre('Heures', c.heures > 0 ? lienRentaHeures(c.nom, hRenta(c.heures)) : hRenta(c.heures))}
           ${chiffre('Main d\'œuvre', eurRenta(c.mo))}
           ${chiffre(c.retoursCmd.length ? 'Commandes (net)' : 'Commandes', eurRenta(c.commandes))}
           ${c.sorties.length ? chiffre('Stock atelier', (c.stockEstime ? '~ ' : '') + eurRenta(c.stock)) : ''}
