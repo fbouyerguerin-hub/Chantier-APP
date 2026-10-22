@@ -764,7 +764,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V37';
+  const APP_VERSION = 'V38';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -19367,7 +19367,11 @@
         const st = 'font-size:10px;color:#aaa;margin-top:2px';
         const quand = d => d ? ` le ${formaterDate(d)}` : '';
         const qui = n => n ? ` par ${n}` : '';
-        const plusieursArrivages = premiereReceptionPar && receptionnePar && (premiereReceptionPar !== receptionnePar || dateReceptionEffective !== premiereReceptionDate);
+        // V38 : comparaison au jour près (la date de 1re réception est une date seule, la date de
+        // réception est horodatée) — une réception complète d'emblée n'affiche plus « 1er arrivage partiel ».
+        const jour = d => String(d || '').slice(0, 10);
+        const plusieursArrivages = !!(premiereReceptionPar && receptionnePar
+          && (premiereReceptionPar !== receptionnePar || (premiereReceptionDate && jour(dateReceptionEffective) !== jour(premiereReceptionDate))));
         // Réception totale : une seule ligne "Réceptionné le … par …"
         if (receptionnePar && statut !== 'Réception partielle') {
           return `<div style="${st}">📥 Réceptionné${quand(dateReceptionEffective)}${qui(receptionnePar)}</div>`
@@ -19983,7 +19987,8 @@
     // les réceptions suivantes (complément d'une commande déjà partielle)
     // mettent uniquement à jour "Receptionne par" / "Date reception" ci-dessus,
     // sans jamais écraser qui a réceptionné le 1er arrivage.
-    if (premiereReception) {
+    // V38 : seulement si ce 1er arrivage est PARTIEL — une réception complète d'emblée n'a qu'un arrivage.
+    if (premiereReception && partielle) {
       payload['1ere reception par'] = connectedCollab || '';
       payload['1ere reception date'] = dateAujourdhui;
     }
