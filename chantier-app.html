@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V73';
+  const APP_VERSION = 'V74';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22659,7 +22659,7 @@
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:${vueGantt ? 980 : 640}px;height:90vh;display:flex;flex-direction:column;overflow:hidden">
       <div style="padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;display:flex;justify-content:space-between;gap:10px;flex-shrink:0">
         <div><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 ${esc(c['Nom du chantier'] || '')}</div>
-          <div style="display:flex;gap:6px;margin-top:6px">${onglet('gantt', '📊 Gantt')}${onglet('liste', '📋 Liste')}</div>
+          <div style="display:flex;gap:6px;margin-top:6px">${onglet('gantt', '📊 Gantt')}${onglet('liste', '📋 Liste')}${echG ? `<button onclick="imprimerGanttJalons()" title="Imprimer le Gantt des jalons (A4 paysage)" style="border:1px solid #ddd;background:#fff;color:var(--gris);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨 Imprimer</button>` : ''}</div>
           <div style="font-size:11px;color:var(--gris-moyen);margin-top:2px">${faits}/${et.length} jalons franchis${caDuChantierRow(c)?.nom ? ' · CA : ' + esc(caDuChantierRow(c).nom) : ''}${peut ? '' : ' · lecture seule'}</div>
           ${(() => { const ech = echeancesChantier(c, lireJalons(c)); return ech
             ? `<div style="font-size:11px;color:#555;margin-top:3px">🏗 Pose le <b>${ech.pose.split('-').reverse().join('/')}</b> · ⏱ appro <b>${ech.appro} sem.</b> avant fabrication · réserves <b>${ech.reserves} sem.</b>${admin ? ` <a href="#" onclick="event.preventDefault();reglerDelaisJalons()" style="color:var(--vert)">✏️</a>` : ''}</div>`
@@ -22894,6 +22894,60 @@
     const nbExclu = (lireJalons(c).fabExclu || []).length;
     if (o.admin) html += `<div style="margin-top:8px;font-size:11px;display:flex;gap:14px;flex-wrap:wrap"><a href="#" onclick="event.preventDefault();ajouterPhaseFab()" style="color:var(--vert);font-weight:700">+ ajouter une phase</a><a href="#" onclick="event.preventDefault();relireCommandesEbpChantier()" style="color:#5e35b1;font-weight:700">🔄 Relire la commande depuis EBP</a><span id="relire-ebp-etat" style="color:#999"></span>${nbExclu ? `<a href="#" onclick="event.preventDefault();retablirPhasesFab()" style="color:#999">↺ ${nbExclu} phase(s) supprimée(s) — rétablir</a>` : ''}</div>`;
     return html;
+  }
+
+  // V74 : impression du Gantt des jalons d'un chantier (A4 paysage, toutes les phases dépliées)
+  function imprimerGanttJalons() {
+    const c = chantierJalons(); if (!c) return;
+    const d = lireJalons(c), ech = echeancesChantier(c, d);
+    if (!ech) { alert("Gantt indisponible : pas de date de pose au plan de charge pour ce chantier."); return; }
+    const esc = echapperHtmlNote;
+    const { et, faits } = resumeJalons(c);
+    const sauveFab = _fabToutes, sauveSel = _jalonGanttSel;
+    _fabToutes = true; _jalonGanttSel = null;
+    let gantt = '';
+    try { gantt = htmlGanttJalons(c, et, ech, { admin: false, btn: () => '', titre: x => esc(x.m.nom), detailFait: () => '', jalonDispo: idx => jalonDisponible(et, idx) }); }
+    finally { _fabToutes = sauveFab; _jalonGanttSel = sauveSel; }
+    const fr = x => x ? String(x).split('-').reverse().join('/') : '';
+    const ca = caDuChantierRow(c)?.nom || '';
+    const logo = new URL('logo-guerin.jpg', location.href).href;
+    const doc = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Jalons — ${esc(c['Nom du chantier'] || '')}</title>
+      <style>
+        @page { size: A4 landscape; margin: 10mm; }
+        * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #333; margin: 0; --gris: #333; --vert: #4a7c3f; --gris-moyen: #777; }
+        .ent { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #4a7c3f; padding-bottom: 6px; margin-bottom: 8px; }
+        .ent img { height: 38px; }
+        .ent h1 { font-size: 17px; margin: 0; }
+        .ent .s { font-size: 11px; color: #555; margin-top: 2px; }
+        .gantt > div > div { break-inside: avoid; page-break-inside: avoid; }
+        .leg { font-size: 10px; color: #666; margin-top: 6px; }
+        .pied { font-size: 9px; color: #999; margin-top: 4px; text-align: right; }
+      </style></head><body>
+      <div class="ent"><div><h1>🚩 Jalons — ${esc(c['Nom du chantier'] || '')}</h1>
+        <div class="s">${faits}/${et.length} jalons franchis${ca ? ' · CA : ' + esc(ca) : ''} · Pose le <b>${fr(ech.pose)}</b> · appro ${ech.appro} sem. avant fabrication · réserves ${ech.reserves} sem.</div></div>
+        <img src="${logo}" onerror="this.style.display='none'"></div>
+      <div class="gantt">${gantt}</div>
+      <div class="leg">◆ plein = échéance · ◆ vert = date de validation · trait rouge = retard · ligne pointillée rouge = date d'impression · ✅ validé · ▶ en cours · ⛔ bloqué · ⊘ sans objet · ○ à venir</div>
+      <div class="pied">Guérin Bâtiments — imprimé le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toTimeString().slice(0, 5)} par ${esc(connectedCollab || '')}</div>
+      </body></html>`;
+    let ifr = document.getElementById('iframe-impression-jalons');
+    if (ifr) ifr.remove();
+    ifr = document.createElement('iframe');
+    ifr.id = 'iframe-impression-jalons';
+    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    document.body.appendChild(ifr);
+    const w = ifr.contentWindow, dd = w.document;
+    dd.open(); dd.write(doc); dd.close();
+    // Nettoyage des éléments interactifs (liens, boutons, « à valider », dépliage, légende écran)
+    dd.querySelectorAll('a, button').forEach(e => e.remove());
+    dd.querySelectorAll('[title="Cliquer pour valider ce jalon"]').forEach(e => e.remove());
+    dd.querySelectorAll('.gantt div').forEach(e => { const t = (e.textContent || '').trim(); if (e.children.length === 0 && (/^▾ Masquer les phases/.test(t) || /^◆ plein = échéance/.test(t))) e.remove(); });
+    dd.querySelectorAll('[onclick]').forEach(e => { e.removeAttribute('onclick'); e.style.cursor = 'default'; e.style.background = ''; });
+    { const tw = dd.createTreeWalker(dd.querySelector('.gantt'), 4); let n; while ((n = tw.nextNode())) n.nodeValue = n.nodeValue.replace(/[▸▾] /g, ''); }
+    const lancer = () => { try { w.focus(); w.print(); } catch (e) { alert('Impression impossible : ' + e.message); } };
+    const img = dd.querySelector('img');
+    if (img && !img.complete) { img.onload = img.onerror = () => setTimeout(lancer, 100); setTimeout(lancer, 2500); } else setTimeout(lancer, 150);
   }
 
   function peutValiderJalons() { return ['Administrateur', 'Gestionnaire'].includes(connectedDroit); }
