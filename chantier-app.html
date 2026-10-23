@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V77';
+  const APP_VERSION = 'V78';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1137,6 +1137,7 @@
       updateBadgeMessages();
       verifierSondagesEnAttente();
       chargerMessageIndividuel();
+      try { if (typeof calculerMesJalons === 'function') calculerMesJalons(); } catch (e) {} // V78 : 🚩 à jour au retour sur l'appli
       // Retour sur l'appli (mobile) : on relit les validations d'heures
       if (typeof viderCacheBaserow === 'function') viderCacheBaserow();
       if (document.getElementById('modal-validation-heures')?.style.display === 'flex') rafraichirValidationHeures();
@@ -22222,7 +22223,7 @@
     if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
   }
   function lireJalons(c) {
-    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, taches: o.taches || {}, echRep: o.echRep || {}, appro: o.appro, reserves: o.reserves }; }
+    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { ...o, j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, taches: o.taches || {}, echRep: o.echRep || {}, appro: o.appro, reserves: o.reserves }; }
     catch (e) { return { j: {}, resp: {}, fab: c?._fab || [] }; }
   }
   // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
@@ -22342,6 +22343,13 @@
     });
     const ech = echeancesChantier(c, d);
     res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; { const rp = (d.echRep || {})[x.m.id]; x.echInit = x.ech; x.reportsEch = rp?.reports || []; if (rp?.ech) x.ech = rp.ech; } x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
+    // V78 : un jalon de synthèse (J8 études, J12 fabrication, J14 pose) suit le report de ses phases :
+    // son échéance passe à la plus tardive des phases repoussées encore ouvertes.
+    res.forEach(x => {
+      if (x.m.fab || !['etude', 'fab', 'pose'].includes(x.m.auto)) return;
+      const rep = res.filter(y => y.m.fab && y.m.kind === x.m.auto && !JALON_FAIT(y) && (y.reportsEch || []).length && y.ech).map(y => y.ech).sort().at(-1);
+      if (rep && (!x.ech || rep > x.ech)) { x.echInit = x.echInit || x.ech; x.ech = rep; x.decaleParPhases = true; x.temps = tempsJalon(x); }
+    });
     return res;
   }
 
@@ -22382,6 +22390,10 @@
   }
   function htmlEcheance(x) {
     if (!x.ech) return '';
+    if (x.decaleParPhases && x.temps) return htmlEcheanceBase(x) + ' <span style="color:#1F6AA5;font-size:10px">⏭ décalée par ses phases repoussées</span>';
+    return htmlEcheanceBase(x);
+  }
+  function htmlEcheanceBase(x) {
     const t = x.temps, fr = x.ech.split('-').reverse().join('/');
     if (!t) return `<span style="color:#999">📅 ${fr}</span>`;
     return t.niveau === 'retard' ? `<b style="color:#c0392b">🔴 en retard de ${-t.jours} j (échéance ${fr})</b>`
@@ -23268,14 +23280,26 @@
   }
 
   // ── « Mes jalons » : bouton 🚩 dans l'en-tête, pour chaque titulaire ──
-  let _mesJalons = [], _mesJalonsTimer = null;
+  let _mesJalons = [], _mesJalonsTimer = null, _mesJalonsLecture = 0;
   let _mesTachesJalons = [], _mesTachesPlusTard = [], _mesPhasesPlusTard = [];
   async function calculerMesJalons() {
     if (!connectedCollab) return;
     try {
       await chargerCommandesJalons();
+      // V78 : relecture des chantiers si la copie locale a plus de 5 min (sinon le 🚩 ne voyait pas
+      // les reports / validations faits depuis un autre appareil avant un rechargement de l'appli)
+      if (chantiersGestionCache.length && Date.now() - _mesJalonsLecture > 300000) {
+        // copie locale existante : on ne met à jour que le champ Jalons (la liste affichée en Gestion reste intacte)
+        try {
+          const frais = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+          const parId = new Map((frais || []).map(r => [r.id, r]));
+          chantiersGestionCache.forEach(c => { const f = parId.get(c.id); if (f && Object.prototype.hasOwnProperty.call(f, CHAMP_JALONS)) c[CHAMP_JALONS] = f[CHAMP_JALONS]; });
+          _mesJalonsLecture = Date.now();
+        } catch (e) {}
+      }
       if (!chantiersGestionCache.length) {
         chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
+        _mesJalonsLecture = Date.now();
         memoriserCaChantiers(chantiersGestionCache); detecterChampJalons(chantiersGestionCache);
       }
       const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [];
@@ -23283,7 +23307,7 @@
         const st = c['Statue']?.value || c['Statue'] || '';
         if (estStatutCloture(st) || st === 'Terminé') return;
         const et = etatsJalons(c);
-        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) ((x.reportsEch || []).length && x.ech > dateYMD(new Date()) && x.etat !== 'bloque' ? phasesPlusTard : liste).push({ c, x }); });
+        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) (((x.reportsEch || []).length || x.decaleParPhases) && x.ech > dateYMD(new Date()) && x.etat !== 'bloque' ? phasesPlusTard : liste).push({ c, x }); });
         // V75 : tâches qui me sont attribuées et pas encore validées
         Object.entries(lireJalons(c).taches || {}).forEach(([jid, l]) => (l || []).forEach(t => {
           if (!t.fait && t.pour && estMoi([t.pour])) { const j = et.find(y => y.m.id === jid); (t.ech && t.ech > dateYMD(new Date()) ? tachesPlusTard : taches).push({ c, t, jid, jnom: j ? (j.m.fab ? j.m.nom : j.m.id + ' · ' + j.m.nom) : jid }); }
@@ -23334,7 +23358,7 @@
           <div style="font-size:13px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
           <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div>${htmlEcheanceTache(t)}</div>`).join('') : ''}
       ${_mesPhasesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Phases repoussées (${_mesPhasesPlusTard.length})</div>` + _mesPhasesPlusTard.map(({ c, x }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
-          <div style="font-size:12px;font-weight:700;color:var(--gris)">🏭 ${esc(x.m.nom)}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">${x.m.fab ? '🏭 ' : esc(x.m.id) + ' · '}${esc(x.m.nom)}${x.decaleParPhases ? ' <span style="font-weight:400;color:#aaa">(suit ses phases repoussées)</span>' : ''}</div>
           <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · revient le <b>${x.ech.split('-').reverse().join('/')}</b></div></div>`).join('') : ''}
       ${_mesTachesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Tâches repoussées / à venir (${_mesTachesPlusTard.length})</div>` + _mesTachesPlusTard.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
