@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V70';
+  const APP_VERSION = 'V71';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22011,7 +22011,7 @@
     if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
   }
   function lireJalons(c) {
-    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, appro: o.appro, reserves: o.reserves }; }
+    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, taches: o.taches || {}, appro: o.appro, reserves: o.reserves }; }
     catch (e) { return { j: {}, resp: {}, fab: c?._fab || [] }; }
   }
   // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
@@ -22489,12 +22489,31 @@
   }
 
 
-  // ── V62 : notes sur les jalons et les phases ──
+  // ── V62 : notes sur les jalons et les phases ── V71 : tâches à cocher + suppression des notes et tâches ──
   function notesJalon(c, jid) { return (lireJalons(c).notes || {})[jid] || []; }
+  function tachesJalon(c, jid) { return (lireJalons(c).taches || {})[jid] || []; }
+  function horodatageJalon() { return new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5); }
+  function idElementJalon() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  // Clé d'un élément : son id (V71) ou, pour les anciennes notes sans id, auteur + date + texte
+  function cleElementJalon(n) { return n.id || ((n.par || '') + '|' + (n.le || '') + '|' + (n.txt || '')); }
+  // Suppression : l'auteur, ou un Gestionnaire / Administrateur
+  function peutSupprimerElementJalon(n) { return peutValiderJalons() || (!!connectedCollab && n.par === connectedCollab); }
   function htmlNotesJalon(c, jid) {
-    const esc = echapperHtmlNote, l = notesJalon(c, jid);
-    return (l.length ? `<div style="margin-top:6px;border-left:3px solid #e0c58a;padding-left:8px">${l.map(n => `<div style="font-size:11px;color:#555;margin-bottom:3px"><b>${esc(n.par || '')}</b> <span style="color:#aaa">${esc(n.le || '')}</span> — ${esc(n.txt)}</div>`).join('')}</div>` : '')
-      + `<a href="#" onclick="event.preventDefault();event.stopPropagation();ajouterNoteJalon('${jid}')" style="display:inline-block;margin-top:5px;font-size:11px;color:var(--vert);font-weight:700">📝 Ajouter une note${l.length ? ` (${l.length})` : ''}</a>`;
+    const esc = echapperHtmlNote, l = notesJalon(c, jid), t = tachesJalon(c, jid);
+    const cle = s => encodeURIComponent(s).replace(/'/g, '%27');
+    const corbeille = (type, n) => peutSupprimerElementJalon(n) ? ` <a href="#" title="Supprimer" onclick="event.preventDefault();event.stopPropagation();supprimerElementJalon('${jid}','${type}','${cle(cleElementJalon(n))}')" style="color:#c0392b;text-decoration:none;font-size:11px">🗑</a>` : '';
+    const nbFaites = t.filter(x => x.fait).length;
+    const htmlTaches = t.length ? `<div style="margin-top:6px;border-left:3px solid #9ab8d6;padding-left:8px">
+        <div style="font-size:10px;font-weight:800;color:#1F6AA5;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">☑ Tâches · ${nbFaites}/${t.length}</div>
+        ${t.map(x => `<div style="display:flex;align-items:flex-start;gap:6px;font-size:11px;color:#555;margin-bottom:3px">
+          <input type="checkbox" ${x.fait ? 'checked' : ''} onclick="event.stopPropagation()" onchange="cocherTacheJalon('${jid}','${cle(x.id)}',this.checked)" style="margin:1px 0 0;width:15px;height:15px;flex-shrink:0;cursor:pointer;accent-color:var(--vert)">
+          <div style="flex:1;min-width:0"><span style="${x.fait ? 'text-decoration:line-through;color:#999' : 'color:var(--gris);font-weight:600'}">${esc(x.txt)}</span>${corbeille('t', x)}
+            <div style="font-size:10px;color:#aaa">${x.fait ? `✔ ${esc(x.faitPar || '')}${x.faitLe ? ' le ' + esc(x.faitLe) : ''}` : `créée par ${esc(x.par || '')}${x.le ? ' le ' + esc(x.le) : ''}`}</div></div></div>`).join('')}</div>` : '';
+    const htmlNotes = l.length ? `<div style="margin-top:6px;border-left:3px solid #e0c58a;padding-left:8px">${l.map(n => `<div style="font-size:11px;color:#555;margin-bottom:3px"><b>${esc(n.par || '')}</b> <span style="color:#aaa">${esc(n.le || '')}</span> — ${esc(n.txt)}${corbeille('n', n)}</div>`).join('')}</div>` : '';
+    return htmlTaches + htmlNotes
+      + `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:5px">
+          <a href="#" onclick="event.preventDefault();event.stopPropagation();ajouterTacheJalon('${jid}')" style="font-size:11px;color:#1F6AA5;font-weight:700">☑ Ajouter une tâche${t.length ? ` (${t.length - nbFaites} à faire)` : ''}</a>
+          <a href="#" onclick="event.preventDefault();event.stopPropagation();ajouterNoteJalon('${jid}')" style="font-size:11px;color:var(--vert);font-weight:700">📝 Ajouter une note${l.length ? ` (${l.length})` : ''}</a></div>`;
   }
   async function ajouterNoteJalon(jid) {
     const t = prompt('Note :', '');
@@ -22502,7 +22521,45 @@
     try {
       await ecrireJalons(d => {
         d.notes = d.notes || {};
-        (d.notes[jid] = d.notes[jid] || []).push({ par: connectedCollab || '', le: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5), txt: t.trim().slice(0, 1000) });
+        (d.notes[jid] = d.notes[jid] || []).push({ id: idElementJalon(), par: connectedCollab || '', le: horodatageJalon(), txt: t.trim().slice(0, 1000) });
+      });
+      renderJalonsChantier();
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+  async function ajouterTacheJalon(jid) {
+    const t = prompt('Nouvelle tâche :', '');
+    if (!t || !t.trim()) return;
+    try {
+      await ecrireJalons(d => {
+        d.taches = d.taches || {};
+        (d.taches[jid] = d.taches[jid] || []).push({ id: idElementJalon(), par: connectedCollab || '', le: horodatageJalon(), txt: t.trim().slice(0, 300), fait: false });
+      });
+      renderJalonsChantier();
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+  async function cocherTacheJalon(jid, idEnc, fait) {
+    const id = decodeURIComponent(idEnc);
+    try {
+      await ecrireJalons(d => {
+        const x = ((d.taches || {})[jid] || []).find(z => z.id === id);
+        if (!x) return;
+        x.fait = !!fait;
+        if (fait) { x.faitPar = connectedCollab || ''; x.faitLe = horodatageJalon(); } else { delete x.faitPar; delete x.faitLe; }
+      });
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+    renderJalonsChantier();
+  }
+  async function supprimerElementJalon(jid, type, cleEnc) {
+    const cle = decodeURIComponent(cleEnc), champ = type === 't' ? 'taches' : 'notes';
+    const n = ((lireJalons(chantierJalons() || {})[champ] || {})[jid] || []).find(z => cleElementJalon(z) === cle);
+    if (!n) { renderJalonsChantier(); return; }
+    if (!peutSupprimerElementJalon(n)) { alert('Seul son auteur (ou un gestionnaire) peut supprimer cet élément.'); return; }
+    if (!confirm(`Supprimer cette ${type === 't' ? 'tâche' : 'note'} ?\n\n« ${String(n.txt || '').slice(0, 120)} »`)) return;
+    try {
+      await ecrireJalons(d => {
+        if (!d[champ] || !d[champ][jid]) return;
+        d[champ][jid] = d[champ][jid].filter(z => cleElementJalon(z) !== cle);
+        if (!d[champ][jid].length) delete d[champ][jid];
       });
       renderJalonsChantier();
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
