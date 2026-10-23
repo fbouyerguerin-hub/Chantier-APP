@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V83';
+  const APP_VERSION = 'V84';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -23382,7 +23382,8 @@
         const st = c['Statue']?.value || c['Statue'] || '';
         if (estStatutCloture(st) || st === 'Terminé') return;
         const et = etatsJalons(c);
-        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) ((x.masque || ((x.reportsEch || []).length || x.decaleParPhases) && x.ech > dateYMD(new Date())) && x.etat !== 'bloque' ? phasesPlusTard : liste).push({ c, x }); });
+        // V84 : les phases (étude / fabrication / pose) n'apparaissent au 🚩 que si elles sont en retard (ou bloquées)
+        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes) && (!x.m.fab || x.etat === 'bloque' || x.temps?.niveau === 'retard' || x.masque)) ((x.masque || ((x.reportsEch || []).length || x.decaleParPhases) && x.ech > dateYMD(new Date())) && x.etat !== 'bloque' ? phasesPlusTard : liste).push({ c, x }); });
         // V75 : tâches qui me sont attribuées et pas encore validées
         Object.entries(lireJalons(c).taches || {}).forEach(([jid, l]) => (l || []).forEach(t => {
           if (!t.fait && t.pour && estMoi([t.pour])) { const j = et.find(y => y.m.id === jid); (t.ech && t.ech > dateYMD(new Date()) ? tachesPlusTard : taches).push({ c, t, jid, jnom: j ? (j.m.fab ? j.m.nom : j.m.id + ' · ' + j.m.nom) : jid }); }
