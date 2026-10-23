@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V71';
+  const APP_VERSION = 'V72';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -5833,7 +5833,7 @@
     }
     container.innerHTML = liste.map(c => {
       const dernierEstEnvoye = String(c.dernier['Expediteur'] || '').trim() === String(connectedViewId).trim();
-      const texte = c.dernier['Messages'] || '';
+      const texte = lireSondage(c.dernier) ? '📊 ' + escSondage(lireSondage(c.dernier).q) : (c.dernier['Messages'] || '');
       const apercu = texte ? (texte.length > 55 ? texte.slice(0, 55) + '…' : texte) : ((c.dernier['Fichiers']||[]).length ? '📎 Pièce jointe' : '');
       return `<div onclick="ouvrirConversation('${c.id}','${c.nom.replace(/'/g,"\\'")}')" style="background:#fff;border-radius:12px;margin-bottom:8px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,0.06);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:4px solid ${c.nonLus > 0 ? 'var(--vert)' : '#eee'}">
         <div style="min-width:0;flex:1">
@@ -5927,7 +5927,8 @@
           const fichiers = m['Fichiers'] || [];
           return `<div style="background:${estEnvoye ? '#f0f7ef' : '#f7f7f7'};border-radius:10px;margin-bottom:8px;padding:10px 12px;border-left:3px solid ${estEnvoye ? 'var(--vert)' : '#A28A6E'}">
             <div style="font-size:11px;font-weight:700;color:${estEnvoye ? 'var(--vert)' : '#A28A6E'};margin-bottom:4px">${estEnvoye ? 'Vous' : currentConversation.nom}</div>
-            ${m['Messages'] ? `<div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages']}</div>` : ''}
+            ${m['Messages'] && !lireSondage(m) ? `<div style="font-size:13px;color:var(--gris);line-height:1.5;white-space:pre-wrap">${m['Messages']}</div>` : ''}
+            ${lireSondage(m) ? htmlSondageMessage(Object.assign(m, { _modifVote: _sondageModifIds.has(m.id) }), estEnvoye) : ''}
             ${fichiers.length ? fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:block;font-size:12px;color:var(--vert);text-decoration:underline;margin-top:4px">📎 ${f.visible_name || f.name || 'Fichier'}</a>`).join('') : ''}
             <div style="font-size:10px;color:#aaa;margin-top:4px">${m['Date envoi'] || ''}${estEnvoye ? (lu ? ' · ✅ Lu' : ' · 📤 Envoyé') : (lu ? ' · ✅ Lu' : ' · 🔔 Non lu')}</div>
           </div>`;
@@ -6030,7 +6031,9 @@
         messageActif = msg;
         const nomExpediteur = usersMap[String(msg['Expediteur'] || '').trim()] || 'un collaborateur';
         document.getElementById('modal-message-title').textContent = '📢 Message de ' + nomExpediteur;
-        document.getElementById('modal-message-body').textContent = msg['Messages'];
+        document.getElementById('modal-message-body').textContent = lireSondage(msg)
+          ? '📊 Sondage : ' + lireSondage(msg).q + '\n\nRépondez Pour ou Contre (avec une note si vous le souhaitez) dans ✉️ Messages, conversation avec ' + nomExpediteur + '.'
+          : msg['Messages'];
         document.getElementById('modal-message').classList.add('open');
       }
     } catch(e) {}
@@ -6121,6 +6124,7 @@
     const modal = document.getElementById('modal-nouveau-message');
     modal.style.display = 'flex';
     document.getElementById('nouveau-msg-texte').value = '';
+    { const cbS = document.getElementById('nouveau-msg-sondage'); if (cbS) { cbS.checked = false; basculerSondageNouveauMessage(cbS); } }
     document.getElementById('nouveau-msg-dest-count').textContent = '';
     document.getElementById('nouveau-msg-pj-input').value = '';
     document.getElementById('nouveau-msg-pj-preview').innerHTML = '';
@@ -6201,6 +6205,15 @@
     const btn = document.getElementById('btn-envoyer-nouveau-message');
     if (btn) { btn.disabled = true; btn.textContent = 'Envoi…'; }
     const destinataires = checked.map(cb => String(cb.value));
+    if (document.getElementById('nouveau-msg-sondage')?.checked) {
+      if (!texte) { alert('Veuillez saisir la question du sondage'); if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; } return; }
+      try {
+        const ok = await envoyerSondage(destinataires, texte);
+        if (ok) { fermerNouveauMessage(); alert(`✅ Sondage envoyé à ${destinataires.length} destinataire${destinataires.length > 1 ? 's' : ''}`); loadHistoriqueMessages(); }
+      } catch (e) { alert('Erreur : ' + e.message); }
+      finally { if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; } }
+      return;
+    }
     try {
       const fichiers = [];
       for (const file of pjInput.files) {
@@ -6256,6 +6269,150 @@
     const ok = await envoyerMessageGroupe([String(collabId)], texte.trim());
     alert(ok ? `✅ Message envoyé à ${collabNom}` : `❌ Échec de l'envoi à ${collabNom}, réessayez`);
   }
+
+
+  // ── V72 : SONDAGES DANS LA MESSAGERIE ──
+  // Un sondage est un message diffusé dont le champ texte long « Sondage » (table Messages) contient :
+  // { q: question, choix: ['Pour','Contre'], votes: { <Vue ID>: { c, note, nom, le } } }
+  const CHAMP_SONDAGE = 'Sondage';
+  const SONDAGE_QUESTION_DEFAUT = 'Êtes-vous pour ou contre rester sur la base de 8,5 h par jour ?';
+  function lireSondage(m) {
+    if (!m || !m[CHAMP_SONDAGE]) return null;
+    try { const o = JSON.parse(m[CHAMP_SONDAGE]); return o && o.q ? { q: o.q, choix: o.choix || ['Pour', 'Contre'], votes: o.votes || {} } : null; } catch (e) { return null; }
+  }
+  function escSondage(s) { return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+  function alerteChampSondageManquant() {
+    alert("Les sondages ont besoin d'un champ dans Baserow :\n\nTable « Messages » → ajouter un champ de type « Texte long » nommé exactement : Sondage\n\nPuis réessayez.");
+  }
+  function basculerSondageNouveauMessage(cb) {
+    const ta = document.getElementById('nouveau-msg-texte');
+    const lab = document.getElementById('nouveau-msg-label');
+    if (lab) lab.textContent = cb.checked ? 'Question du sondage' : 'Message';
+    if (cb.checked && !ta.value.trim()) ta.value = SONDAGE_QUESTION_DEFAUT;
+    if (!cb.checked && ta.value.trim() === SONDAGE_QUESTION_DEFAUT) ta.value = '';
+  }
+  async function envoyerSondage(destinataires, question) {
+    const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
+      method: 'POST',
+      headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        'Messages': '📊 SONDAGE — ' + question,
+        'Lu': false, 'Lu par': '',
+        'Destinataire': destinataires.join(','),
+        'Expediteur': String(connectedViewId),
+        'Date envoi': dateYMD(new Date()),
+        [CHAMP_SONDAGE]: JSON.stringify({ q: question, choix: ['Pour', 'Contre'], votes: {} })
+      })
+    });
+    if (!res.ok) throw new Error('Envoi refusé (' + res.status + ')');
+    const row = await res.json();
+    if (!Object.prototype.hasOwnProperty.call(row, CHAMP_SONDAGE)) {
+      // Champ absent : on retire le message incomplet pour ne pas diffuser un sondage sans vote possible
+      try { await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${row.id}/`, { method: 'DELETE', headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }); } catch (e) {}
+      alerteChampSondageManquant();
+      return false;
+    }
+    return true;
+  }
+  // Bloc affiché sous le message dans le fil de conversation
+  function htmlSondageMessage(m, estEnvoye) {
+    const s = lireSondage(m); if (!s) return '';
+    const moi = String(connectedViewId).trim();
+    const votes = Object.values(s.votes);
+    const nb = c => votes.filter(v => v.c === c).length;
+    const dests = destinatairesListe(m).length;
+    let html = `<div onclick="event.stopPropagation()" style="margin-top:8px;background:#fff;border:1.5px solid #c9b48a;border-radius:10px;padding:10px">
+      <div style="font-size:13px;font-weight:800;color:var(--gris);margin-bottom:6px">📊 ${escSondage(s.q)}</div>`;
+    if (estEnvoye) {
+      html += `<div style="font-size:12px;color:var(--gris)">👍 Pour <b>${nb('Pour')}</b> · 👎 Contre <b>${nb('Contre')}</b> · ⏳ sans réponse <b>${Math.max(0, dests - votes.length)}</b></div>
+        <a href="#" onclick="event.preventDefault();ouvrirResultatsSondage(${m.id})" style="display:inline-block;margin-top:6px;font-size:12px;color:var(--vert);font-weight:700">Voir le détail et les notes →</a>`;
+    } else {
+      const v = s.votes[moi];
+      if (v && !m._modifVote) {
+        html += `<div style="font-size:12px;color:var(--gris)">Votre vote : <b style="color:${v.c === 'Pour' ? 'var(--vert)' : '#c0392b'}">${v.c === 'Pour' ? '👍 Pour' : '👎 Contre'}</b> <span style="color:#aaa">(${escSondage(v.le || '')})</span></div>
+          ${v.note ? `<div style="font-size:12px;color:#555;margin-top:3px;font-style:italic">« ${escSondage(v.note)} »</div>` : ''}
+          <a href="#" onclick="event.preventDefault();modifierVoteSondage(${m.id})" style="display:inline-block;margin-top:6px;font-size:11px;color:#a5761f;font-weight:700">✏️ Modifier mon vote</a>`;
+      } else {
+        html += `<textarea id="sondage-note-${m.id}" placeholder="Votre note (facultatif)…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:7px;font-size:12px;min-height:44px;resize:vertical">${escSondage(v?.note || '')}</textarea>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            <button onclick="voterSondage(${m.id},'Pour')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">👍 Pour</button>
+            <button onclick="voterSondage(${m.id},'Contre')" style="flex:1;background:#c0392b;color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">👎 Contre</button>
+          </div>`;
+      }
+    }
+    return html + '</div>';
+  }
+  let _sondageModifIds = new Set();
+  function modifierVoteSondage(id) { _sondageModifIds.add(id); rafraichirConversation(); }
+  async function voterSondage(id, choix) {
+    const note = (document.getElementById('sondage-note-' + id)?.value || '').trim().slice(0, 1000);
+    const url = `https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/${id}/?user_field_names=true`;
+    try {
+      const rg = await fetch(url, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } });
+      if (!rg.ok) throw new Error('Lecture du sondage impossible (' + rg.status + ')');
+      const row = await rg.json();
+      const s = lireSondage(row);
+      if (!s) throw new Error('Sondage introuvable');
+      s.votes[String(connectedViewId).trim()] = { c: choix, note, nom: connectedCollab || '', le: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5) };
+      const payload = { [CHAMP_SONDAGE]: JSON.stringify(s) };
+      if (estGroupe(row)) payload['Lu par'] = [...new Set([...luParListe(row), String(connectedViewId).trim()])].join(',');
+      else { payload['Lu'] = true; payload['Date lecture'] = dateYMD(new Date()); }
+      const rp = await fetch(url, { method: 'PATCH', headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!rp.ok) throw new Error('Vote refusé (' + rp.status + ')');
+      _sondageModifIds.delete(id);
+      await rafraichirConversation();
+      updateBadgeMessages();
+    } catch (e) { alert('❌ ' + e.message); }
+  }
+  // Liste des sondages (ceux que j'ai envoyés ; l'Administrateur les voit tous)
+  async function ouvrirSondages(idDetail) {
+    let modal = document.getElementById('modal-sondages');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'modal-sondages';
+      modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:310;align-items:flex-end;justify-content:center';
+      modal.onclick = e => { if (e.target === modal) modal.style.display = 'none'; };
+      modal.innerHTML = `<div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #eee">
+          <div style="font-size:15px;font-weight:800;color:var(--gris)">📊 Sondages</div>
+          <button onclick="document.getElementById('modal-sondages').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#aaa">✕</button>
+        </div>
+        <div id="sondages-content" style="overflow-y:auto;padding:12px 16px 24px;flex:1"></div></div>`;
+      document.body.appendChild(modal);
+    }
+    const z = document.getElementById('sondages-content');
+    z.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    modal.style.display = 'flex';
+    try {
+      const [resMsg, resUsers] = await Promise.all([
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+      ]);
+      const msgs = (await resMsg.json()).results || [], users = (await resUsers.json()).results || [];
+      const noms = {}; users.forEach(u => { if (u['Vue ID']) noms[String(u['Vue ID']).trim()] = u['Nom complet'] || u['Identifiant'] || '?'; });
+      const moi = String(connectedViewId).trim();
+      const liste = msgs.filter(m => lireSondage(m) && (connectedDroit === 'Administrateur' || String(m['Expediteur'] || '').trim() === moi))
+        .filter(m => !idDetail || m.id === idDetail).sort((a, b) => b.id - a.id);
+      if (!liste.length) { z.innerHTML = '<div class="feuille-empty">Aucun sondage. Pour en créer un : ✉️ + Nouveau → cocher « 📊 Sondage ».</div>'; return; }
+      z.innerHTML = liste.map(m => {
+        const s = lireSondage(m), dests = destinatairesListe(m);
+        const ligne = (id) => { const v = s.votes[id]; return v ? `<div style="padding:6px 0;border-top:1px dotted #eee;font-size:12px"><b>${escSondage(noms[id] || v.nom || 'ID ' + id)}</b> — <b style="color:${v.c === 'Pour' ? 'var(--vert)' : '#c0392b'}">${v.c === 'Pour' ? '👍 Pour' : '👎 Contre'}</b> <span style="color:#aaa;font-size:10px">${escSondage(v.le || '')}</span>${v.note ? `<div style="color:#555;font-style:italic;margin-top:2px">« ${escSondage(v.note)} »</div>` : ''}</div>` : ''; };
+        const votants = Object.keys(s.votes);
+        const pour = votants.filter(id => s.votes[id].c === 'Pour'), contre = votants.filter(id => s.votes[id].c === 'Contre');
+        const sansRep = dests.filter(id => !s.votes[id]);
+        const pct = n => votants.length ? Math.round(n / votants.length * 100) : 0;
+        return `<div style="background:#faf7f2;border:1px solid #e5ded0;border-radius:12px;padding:12px;margin-bottom:12px">
+          <div style="font-size:14px;font-weight:800;color:var(--gris)">${escSondage(s.q)}</div>
+          <div style="font-size:11px;color:#999;margin-top:2px">Envoyé le ${escSondage(m['Date envoi'] || '')} par ${escSondage(noms[String(m['Expediteur'] || '').trim()] || '')} · ${dests.length} destinataire(s)</div>
+          <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#eee;margin:10px 0 4px"><div style="width:${pct(pour.length)}%;background:var(--vert)"></div><div style="width:${pct(contre.length)}%;background:#c0392b"></div></div>
+          <div style="font-size:12px;color:var(--gris)">👍 Pour <b>${pour.length}</b> (${pct(pour.length)} %) · 👎 Contre <b>${contre.length}</b> (${pct(contre.length)} %) · ⏳ sans réponse <b>${sansRep.length}</b></div>
+          <div style="margin-top:8px">${[...pour, ...contre].map(ligne).join('')}</div>
+          ${sansRep.length ? `<div style="font-size:11px;color:#999;margin-top:6px">⏳ Pas encore répondu : ${sansRep.map(id => escSondage(noms[id] || 'ID ' + id)).join(', ')}</div>` : ''}
+        </div>`;
+      }).join('') + (idDetail ? `<a href="#" onclick="event.preventDefault();ouvrirSondages()" style="font-size:12px;color:var(--vert);font-weight:700">← Tous les sondages</a>` : '');
+    } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>'; }
+  }
+  function ouvrirResultatsSondage(id) { ouvrirSondages(id); }
 
   // ── PLAN DE CHARGE ──
   const POSTES_CHARGE = [
@@ -26425,7 +26582,7 @@
   <div class="bandeau-fige">
   <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">✉️ Mes messages</div>
-    <button onclick="ouvrirNouveauMessage()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+    <div style="display:flex;gap:6px"><button onclick="ouvrirSondages()" style="background:#fff;color:var(--gris);border:1px solid #ddd5c5;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer">📊 Sondages</button><button onclick="ouvrirNouveauMessage()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button></div>
   </div>
   <div style="padding:0 16px 10px">
     <input type="text" id="search-messages-collab" placeholder="🔍 Rechercher un collaborateur…" oninput="filtrerConversations()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px 10px;font-size:13px;outline:none" />
@@ -26457,7 +26614,8 @@
       <div id="nouveau-msg-dest-count" style="font-size:11px;color:var(--beige);margin-top:4px;font-weight:600"></div>
     </div>
     <div style="margin-bottom:12px">
-      <label style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
+      <label style="display:flex;align-items:center;gap:8px;background:#faf7f2;border:1px solid #e5ded0;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer"><input type="checkbox" id="nouveau-msg-sondage" onchange="basculerSondageNouveauMessage(this)" style="width:16px;height:16px;accent-color:var(--vert)"> 📊 Sondage Pour / Contre <span style="font-weight:400;color:#999">(chacun vote et peut ajouter une note)</span></label>
+      <label id="nouveau-msg-label" style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
       <textarea id="nouveau-msg-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;resize:vertical;min-height:100px;outline:none"></textarea>
     </div>
     <div style="margin-bottom:16px">
