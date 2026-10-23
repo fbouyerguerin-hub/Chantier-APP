@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V72';
+  const APP_VERSION = 'V73';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1128,12 +1128,14 @@
     intervalVeilleMessages = setInterval(() => {
       if (!connectedViewId) return;
       updateBadgeMessages();
+      verifierSondagesEnAttente();
       chargerMessageIndividuel();
     }, 60 * 1000);
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && connectedViewId) {
       updateBadgeMessages();
+      verifierSondagesEnAttente();
       chargerMessageIndividuel();
       // Retour sur l'appli (mobile) : on relit les validations d'heures
       if (typeof viderCacheBaserow === 'function') viderCacheBaserow();
@@ -3099,6 +3101,7 @@
     _validationAutoOuverte = null;
     connectedCollab = null;
     connectedViewId = null;
+    try { _sondageConnexionOuvert = false; const ms = document.getElementById('modal-sondage-connexion'); if (ms) ms.style.display = 'none'; } catch (e) {}
     feuilleCollab = null;
     connectedUserRowId = null;
     _collaborateurConnecteCache = null;
@@ -5744,6 +5747,7 @@
   }
 
   async function chargerMessage() {
+    await verifierSondagesEnAttente();
     await chargerMessageIndividuel();
   }
 
@@ -6025,7 +6029,7 @@
         if (u['Vue ID']) usersMap[String(u['Vue ID']).trim()] = u['Nom complet'] || u['Identifiant'] || '?';
       });
       const msg = (data.results || []).find(r =>
-        destinatairesListe(r).includes(String(connectedViewId).trim()) && !estLuParMoi(r, connectedViewId)
+        destinatairesListe(r).includes(String(connectedViewId).trim()) && !estLuParMoi(r, connectedViewId) && !lireSondage(r)
       );
       if (msg && msg['Messages']) {
         messageActif = msg;
@@ -6362,7 +6366,8 @@
       _sondageModifIds.delete(id);
       await rafraichirConversation();
       updateBadgeMessages();
-    } catch (e) { alert('❌ ' + e.message); }
+      return true;
+    } catch (e) { alert('❌ ' + e.message); return false; }
   }
   // Liste des sondages (ceux que j'ai envoyés ; l'Administrateur les voit tous)
   async function ouvrirSondages(idDetail) {
@@ -6413,6 +6418,55 @@
     } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>'; }
   }
   function ouvrirResultatsSondage(id) { ouvrirSondages(id); }
+  // V73 : un sondage sans réponse s'affiche dès la connexion (et à chaque retour sur l'appli) jusqu'au vote
+  let _sondageConnexionOuvert = false;
+  async function verifierSondagesEnAttente() {
+    if (!connectedViewId || _sondageConnexionOuvert) return;
+    try {
+      const [resMsg, resUsers] = await Promise.all([
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true&size=200`, { headers: { 'Authorization': `Token ${BASEROW_TOKEN}` } }),
+        fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS })
+      ]);
+      const msgs = (await resMsg.json()).results || [], users = (await resUsers.json()).results || [];
+      const moi = String(connectedViewId).trim();
+      const m = msgs.filter(r => { const s = lireSondage(r); return s && destinatairesListe(r).includes(moi) && !s.votes[moi]; }).sort((a, b) => a.id - b.id)[0];
+      if (!m || _sondageConnexionOuvert) return;
+      const u = users.find(x => String(x['Vue ID'] || '').trim() === String(m['Expediteur'] || '').trim());
+      afficherSondageConnexion(m, u ? (u['Nom complet'] || u['Identifiant'] || '') : '');
+    } catch (e) {}
+  }
+  function afficherSondageConnexion(m, nomExp) {
+    const s = lireSondage(m); if (!s) return;
+    let modal = document.getElementById('modal-sondage-connexion');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'modal-sondage-connexion';
+      modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:2000;align-items:center;justify-content:center;padding:16px';
+      document.body.appendChild(modal);
+    }
+    modal.innerHTML = `<div style="background:#fff;border-radius:16px;width:100%;max-width:420px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.25)">
+      <div style="font-size:12px;font-weight:800;color:#a5761f;text-transform:uppercase;letter-spacing:.5px">📊 Sondage${nomExp ? ' — ' + escSondage(nomExp) : ''}</div>
+      <div style="font-size:16px;font-weight:800;color:var(--gris);margin:8px 0 12px;line-height:1.4">${escSondage(s.q)}</div>
+      <textarea id="sondage-note-${m.id}" placeholder="Votre note (facultatif)…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;min-height:60px;resize:vertical"></textarea>
+      <div style="display:flex;gap:10px;margin-top:10px">
+        <button onclick="voterSondageConnexion(${m.id},'Pour',this)" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:800;cursor:pointer">👍 Pour</button>
+        <button onclick="voterSondageConnexion(${m.id},'Contre',this)" style="flex:1;background:#c0392b;color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:800;cursor:pointer">👎 Contre</button>
+      </div>
+      <div style="font-size:11px;color:#999;margin-top:10px;text-align:center">Votre réponse est nécessaire pour accéder à l'appli. Vous pourrez la modifier ensuite dans ✉️ Messages.</div></div>`;
+    modal.style.display = 'flex';
+    _sondageConnexionOuvert = true;
+  }
+  async function voterSondageConnexion(id, choix, btn) {
+    const btns = btn ? [...btn.parentElement.querySelectorAll('button')] : [];
+    btns.forEach(b => b.disabled = true);
+    const ok = await voterSondage(id, choix);
+    btns.forEach(b => b.disabled = false);
+    if (!ok) return;
+    const modal = document.getElementById('modal-sondage-connexion');
+    if (modal) modal.style.display = 'none';
+    _sondageConnexionOuvert = false;
+    verifierSondagesEnAttente(); // sondage suivant éventuel
+  }
 
   // ── PLAN DE CHARGE ──
   const POSTES_CHARGE = [
