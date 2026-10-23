@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V75';
+  const APP_VERSION = 'V77';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22222,7 +22222,7 @@
     if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
   }
   function lireJalons(c) {
-    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, taches: o.taches || {}, appro: o.appro, reserves: o.reserves }; }
+    try { const o = JSON.parse(c?.[CHAMP_JALONS] || '{}'); return { j: o.j || {}, resp: o.resp || {}, fab: o.fab || c?._fab || [], fabExclu: o.fabExclu || [], notes: o.notes || {}, taches: o.taches || {}, echRep: o.echRep || {}, appro: o.appro, reserves: o.reserves }; }
     catch (e) { return { j: {}, resp: {}, fab: c?._fab || [] }; }
   }
   // Commandes fournisseurs par chantier (pour les jalons automatiques), cache 2 min
@@ -22341,7 +22341,7 @@
       res.push({ m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp });
     });
     const ech = echeancesChantier(c, d);
-    res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
+    res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; { const rp = (d.echRep || {})[x.m.id]; x.echInit = x.ech; x.reportsEch = rp?.reports || []; if (rp?.ech) x.ech = rp.ech; } x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
     return res;
   }
 
@@ -22636,7 +22636,7 @@
         return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px dotted #e5ded0;${!fait && !dispo ? 'opacity:.6' : ''}">
           <span style="font-size:14px">${fait || dispo || x.etat === 'bloque' ? st.ic : '○'}</span>
           <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${f.txt && f.txt.length > nom.length ? `<details style="display:inline"><summary style="cursor:pointer">${esc(nom)}…</summary><div style="font-weight:400;color:#555;margin-top:3px;line-height:1.4;white-space:pre-line">${esc(f.txt)}</div></details>` : esc(nom)}${f.manu ? ' <span style="font-size:10px;color:#aaa;font-weight:600">(manuelle)</span>' + (admin ? ` <a href="#" onclick="event.preventDefault();retirerPhaseFab('${f.k}')" style="color:#c0392b;font-size:10px">✕</a>` : '') : ''}</div>
-            <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlNotesJalon(c, x.m.id)}</div>
+            <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlReportPhase(x)}${htmlNotesJalon(c, x.m.id)}</div>
           <div style="display:flex;gap:4px;flex-shrink:0">${actions}${admin && !f.manu ? `<a href="#" title="Les phases commencent ici" onclick="event.preventDefault();ecarterPhaseFab('${f.k}', true)" style="font-size:12px;color:#8b6340;text-decoration:none">▲</a><a href="#" title="Supprimer cette phase" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${f.k}', false)" style="font-size:12px;color:#c0392b;text-decoration:none">🗑</a>` : ''}</div>
         </div>`;
       }).join('');
@@ -22720,7 +22720,9 @@
           <input type="checkbox" ${x.fait ? 'checked' : ''} ${peutCocherTacheJalon(x) ? '' : `disabled title="À valider par ${esc(x.pour)}"`} onclick="event.stopPropagation()" onchange="cocherTacheJalon('${jid}','${cle(x.id)}',this.checked)" style="margin:1px 0 0;width:15px;height:15px;flex-shrink:0;cursor:${peutCocherTacheJalon(x) ? 'pointer' : 'not-allowed'};accent-color:var(--vert)">
           <div style="flex:1;min-width:0"><span style="${x.fait ? 'text-decoration:line-through;color:#999' : 'color:var(--gris);font-weight:600'}">${esc(x.txt)}</span>${corbeille('t', x)}
             ${x.pour ? `<div style="font-size:10px;font-weight:700;color:${estMoi([x.pour]) && !x.fait ? '#c0392b' : '#a5761f'}">👤 ${esc(x.pour)}${x.fait ? '' : ' · à valider par ' + (estMoi([x.pour]) ? 'vous' : 'lui/elle')}</div>` : ''}
-            <div style="font-size:10px;color:#aaa">${x.fait ? `✔ validée par ${esc(x.faitPar || '')}${x.faitLe ? ' le ' + esc(x.faitLe) : ''}` : `créée par ${esc(x.par || '')}${x.le ? ' le ' + esc(x.le) : ''}`}</div></div></div>`).join('')}</div>` : '';
+            ${htmlEcheanceTache(x)}
+            <div style="font-size:10px;color:#aaa">${x.fait ? `✔ validée par ${esc(x.faitPar || '')}${x.faitLe ? ' le ' + esc(x.faitLe) : ''}` : `créée par ${esc(x.par || '')}${x.le ? ' le ' + esc(x.le) : ''}`}${!x.fait && (x.reports || []).length ? ` · dernier report par ${esc(x.reports.at(-1).par || '')}${x.reports.at(-1).motif ? ' (' + esc(x.reports.at(-1).motif) + ')' : ''}` : ''}</div>
+            ${peutRepousserTacheJalon(x) ? `<a href="#" onclick="event.preventDefault();event.stopPropagation();repousserTacheJalon('${jid}','${cle(x.id)}')" style="font-size:10px;color:#1F6AA5;font-weight:700">⏭ Repousser l'échéance</a>` : ''}</div></div>`).join('')}</div>` : '';
     const htmlNotes = l.length ? `<div style="margin-top:6px;border-left:3px solid #e0c58a;padding-left:8px">${l.map(n => `<div style="font-size:11px;color:#555;margin-bottom:3px"><b>${esc(n.par || '')}</b> <span style="color:#aaa">${esc(n.le || '')}</span> — ${esc(n.txt)}${corbeille('n', n)}</div>`).join('')}</div>` : '';
     return htmlTaches + htmlNotes
       + `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:5px">
@@ -22759,6 +22761,9 @@
         <option value="">— Non attribuée (tout le monde peut la cocher) —</option>
         ${noms.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
       </select>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--gris);margin:10px 0 4px">📅 Échéance (facultatif)</label>
+      <input type="date" id="tache-jalon-ech" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;margin-top:8px"><input type="checkbox" id="tache-jalon-report" style="accent-color:var(--vert)"> ⏭ Repoussable par l'intervenant (il peut décaler l'échéance, le 🚩 revient à la nouvelle date)</label>
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;margin-top:8px"><input type="checkbox" id="tache-jalon-notif" checked style="accent-color:var(--vert)"> Prévenir le collaborateur par la messagerie de l'appli</label>
       <div style="display:flex;gap:8px;margin-top:14px">
         <button onclick="document.getElementById('modal-tache-jalon').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
@@ -22771,6 +22776,8 @@
     const t = (document.getElementById('tache-jalon-txt')?.value || '').trim();
     const pour = document.getElementById('tache-jalon-pour')?.value || '';
     const notif = !!document.getElementById('tache-jalon-notif')?.checked;
+    const ech = document.getElementById('tache-jalon-ech')?.value || '';
+    const report = !!document.getElementById('tache-jalon-report')?.checked;
     if (!t) { alert('Décrivez la tâche.'); return; }
     const btn = document.getElementById('btn-tache-jalon-ok'); if (btn) { btn.disabled = true; btn.textContent = 'Enregistrement…'; }
     try {
@@ -22778,24 +22785,84 @@
         d.taches = d.taches || {};
         const x = { id: idElementJalon(), par: connectedCollab || '', le: horodatageJalon(), txt: t.slice(0, 300), fait: false };
         if (pour) x.pour = pour;
+        if (ech) x.ech = ech;
+        if (report) x.report = true;
         (d.taches[jid] = d.taches[jid] || []).push(x);
       });
       document.getElementById('modal-tache-jalon').style.display = 'none';
       renderJalonsChantier();
-      if (pour && notif && !estMoi([pour])) notifierTacheJalon(pour, jid, t);
+      if (pour && notif && !estMoi([pour])) notifierTacheJalon(pour, jid, t + (ech ? `\n📅 Échéance : ${frDateTache(ech)}${report ? ' (repoussable)' : ''}` : ''));
       try { calculerMesJalons(); } catch (e) {}
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
     finally { if (btn) { btn.disabled = false; btn.textContent = 'Créer la tâche ✓'; } }
   }
-  async function notifierTacheJalon(pour, jid, txt) {
+  async function notifierTacheJalon(pour, jid, txt, titre) {
     try {
       const c = chantierJalons();
       const x = c ? etatsJalons(c).find(y => y.m.id === jid) : null;
       const r = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
       const u = ((await r.json()).results || []).find(u => normTexte(u['Nom complet'] || '') === normTexte(pour) && u['Vue ID']);
       if (!u) return;
-      await envoyerMessageGroupe([String(u['Vue ID']).trim()], `☑ Nouvelle tâche pour vous\n🏗 ${c?.['Nom du chantier'] || ''}\n🚩 ${x ? (x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom) : jid}\n\n${txt}\n\nÀ valider dans les jalons du chantier (🚩 en haut de l'écran).`);
+      await envoyerMessageGroupe([String(u['Vue ID']).trim()], `${titre || '☑ Nouvelle tâche pour vous'}\n🏗 ${c?.['Nom du chantier'] || ''}\n🚩 ${x ? (x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom) : jid}\n\n${txt}\n\nÀ valider dans les jalons du chantier (🚩 en haut de l'écran).`);
     } catch (e) {}
+  }
+  // V76 : échéance d'une tâche, et report de l'échéance par l'intervenant quand la tâche est « repoussable »
+  function frDateTache(ymd) { return ymd ? String(ymd).split('-').reverse().join('/') : ''; }
+  function peutRepousserTacheJalon(x) { return !x.fait && !!x.report && (peutValiderJalons() || (x.pour ? estMoi([x.pour]) : true)); }
+  function htmlEcheanceTache(x) {
+    if (!x.ech) return '';
+    const auj = dateYMD(new Date()), retard = !x.fait && x.ech < auj, jour = !x.fait && x.ech === auj;
+    const nb = (x.reports || []).length;
+    return `<div style="font-size:10px;font-weight:700;color:${x.fait ? '#aaa' : retard ? '#c0392b' : jour ? '#d4800a' : '#1F6AA5'}">📅 ${retard ? 'En retard — prévue le ' : jour ? "Aujourd'hui — " : 'Échéance '}${frDateTache(x.ech)}${x.report ? ' · repoussable' : ''}${nb ? ` · reportée ${nb} fois` : ''}</div>`;
+  }
+  function repousserTacheJalon(jid, idEnc) {
+    const id = decodeURIComponent(idEnc);
+    const x = ((lireJalons(chantierJalons() || {}).taches || {})[jid] || []).find(z => z.id === id);
+    if (!x) return;
+    if (!peutRepousserTacheJalon(x)) { alert('Cette tâche ne peut pas être repoussée par vous.'); return; }
+    let m = document.getElementById('modal-report-tache');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-report-tache';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;align-items:center;justify-content:center;padding:16px';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    const demain = ajouterJours(dateYMD(new Date()), 1);
+    const propose = x.ech && x.ech >= demain ? ajouterJours(x.ech, 7) : ajouterJours(dateYMD(new Date()), 7);
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:380px;padding:18px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">⏭ Repousser la tâche</div>
+      <div style="font-size:12px;color:#555;margin:6px 0 10px">${echapperHtmlNote(x.txt)}${x.ech ? `<br><span style="color:#999">Échéance actuelle : ${frDateTache(x.ech)}</span>` : ''}</div>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--gris);margin-bottom:4px">Nouvelle échéance</label>
+      <input type="date" id="report-tache-date" min="${demain}" value="${propose}" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:14px">
+      <input type="text" id="report-tache-motif" placeholder="Motif (facultatif)" maxlength="200" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;margin-top:8px">
+      <div style="font-size:11px;color:#999;margin-top:6px">La tâche quitte votre 🚩 et y revient à cette date.</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button onclick="document.getElementById('modal-report-tache').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
+        <button onclick="validerReportTacheJalon('${jid}','${idEnc}')" style="flex:2;background:#1F6AA5;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Repousser ✓</button>
+      </div></div>`;
+    m.style.display = 'flex';
+  }
+  async function validerReportTacheJalon(jid, idEnc) {
+    const id = decodeURIComponent(idEnc);
+    const nv = document.getElementById('report-tache-date')?.value || '';
+    const motif = (document.getElementById('report-tache-motif')?.value || '').trim();
+    if (!nv || nv <= dateYMD(new Date())) { alert('Choisissez une date à partir de demain.'); return; }
+    let tache = null;
+    try {
+      await ecrireJalons(d => {
+        const x = ((d.taches || {})[jid] || []).find(z => z.id === id);
+        if (!x || !peutRepousserTacheJalon(x)) return;
+        (x.reports = x.reports || []).push({ de: x.ech || '', a: nv, par: connectedCollab || '', le: horodatageJalon(), motif });
+        x.ech = nv;
+        tache = { ...x };
+      });
+      document.getElementById('modal-report-tache').style.display = 'none';
+      renderJalonsChantier();
+      try { calculerMesJalons(); } catch (e) {}
+      // Le créateur de la tâche est prévenu du report
+      if (tache && tache.par && normTexte(tache.par) !== normTexte(connectedCollab || '')) notifierTacheJalon(tache.par, jid, `⏭ ${connectedCollab || ''} a repoussé la tâche au ${frDateTache(nv)}${motif ? ' — ' + motif : ''}\n\n${tache.txt}`, '⏭ Tâche repoussée');
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
   async function cocherTacheJalon(jid, idEnc, fait) {
     const id = decodeURIComponent(idEnc);
@@ -22919,6 +22986,7 @@
       html += ligne(lib + rapide, contenu, { click: `_jalonGanttSel=_jalonGanttSel==='${x.m.id}'?null:'${x.m.id}';renderJalonsChantier()`, sel: _jalonGanttSel === x.m.id, couleur: fait ? '#999' : 'var(--gris)', titre: x.m.nom + (x.personnes?.length ? ' · ' + x.personnes.join(', ') : '') });
       if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? `<div style="white-space:pre-line">${esc(x.m.txt || x.m.nom)}</div>` : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
+        ${x.m.fab ? htmlReportPhase(x) : ''}
         ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : !(dispo || x.etat === 'bloque') ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>' : o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
         ${htmlNotesJalon(c, x.m.id)}
         ${o.admin && x.m.fab ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px"><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici</a><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
@@ -23001,6 +23069,74 @@
     const lancer = () => { try { w.focus(); w.print(); } catch (e) { alert('Impression impossible : ' + e.message); } };
     const img = dd.querySelector('img');
     if (img && !img.complete) { img.onload = img.onerror = () => setTimeout(lancer, 100); setTimeout(lancer, 2500); } else setTimeout(lancer, 150);
+  }
+
+  // V77 : report de l'échéance d'une phase (étude / fabrication / pose) par son responsable ou un gestionnaire
+  function peutRepousserPhase(x) { return !!x.m.fab && !JALON_FAIT(x) && (peutValiderJalons() || estMoi(x.personnes)); }
+  function htmlReportPhase(x) {
+    const l = x.reportsEch || [];
+    const info = l.length ? `<div style="font-size:10px;color:#1F6AA5;font-weight:700">⏭ reportée ${l.length} fois · échéance initiale ${x.echInit ? x.echInit.split('-').reverse().join('/') : '—'}${l.at(-1).motif ? ' · ' + echapperHtmlNote(l.at(-1).motif) : ''} (${echapperHtmlNote(l.at(-1).par || '')})</div>` : '';
+    const lien = peutRepousserPhase(x) ? `<a href="#" onclick="event.preventDefault();event.stopPropagation();repousserPhaseJalon('${x.m.id}')" style="font-size:10px;color:#1F6AA5;font-weight:700">⏭ Repousser l'échéance</a>` : '';
+    return info + lien;
+  }
+  function repousserPhaseJalon(jid) {
+    const c = chantierJalons(); if (!c) return;
+    const x = etatsJalons(c).find(y => y.m.id === jid);
+    if (!x || !peutRepousserPhase(x)) { alert("Vous ne pouvez pas repousser l'échéance de cette phase."); return; }
+    let m = document.getElementById('modal-report-tache');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-report-tache';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;align-items:center;justify-content:center;padding:16px';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    const auj = dateYMD(new Date()), demain = ajouterJours(auj, 1);
+    const propose = x.ech && x.ech >= demain ? ajouterJours(x.ech, 7) : ajouterJours(auj, 7);
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:380px;padding:18px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">⏭ Repousser la phase</div>
+      <div style="font-size:12px;color:#555;margin:6px 0 10px">${echapperHtmlNote(x.m.nom)}${x.ech ? `<br><span style="color:#999">Échéance actuelle : ${x.ech.split('-').reverse().join('/')}</span>` : ''}</div>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--gris);margin-bottom:4px">Nouvelle échéance</label>
+      <input type="date" id="report-tache-date" min="${demain}" value="${propose}" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:14px">
+      <input type="text" id="report-tache-motif" placeholder="Motif (facultatif)" maxlength="200" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;margin-top:8px">
+      <div style="font-size:11px;color:#999;margin-top:6px">La phase quitte le 🚩 du responsable et y revient à cette date. Le Gantt est décalé.</div>
+      ${(x.reportsEch || []).length && peutValiderJalons() ? `<a href="#" onclick="event.preventDefault();annulerReportPhase('${jid}')" style="display:inline-block;margin-top:8px;font-size:11px;color:#999">↺ Revenir à l'échéance calculée</a>` : ''}
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button onclick="document.getElementById('modal-report-tache').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
+        <button onclick="validerReportPhaseJalon('${jid}')" style="flex:2;background:#1F6AA5;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Repousser ✓</button>
+      </div></div>`;
+    m.style.display = 'flex';
+  }
+  async function validerReportPhaseJalon(jid) {
+    const c = chantierJalons(); if (!c) return;
+    const x = etatsJalons(c).find(y => y.m.id === jid);
+    if (!x || !peutRepousserPhase(x)) return;
+    const nv = document.getElementById('report-tache-date')?.value || '';
+    const motif = (document.getElementById('report-tache-motif')?.value || '').trim();
+    if (!nv || nv <= dateYMD(new Date())) { alert('Choisissez une date à partir de demain.'); return; }
+    try {
+      await ecrireJalons(d => {
+        d.echRep = d.echRep || {};
+        const r = d.echRep[jid] = d.echRep[jid] || { reports: [] };
+        r.reports.push({ de: x.ech || '', a: nv, par: connectedCollab || '', le: horodatageJalon(), motif });
+        r.ech = nv;
+      });
+      document.getElementById('modal-report-tache').style.display = 'none';
+      renderJalonsChantier();
+      try { calculerMesJalons(); } catch (e) {}
+      // Le chargé d'affaires du chantier est prévenu du report
+      const ca = caDuChantierRow(c)?.nom || '';
+      if (ca && normTexte(ca) !== normTexte(connectedCollab || '')) notifierTacheJalon(ca, jid, `⏭ ${connectedCollab || ''} a repoussé la phase au ${nv.split('-').reverse().join('/')}${motif ? ' — ' + motif : ''}`, '⏭ Phase repoussée');
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+  }
+  async function annulerReportPhase(jid) {
+    if (!peutValiderJalons() || !confirm("Revenir à l'échéance calculée par le plan de charge pour cette phase ?")) return;
+    try {
+      await ecrireJalons(d => { if (d.echRep) delete d.echRep[jid]; });
+      document.getElementById('modal-report-tache').style.display = 'none';
+      renderJalonsChantier();
+      try { calculerMesJalons(); } catch (e) {}
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
 
   function peutValiderJalons() { return ['Administrateur', 'Gestionnaire'].includes(connectedDroit); }
@@ -23133,7 +23269,7 @@
 
   // ── « Mes jalons » : bouton 🚩 dans l'en-tête, pour chaque titulaire ──
   let _mesJalons = [], _mesJalonsTimer = null;
-  let _mesTachesJalons = [];
+  let _mesTachesJalons = [], _mesTachesPlusTard = [], _mesPhasesPlusTard = [];
   async function calculerMesJalons() {
     if (!connectedCollab) return;
     try {
@@ -23142,18 +23278,21 @@
         chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
         memoriserCaChantiers(chantiersGestionCache); detecterChampJalons(chantiersGestionCache);
       }
-      const liste = [], taches = [];
+      const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [];
       chantiersGestionCache.forEach(c => {
         const st = c['Statue']?.value || c['Statue'] || '';
         if (estStatutCloture(st) || st === 'Terminé') return;
         const et = etatsJalons(c);
-        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) liste.push({ c, x }); });
+        et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) ((x.reportsEch || []).length && x.ech > dateYMD(new Date()) && x.etat !== 'bloque' ? phasesPlusTard : liste).push({ c, x }); });
         // V75 : tâches qui me sont attribuées et pas encore validées
         Object.entries(lireJalons(c).taches || {}).forEach(([jid, l]) => (l || []).forEach(t => {
-          if (!t.fait && t.pour && estMoi([t.pour])) { const j = et.find(y => y.m.id === jid); taches.push({ c, t, jnom: j ? (j.m.fab ? j.m.nom : j.m.id + ' · ' + j.m.nom) : jid }); }
+          if (!t.fait && t.pour && estMoi([t.pour])) { const j = et.find(y => y.m.id === jid); (t.ech && t.ech > dateYMD(new Date()) ? tachesPlusTard : taches).push({ c, t, jid, jnom: j ? (j.m.fab ? j.m.nom : j.m.id + ' · ' + j.m.nom) : jid }); }
         }));
       });
-      _mesTachesJalons = taches;
+      taches.sort((a, b) => String(a.t.ech || '0').localeCompare(String(b.t.ech || '0')));
+      tachesPlusTard.sort((a, b) => String(a.t.ech).localeCompare(String(b.t.ech)));
+      _mesTachesJalons = taches; _mesTachesPlusTard = tachesPlusTard;
+      _mesPhasesPlusTard = phasesPlusTard.sort((a, b) => String(a.x.ech).localeCompare(String(b.x.ech)));
       liste.sort((a, b) => String(a.x.ech || '9999').localeCompare(String(b.x.ech || '9999')));
       _mesJalons = liste;
     } catch (e) { _mesJalons = []; _mesTachesJalons = []; }
@@ -23193,7 +23332,13 @@
         <button onclick="document.getElementById('modal-mes-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
       ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Mes tâches à valider (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
           <div style="font-size:13px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
-          <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div></div>`).join('') : ''}
+          <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div>${htmlEcheanceTache(t)}</div>`).join('') : ''}
+      ${_mesPhasesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Phases repoussées (${_mesPhasesPlusTard.length})</div>` + _mesPhasesPlusTard.map(({ c, x }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">🏭 ${esc(x.m.nom)}</div>
+          <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · revient le <b>${x.ech.split('-').reverse().join('/')}</b></div></div>`).join('') : ''}
+      ${_mesTachesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Tâches repoussées / à venir (${_mesTachesPlusTard.length})</div>` + _mesTachesPlusTard.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
+          <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · revient le <b>${frDateTache(t.ech)}</b></div></div>`).join('') : ''}
       ${groupe('🔴 En retard ou bloqués', ret)}${groupe('🟠 Cette semaine', sem)}${groupe('🟢 Plus tard', plus)}
       ${(_mesJalons.length + _mesTachesJalons.length) ? '' : '<div class="feuille-empty">Aucun jalon à réaliser.</div>'}
       <div style="font-size:10px;color:#aaa;margin-top:8px">Échéances calculées depuis le plan de charge. Touchez un jalon pour ouvrir la frise du chantier.</div></div>`;
