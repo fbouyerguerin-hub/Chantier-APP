@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V80';
+  const APP_VERSION = 'V83';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -3102,6 +3102,7 @@
     _validationAutoOuverte = null;
     connectedCollab = null;
     connectedViewId = null;
+    try { const bj = document.getElementById('header-jalons-btn'); if (bj) bj.style.display = 'none'; const mj = document.getElementById('modal-mes-jalons'); if (mj) mj.style.display = 'none'; } catch (e) {}
     try { _sondageConnexionOuvert = false; const ms = document.getElementById('modal-sondage-connexion'); if (ms) ms.style.display = 'none'; } catch (e) {}
     feuilleCollab = null;
     connectedUserRowId = null;
@@ -22258,6 +22259,14 @@
       try { const inact = getInactifsCollabIds(us || [], cl); _jalonsCollabsActifs = cl.filter(c => !inact.has(String(c.id))); }
       catch (e) { _jalonsCollabsActifs = cl; }
     } catch (e) {}
+    // V81 : affectations du planning collectif (4 derniers mois et à venir) → chantier : collaborateurs planifiés
+    try {
+      const depuis = ajouterJours(dateYMD(new Date()), -120);
+      const pl = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${depuis}`);
+      const m = new Map();
+      pl.forEach(r => { const id = (r['Chantier'] || [])[0]?.id; if (!id) return; const set = m.get(id) || m.set(id, new Set()).get(id); (r['Collaborateurs'] || []).forEach(x => set.add(String(x.id))); });
+      _jalonsPlanningCollab = m;
+    } catch (e) { _jalonsPlanningCollab = null; }
     _jalonsCmdDate = Date.now();
   }
   // V49 : rapprochement commande client ↔ chantier par le N° DE DEVIS (DE0004568 = DE4568-03),
@@ -22376,10 +22385,26 @@
   function titulairesRole(role) {
     return (_jalonsCollabs || []).filter(c => String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes(role)).map(nomCollab).filter(Boolean);
   }
+  // V81 : un collaborateur d'atelier (poste Fab Acier, Fab Bois, Apprenti atelier) ne reçoit une phase de
+  // fabrication que s'il est affecté à ce chantier dans le planning collectif. Les autres titulaires du
+  // rôle (responsable d'atelier…) la reçoivent toujours.
+  let _jalonsPlanningCollab = null;
+  function titulairesRoleCollabs(role) {
+    return (_jalonsCollabs || []).filter(c => String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes(role));
+  }
+  function posteCollabJalon(c) { const v = c['Poste / Métier']; return String((v && typeof v === 'object' ? v.value : v) || '').trim(); }
   function personnesJalon(c, x, d) {
     if (x.m.designer && d.resp[x.m.id]) return [d.resp[x.m.id]];
     const l = [];
-    (x.m.roles || []).forEach(r => { if (r === 'CA') { const ca = caDuChantierRow(c)?.nom; if (ca) l.push(ca); } else l.push(...titulairesRole(r)); });
+    (x.m.roles || []).forEach(r => {
+      if (r === 'CA') { const ca = caDuChantierRow(c)?.nom; if (ca) l.push(ca); return; }
+      if (x.m.fab && x.m.kind === 'fab' && _jalonsPlanningCollab) {
+        const planifies = _jalonsPlanningCollab.get(c.id) || new Set();
+        titulairesRoleCollabs(r).forEach(t => { if (!POSTES_ASSIMILES_FAB.includes(posteCollabJalon(t)) || planifies.has(String(t.id))) { const n = nomCollab(t); if (n) l.push(n); } });
+        return;
+      }
+      l.push(...titulairesRole(r));
+    });
     return [...new Set(l)];
   }
   function tempsJalon(x) {
@@ -22543,6 +22568,7 @@
   // ── Fenêtre « frise » d'un chantier ──
   let _jalonsChantierId = null;
   async function ouvrirJalonsChantier(id) {
+    if (!jalonsVisibles()) return;
     if (_champJalonsDisponible === false) { alertChampJalonsManquant(); return; }
     _jalonsChantierId = id; _fabToutes = false; _jalonGanttSel = null;
     let m = document.getElementById('modal-jalons');
@@ -22816,6 +22842,8 @@
       const r = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
       const u = ((await r.json()).results || []).find(u => normTexte(u['Nom complet'] || '') === normTexte(pour) && u['Vue ID']);
       if (!u) return;
+      // V83 : jalons masqués au profil Utilisateur → pas de message de tâche/phase pour lui (provisoire)
+      if (!['Administrateur', 'Gestionnaire'].includes(u['Droit']?.value || u['Droit'] || 'Utilisateur')) return;
       await envoyerMessageGroupe([String(u['Vue ID']).trim()], `${titre || '☑ Nouvelle tâche pour vous'}\n🏗 ${c?.['Nom du chantier'] || ''}\n🚩 ${x ? (x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom) : jid}\n\n${txt}\n\nÀ valider dans les jalons du chantier (🚩 en haut de l'écran).`);
     } catch (e) {}
   }
@@ -23322,8 +23350,15 @@
     const mj = document.getElementById('modal-mes-jalons');
     if (mj && mj.style.display === 'flex') ouvrirMesJalons();
   }
+  // V82 : jalons masqués pour le profil Utilisateur (provisoire) — réservés aux Gestionnaires et Administrateurs
+  function jalonsVisibles() { return peutValiderJalons(); }
   async function calculerMesJalons() {
     if (!connectedCollab) return;
+    if (!jalonsVisibles()) {
+      _mesJalons = []; _mesTachesJalons = []; _mesTachesPlusTard = []; _mesPhasesPlusTard = [];
+      const bj = document.getElementById('header-jalons-btn'); if (bj) bj.style.display = 'none';
+      return;
+    }
     try {
       await chargerCommandesJalons();
       // V78 : relecture des chantiers si la copie locale a plus de 5 min (sinon le 🚩 ne voyait pas
@@ -23377,6 +23412,7 @@
     _mesJalonsTimer = setInterval(() => { _jalonsCmdDate = 0; calculerMesJalons(); }, 600000);
   }
   function ouvrirMesJalons() {
+    if (!jalonsVisibles()) return;
     let m = document.getElementById('modal-mes-jalons');
     if (!m) {
       m = document.createElement('div');
