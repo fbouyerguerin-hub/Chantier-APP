@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V74';
+  const APP_VERSION = 'V75';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22717,9 +22717,10 @@
     const htmlTaches = t.length ? `<div style="margin-top:6px;border-left:3px solid #9ab8d6;padding-left:8px">
         <div style="font-size:10px;font-weight:800;color:#1F6AA5;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">☑ Tâches · ${nbFaites}/${t.length}</div>
         ${t.map(x => `<div style="display:flex;align-items:flex-start;gap:6px;font-size:11px;color:#555;margin-bottom:3px">
-          <input type="checkbox" ${x.fait ? 'checked' : ''} onclick="event.stopPropagation()" onchange="cocherTacheJalon('${jid}','${cle(x.id)}',this.checked)" style="margin:1px 0 0;width:15px;height:15px;flex-shrink:0;cursor:pointer;accent-color:var(--vert)">
+          <input type="checkbox" ${x.fait ? 'checked' : ''} ${peutCocherTacheJalon(x) ? '' : `disabled title="À valider par ${esc(x.pour)}"`} onclick="event.stopPropagation()" onchange="cocherTacheJalon('${jid}','${cle(x.id)}',this.checked)" style="margin:1px 0 0;width:15px;height:15px;flex-shrink:0;cursor:${peutCocherTacheJalon(x) ? 'pointer' : 'not-allowed'};accent-color:var(--vert)">
           <div style="flex:1;min-width:0"><span style="${x.fait ? 'text-decoration:line-through;color:#999' : 'color:var(--gris);font-weight:600'}">${esc(x.txt)}</span>${corbeille('t', x)}
-            <div style="font-size:10px;color:#aaa">${x.fait ? `✔ ${esc(x.faitPar || '')}${x.faitLe ? ' le ' + esc(x.faitLe) : ''}` : `créée par ${esc(x.par || '')}${x.le ? ' le ' + esc(x.le) : ''}`}</div></div></div>`).join('')}</div>` : '';
+            ${x.pour ? `<div style="font-size:10px;font-weight:700;color:${estMoi([x.pour]) && !x.fait ? '#c0392b' : '#a5761f'}">👤 ${esc(x.pour)}${x.fait ? '' : ' · à valider par ' + (estMoi([x.pour]) ? 'vous' : 'lui/elle')}</div>` : ''}
+            <div style="font-size:10px;color:#aaa">${x.fait ? `✔ validée par ${esc(x.faitPar || '')}${x.faitLe ? ' le ' + esc(x.faitLe) : ''}` : `créée par ${esc(x.par || '')}${x.le ? ' le ' + esc(x.le) : ''}`}</div></div></div>`).join('')}</div>` : '';
     const htmlNotes = l.length ? `<div style="margin-top:6px;border-left:3px solid #e0c58a;padding-left:8px">${l.map(n => `<div style="font-size:11px;color:#555;margin-bottom:3px"><b>${esc(n.par || '')}</b> <span style="color:#aaa">${esc(n.le || '')}</span> — ${esc(n.txt)}${corbeille('n', n)}</div>`).join('')}</div>` : '';
     return htmlTaches + htmlNotes
       + `<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:5px">
@@ -22737,28 +22738,80 @@
       renderJalonsChantier();
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
-  async function ajouterTacheJalon(jid) {
-    const t = prompt('Nouvelle tâche :', '');
-    if (!t || !t.trim()) return;
+  // V75 : une tâche peut être attribuée à un collaborateur ; c'est lui qui la valide (ou un gestionnaire)
+  function peutCocherTacheJalon(x) { return !x.pour || peutValiderJalons() || estMoi([x.pour]); }
+  function ajouterTacheJalon(jid) {
+    let m = document.getElementById('modal-tache-jalon');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-tache-jalon';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;align-items:center;justify-content:center;padding:16px';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    const noms = [...new Set((_jalonsCollabsActifs || _jalonsCollabs || []).map(nomCollab).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const esc = echapperHtmlNote;
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:420px;padding:18px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris);margin-bottom:10px">☑ Nouvelle tâche</div>
+      <textarea id="tache-jalon-txt" placeholder="Description de la tâche…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;min-height:60px;resize:vertical"></textarea>
+      <label style="display:block;font-size:12px;font-weight:700;color:var(--gris);margin:10px 0 4px">👤 Collaborateur chargé de la tâche (il la validera)</label>
+      <select id="tache-jalon-pour" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;background:#fff">
+        <option value="">— Non attribuée (tout le monde peut la cocher) —</option>
+        ${noms.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;margin-top:8px"><input type="checkbox" id="tache-jalon-notif" checked style="accent-color:var(--vert)"> Prévenir le collaborateur par la messagerie de l'appli</label>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button onclick="document.getElementById('modal-tache-jalon').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
+        <button id="btn-tache-jalon-ok" onclick="validerNouvelleTacheJalon('${jid}')" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Créer la tâche ✓</button>
+      </div></div>`;
+    m.style.display = 'flex';
+    setTimeout(() => document.getElementById('tache-jalon-txt')?.focus(), 50);
+  }
+  async function validerNouvelleTacheJalon(jid) {
+    const t = (document.getElementById('tache-jalon-txt')?.value || '').trim();
+    const pour = document.getElementById('tache-jalon-pour')?.value || '';
+    const notif = !!document.getElementById('tache-jalon-notif')?.checked;
+    if (!t) { alert('Décrivez la tâche.'); return; }
+    const btn = document.getElementById('btn-tache-jalon-ok'); if (btn) { btn.disabled = true; btn.textContent = 'Enregistrement…'; }
     try {
       await ecrireJalons(d => {
         d.taches = d.taches || {};
-        (d.taches[jid] = d.taches[jid] || []).push({ id: idElementJalon(), par: connectedCollab || '', le: horodatageJalon(), txt: t.trim().slice(0, 300), fait: false });
+        const x = { id: idElementJalon(), par: connectedCollab || '', le: horodatageJalon(), txt: t.slice(0, 300), fait: false };
+        if (pour) x.pour = pour;
+        (d.taches[jid] = d.taches[jid] || []).push(x);
       });
+      document.getElementById('modal-tache-jalon').style.display = 'none';
       renderJalonsChantier();
+      if (pour && notif && !estMoi([pour])) notifierTacheJalon(pour, jid, t);
+      try { calculerMesJalons(); } catch (e) {}
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Créer la tâche ✓'; } }
+  }
+  async function notifierTacheJalon(pour, jid, txt) {
+    try {
+      const c = chantierJalons();
+      const x = c ? etatsJalons(c).find(y => y.m.id === jid) : null;
+      const r = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_USERS}/?user_field_names=true&size=200`, { headers: HEADERS });
+      const u = ((await r.json()).results || []).find(u => normTexte(u['Nom complet'] || '') === normTexte(pour) && u['Vue ID']);
+      if (!u) return;
+      await envoyerMessageGroupe([String(u['Vue ID']).trim()], `☑ Nouvelle tâche pour vous\n🏗 ${c?.['Nom du chantier'] || ''}\n🚩 ${x ? (x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom) : jid}\n\n${txt}\n\nÀ valider dans les jalons du chantier (🚩 en haut de l'écran).`);
+    } catch (e) {}
   }
   async function cocherTacheJalon(jid, idEnc, fait) {
     const id = decodeURIComponent(idEnc);
+    let refus = null;
     try {
       await ecrireJalons(d => {
         const x = ((d.taches || {})[jid] || []).find(z => z.id === id);
         if (!x) return;
+        if (!peutCocherTacheJalon(x)) { refus = x.pour; return; }
         x.fait = !!fait;
         if (fait) { x.faitPar = connectedCollab || ''; x.faitLe = horodatageJalon(); } else { delete x.faitPar; delete x.faitLe; }
       });
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
+    if (refus) alert('Cette tâche doit être validée par ' + refus + '.');
     renderJalonsChantier();
+    try { calculerMesJalons(); } catch (e) {}
   }
   async function supprimerElementJalon(jid, type, cleEnc) {
     const cle = decodeURIComponent(cleEnc), champ = type === 't' ? 'taches' : 'notes';
@@ -23080,6 +23133,7 @@
 
   // ── « Mes jalons » : bouton 🚩 dans l'en-tête, pour chaque titulaire ──
   let _mesJalons = [], _mesJalonsTimer = null;
+  let _mesTachesJalons = [];
   async function calculerMesJalons() {
     if (!connectedCollab) return;
     try {
@@ -23088,22 +23142,28 @@
         chantiersGestionCache = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
         memoriserCaChantiers(chantiersGestionCache); detecterChampJalons(chantiersGestionCache);
       }
-      const liste = [];
+      const liste = [], taches = [];
       chantiersGestionCache.forEach(c => {
         const st = c['Statue']?.value || c['Statue'] || '';
         if (estStatutCloture(st) || st === 'Terminé') return;
         const et = etatsJalons(c);
         et.forEach((x, i) => { if (!JALON_FAIT(x) && (x.etat === 'bloque' || jalonDisponible(et, i)) && estMoi(x.personnes)) liste.push({ c, x }); });
+        // V75 : tâches qui me sont attribuées et pas encore validées
+        Object.entries(lireJalons(c).taches || {}).forEach(([jid, l]) => (l || []).forEach(t => {
+          if (!t.fait && t.pour && estMoi([t.pour])) { const j = et.find(y => y.m.id === jid); taches.push({ c, t, jnom: j ? (j.m.fab ? j.m.nom : j.m.id + ' · ' + j.m.nom) : jid }); }
+        }));
       });
+      _mesTachesJalons = taches;
       liste.sort((a, b) => String(a.x.ech || '9999').localeCompare(String(b.x.ech || '9999')));
       _mesJalons = liste;
-    } catch (e) { _mesJalons = []; }
+    } catch (e) { _mesJalons = []; _mesTachesJalons = []; }
     const b = document.getElementById('header-jalons-btn');
     if (b) {
-      b.style.display = _mesJalons.length ? 'block' : 'none';
+      const nbT = _mesTachesJalons.length;
+      b.style.display = (_mesJalons.length + nbT) ? 'block' : 'none';
       const nbRet = _mesJalons.filter(y => y.x.temps?.niveau === 'retard').length;
-      b.innerHTML = `🚩<span style="position:absolute;top:-6px;right:-6px;background:${nbRet ? '#c0392b' : '#d4800a'};color:#fff;font-size:10px;font-weight:800;border-radius:9px;min-width:18px;height:18px;line-height:18px;padding:0 4px">${_mesJalons.length}</span>`;
-      b.title = `${_mesJalons.length} jalon(s) à réaliser${nbRet ? ', dont ' + nbRet + ' en retard' : ''}`;
+      b.innerHTML = `🚩<span style="position:absolute;top:-6px;right:-6px;background:${nbRet ? '#c0392b' : '#d4800a'};color:#fff;font-size:10px;font-weight:800;border-radius:9px;min-width:18px;height:18px;line-height:18px;padding:0 4px">${_mesJalons.length + nbT}</span>`;
+      b.title = `${_mesJalons.length} jalon(s) à réaliser${nbRet ? ', dont ' + nbRet + ' en retard' : ''}${nbT ? ' · ' + nbT + ' tâche(s) à valider' : ''}`;
     }
   }
   function planifierMesJalons() {
@@ -23131,8 +23191,11 @@
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 Mes jalons à réaliser</div>
         <button onclick="document.getElementById('modal-mes-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
+      ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Mes tâches à valider (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
+          <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div></div>`).join('') : ''}
       ${groupe('🔴 En retard ou bloqués', ret)}${groupe('🟠 Cette semaine', sem)}${groupe('🟢 Plus tard', plus)}
-      ${_mesJalons.length ? '' : '<div class="feuille-empty">Aucun jalon à réaliser.</div>'}
+      ${(_mesJalons.length + _mesTachesJalons.length) ? '' : '<div class="feuille-empty">Aucun jalon à réaliser.</div>'}
       <div style="font-size:10px;color:#aaa;margin-top:8px">Échéances calculées depuis le plan de charge. Touchez un jalon pour ouvrir la frise du chantier.</div></div>`;
     m.style.display = 'flex';
   }
