@@ -766,7 +766,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V78';
+  const APP_VERSION = 'V79';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22871,7 +22871,7 @@
       });
       document.getElementById('modal-report-tache').style.display = 'none';
       renderJalonsChantier();
-      try { calculerMesJalons(); } catch (e) {}
+      await rafraichirMesJalonsOuverts();
       // Le créateur de la tâche est prévenu du report
       if (tache && tache.par && normTexte(tache.par) !== normTexte(connectedCollab || '')) notifierTacheJalon(tache.par, jid, `⏭ ${connectedCollab || ''} a repoussé la tâche au ${frDateTache(nv)}${motif ? ' — ' + motif : ''}\n\n${tache.txt}`, '⏭ Tâche repoussée');
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
@@ -23111,7 +23111,8 @@
       <label style="display:block;font-size:12px;font-weight:700;color:var(--gris);margin-bottom:4px">Nouvelle échéance</label>
       <input type="date" id="report-tache-date" min="${demain}" value="${propose}" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:14px">
       <input type="text" id="report-tache-motif" placeholder="Motif (facultatif)" maxlength="200" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;margin-top:8px">
-      <div style="font-size:11px;color:#999;margin-top:6px">La phase quitte le 🚩 du responsable et y revient à cette date. Le Gantt est décalé.</div>
+      <div style="font-size:11px;color:#999;margin-top:6px">La phase quitte le 🚩 de <b>${echapperHtmlNote(x.personnes.length ? x.personnes.join(', ') : x.resp)}</b> et y revient à cette date. Le Gantt est décalé.${x.personnes.length && !estMoi(x.personnes) ? '<br>⚠️ Vous n\'êtes pas responsable de cette phase : votre propre 🚩 ne change pas.' : ''}</div>
+      ${(() => { const sx = etatsJalons(c).filter(y => y.m.fab && y.m.id !== jid && y.m.id.slice(2) === jid.slice(2) && peutRepousserPhase(y)); return sx.length ? `<label style="display:flex;gap:6px;align-items:flex-start;font-size:12px;color:#555;margin-top:8px"><input type="checkbox" id="report-phase-soeurs" checked style="accent-color:#1F6AA5;margin-top:2px"> <span>Repousser aussi les autres phases de cette section : ${sx.map(y => ({ etude: '📐 ', fab: '🏭 ', pose: '🏗 ' })[y.m.kind] + echapperHtmlNote(y.m.nom)).join(', ')}</span></label>` : ''; })()}
       ${(x.reportsEch || []).length && peutValiderJalons() ? `<a href="#" onclick="event.preventDefault();annulerReportPhase('${jid}')" style="display:inline-block;margin-top:8px;font-size:11px;color:#999">↺ Revenir à l'échéance calculée</a>` : ''}
       <div style="display:flex;gap:8px;margin-top:12px">
         <button onclick="document.getElementById('modal-report-tache').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
@@ -23126,16 +23127,21 @@
     const nv = document.getElementById('report-tache-date')?.value || '';
     const motif = (document.getElementById('report-tache-motif')?.value || '').trim();
     if (!nv || nv <= dateYMD(new Date())) { alert('Choisissez une date à partir de demain.'); return; }
+    // V79 : phases sœurs (étude / fabrication / pose de la même section) repoussées avec elle si la case est cochée
+    const soeurs = document.getElementById('report-phase-soeurs')?.checked
+      ? etatsJalons(c).filter(y => y.m.fab && y.m.id !== jid && y.m.id.slice(2) === jid.slice(2) && peutRepousserPhase(y) && (!y.ech || y.ech < nv)) : [];
     try {
       await ecrireJalons(d => {
         d.echRep = d.echRep || {};
-        const r = d.echRep[jid] = d.echRep[jid] || { reports: [] };
-        r.reports.push({ de: x.ech || '', a: nv, par: connectedCollab || '', le: horodatageJalon(), motif });
-        r.ech = nv;
+        [x, ...soeurs].forEach(y => {
+          const r = d.echRep[y.m.id] = d.echRep[y.m.id] || { reports: [] };
+          r.reports.push({ de: y.ech || '', a: nv, par: connectedCollab || '', le: horodatageJalon(), motif });
+          r.ech = nv;
+        });
       });
       document.getElementById('modal-report-tache').style.display = 'none';
       renderJalonsChantier();
-      try { calculerMesJalons(); } catch (e) {}
+      await rafraichirMesJalonsOuverts();
       // Le chargé d'affaires du chantier est prévenu du report
       const ca = caDuChantierRow(c)?.nom || '';
       if (ca && normTexte(ca) !== normTexte(connectedCollab || '')) notifierTacheJalon(ca, jid, `⏭ ${connectedCollab || ''} a repoussé la phase au ${nv.split('-').reverse().join('/')}${motif ? ' — ' + motif : ''}`, '⏭ Phase repoussée');
@@ -23282,6 +23288,12 @@
   // ── « Mes jalons » : bouton 🚩 dans l'en-tête, pour chaque titulaire ──
   let _mesJalons = [], _mesJalonsTimer = null, _mesJalonsLecture = 0;
   let _mesTachesJalons = [], _mesTachesPlusTard = [], _mesPhasesPlusTard = [];
+  // V79 : recalcul du 🚩 et, si la liste « Mes jalons » est ouverte, réaffichage immédiat
+  async function rafraichirMesJalonsOuverts() {
+    try { await calculerMesJalons(); } catch (e) {}
+    const mj = document.getElementById('modal-mes-jalons');
+    if (mj && mj.style.display === 'flex') ouvrirMesJalons();
+  }
   async function calculerMesJalons() {
     if (!connectedCollab) return;
     try {
@@ -23346,19 +23358,21 @@
     const esc = echapperHtmlNote;
     const groupe = (titre, l) => !l.length ? '' : `<div style="font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase;margin:12px 0 6px">${titre} (${l.length})</div>` + l.map(({ c, x }) =>
       `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fff;border:1.5px solid ${x.etat === 'bloque' ? '#c0392b' : x.temps?.niveau === 'retard' ? '#e8a39b' : '#ddd5c5'};border-radius:10px;padding:9px 11px;margin-bottom:6px">
-        <div style="font-size:13px;font-weight:700;color:var(--gris)">${x.etat === 'bloque' ? '⛔ ' : ''}${x.m.fab ? '🏭' : esc(x.m.id) + ' ·'} ${esc(x.m.nom)}</div>
-        <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')}${x.ech ? ' · ' + htmlEcheance(x) : ''}</div></div>`).join('');
+        <div style="font-size:13px;font-weight:700;color:var(--gris)">${x.etat === 'bloque' ? '⛔ ' : ''}${x.m.fab ? ({ etude: '📐', pose: '🏗', fab: '🏭' })[x.m.kind] || '🏭' : esc(x.m.id) + ' ·'} ${esc(x.m.nom)}</div>
+        <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')}${x.ech ? ' · ' + htmlEcheance(x) : ''}</div>
+        ${peutRepousserPhase(x) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};repousserPhaseJalon('${x.m.id}')" style="margin-top:6px;background:#fff;border:1px solid #1F6AA5;color:#1F6AA5;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">⏭ Repousser</button>` : ''}</div>`).join('');
     const ret = _mesJalons.filter(y => y.x.temps?.niveau === 'retard' || y.x.etat === 'bloque');
     const sem = _mesJalons.filter(y => !ret.includes(y) && y.x.temps?.niveau === 'bientot');
     const plus = _mesJalons.filter(y => !ret.includes(y) && !sem.includes(y));
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 Mes jalons à réaliser</div>
         <button onclick="document.getElementById('modal-mes-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
-      ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Mes tâches à valider (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
+      ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Mes tâches à valider (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jid, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
           <div style="font-size:13px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
-          <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div>${htmlEcheanceTache(t)}</div>`).join('') : ''}
+          <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div>${htmlEcheanceTache(t)}
+          ${peutRepousserTacheJalon(t) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};repousserTacheJalon('${jid}','${encodeURIComponent(t.id)}')" style="margin-top:6px;background:#fff;border:1px solid #1F6AA5;color:#1F6AA5;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">⏭ Repousser</button>` : ''}</div>`).join('') : ''}
       ${_mesPhasesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Phases repoussées (${_mesPhasesPlusTard.length})</div>` + _mesPhasesPlusTard.map(({ c, x }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
-          <div style="font-size:12px;font-weight:700;color:var(--gris)">${x.m.fab ? '🏭 ' : esc(x.m.id) + ' · '}${esc(x.m.nom)}${x.decaleParPhases ? ' <span style="font-weight:400;color:#aaa">(suit ses phases repoussées)</span>' : ''}</div>
+          <div style="font-size:12px;font-weight:700;color:var(--gris)">${x.m.fab ? (({ etude: '📐', pose: '🏗', fab: '🏭' })[x.m.kind] || '🏭') + ' ' : esc(x.m.id) + ' · '}${esc(x.m.nom)}${x.decaleParPhases ? ' <span style="font-weight:400;color:#aaa">(suit ses phases repoussées)</span>' : ''}</div>
           <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · revient le <b>${x.ech.split('-').reverse().join('/')}</b></div></div>`).join('') : ''}
       ${_mesTachesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">🕒 Tâches repoussées / à venir (${_mesTachesPlusTard.length})</div>` + _mesTachesPlusTard.map(({ c, t, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsChantier(${c.id})" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
