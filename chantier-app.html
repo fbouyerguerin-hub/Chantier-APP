@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V104';
+  const APP_VERSION = 'V105';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -23577,7 +23577,7 @@
 
   // ── « Mes jalons » : bouton 🚩 dans l'en-tête, pour chaque titulaire ──
   let _mesJalons = [], _mesJalonsTimer = null, _mesJalonsLecture = 0;
-  let _mesTachesJalons = [], _mesTachesPlusTard = [], _mesPhasesPlusTard = [], _mesJalonsInfo = [];
+  let _mesTachesJalons = [], _mesTachesPlusTard = [], _mesPhasesPlusTard = [], _mesJalonsInfo = [], _autresRetardsJalons = [];
   // V79 : recalcul du 🚩 et, si la liste « Mes jalons » est ouverte, réaffichage immédiat
   async function rafraichirMesJalonsOuverts() {
     try { await calculerMesJalons(); } catch (e) {}
@@ -23622,7 +23622,7 @@
         _mesJalonsLecture = Date.now();
         memoriserCaChantiers(chantiersGestionCache); detecterChampJalons(chantiersGestionCache);
       }
-      const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [], infos = [];
+      const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [], infos = [], autresRetards = [];
       chantiersGestionCache.forEach(c => {
         const st = c['Statue']?.value || c['Statue'] || '';
         if (estStatutCloture(st) || st === 'Terminé') return;
@@ -23630,6 +23630,8 @@
         // V94 : le 🚩 n'alerte QUE sur les phases dont l'échéance est dépassée. Les autres jalons / phases
         // à faire restent listés « sans alerte » (non comptés) pour que chacun puisse continuer à travailler.
         et.forEach((x, i) => {
+          // V105 : pour info (sans alerte) : phases en retard chez les autres intervenants
+          if (x.m.fab && !JALON_FAIT(x) && x.temps?.niveau === 'retard' && !x.masque && !estMoi(x.personnes)) autresRetards.push({ c, x });
           if (JALON_FAIT(x) || !(x.etat === 'bloque' || jalonDisponible(et, i)) || !estMoi(x.personnes)) return;
           // V96 : un blocage (jalon ou phase) alerte seulement si son échéance est dépassée
           if (x.etat === 'bloque' && x.temps?.niveau === 'retard') liste.push({ c, x });
@@ -23647,6 +23649,7 @@
       tachesPlusTard.sort((a, b) => String(a.t.ech || '9999').localeCompare(String(b.t.ech || '9999')));
       infos.sort((a, b) => String(a.x.ech || '9999').localeCompare(String(b.x.ech || '9999')));
       _mesJalonsInfo = infos;
+      _autresRetardsJalons = autresRetards.sort((a, b) => (a.x.temps?.jours || 0) - (b.x.temps?.jours || 0));
       _mesTachesJalons = taches; _mesTachesPlusTard = tachesPlusTard;
       const retourLe = x => x.masque ? x.masque.jusqu : x.ech;
       phasesPlusTard.forEach(y => { y.retour = retourLe(y.x); });
@@ -23657,7 +23660,7 @@
     const b = document.getElementById('header-jalons-btn');
     if (b) {
       const nbT = _mesTachesJalons.length, nbA = _mesJalons.length + nbT;
-      const autres = _mesJalonsInfo.length + _mesTachesPlusTard.length + _mesPhasesPlusTard.length;
+      const autres = _mesJalonsInfo.length + _mesTachesPlusTard.length + _mesPhasesPlusTard.length + _autresRetardsJalons.length;
       b.style.display = (nbA + autres) ? 'block' : 'none';
       b.innerHTML = '🚩' + (nbA ? `<span style="position:absolute;top:-6px;right:-6px;background:#c0392b;color:#fff;font-size:10px;font-weight:800;border-radius:9px;min-width:18px;height:18px;line-height:18px;padding:0 4px">${nbA}</span>` : '');
       b.title = nbA ? `${_mesJalons.length} phase(s) en retard ou blocage(s) · ${nbT} tâche(s) en retard` : 'Aucun retard ni blocage — jalons et tâches à faire';
@@ -23728,6 +23731,13 @@
       ${_mesTachesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">☑ Mes autres tâches, sans alerte (${_mesTachesPlusTard.length})</div>` + _mesTachesPlusTard.map(({ c, t, jid, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${jid}', '${encodeURIComponent(t.id)}')" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
           <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)}${t.ech ? ` · échéance <b>${frDateTache(t.ech)}</b>` : ' · sans échéance'}</div></div>`).join('') : ''}
+      ${_autresRetardsJalons.length ? `<details data-k="mj-autres" ${_detailsOuverts.has('mj-autres') ? 'open' : ''} ontoggle="memoDetails(this)" style="margin-top:14px;opacity:.6">
+        <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#999">👀 Pour info : phases en retard chez les autres intervenants (${_autresRetardsJalons.length})</summary>
+        <div style="font-size:10px;color:#aaa;margin:4px 0 6px">Simple information, rien à faire de votre côté.</div>
+        ${_autresRetardsJalons.map(({ c, x }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${x.m.id}')" style="cursor:pointer;background:#fafafa;border:1px solid #eee;border-radius:8px;padding:6px 9px;margin-bottom:4px">
+          <div style="font-size:12px;color:#777">${(({ etude: '📐', pose: '🏗', fab: '🏭' })[x.m.kind] || '🏭')} ${esc(x.m.nom)}</div>
+          <div style="font-size:10px;color:#aaa">🏗 ${esc(c['Nom du chantier'] || '')} · 👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)} · retard ${-(x.temps?.jours || 0)} j</div></div>`).join('')}
+      </details>` : ''}
       <div style="font-size:10px;color:#aaa;margin-top:8px">Échéances calculées depuis le plan de charge. Touchez un jalon ou une tâche pour l'ouvrir directement dans la frise du chantier.</div></div>`;
     m.style.display = 'flex';
   }
