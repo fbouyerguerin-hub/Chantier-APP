@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V112';
+  const APP_VERSION = 'V113';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -25645,6 +25645,7 @@
       } catch (e) { diagEbp.erreur = e.message; /* repli sur la fiche chantier */ }
       try {
         const chantiersRows = await valeur(pChantiersRenta);
+        _rentaNomsClotures = new Set(chantiersRows.filter(c => estStatutCloture(c['Statue']) && c['Nom du chantier']).map(c => c['Nom du chantier'])); // V113
         chantiersRows.forEach(c => {
           const nom = c['Nom du chantier'];
           const brut = c[CHAMP_PRIX_VENTE];
@@ -25920,6 +25921,9 @@
   }
 
   function renderPeriodesRenta() {
+    const ev = document.getElementById('renta-vues');
+    if (ev) { const ong = (v, lib) => `<button onclick="basculerRentaClotures(${v})" style="padding:6px 10px;border:none;border-bottom:3px solid ${_rentaAvecClotures === v ? 'var(--vert)' : 'transparent'};background:none;font-size:12px;font-weight:700;cursor:pointer;color:${_rentaAvecClotures === v ? 'var(--vert)' : '#aaa'}">${lib}</button>`;
+      ev.innerHTML = ong(false, '🟢 Chantiers actifs') + ong(true, `🗂 Tous, y compris clôturés${_rentaNomsClotures.size ? ' (' + _rentaNomsClotures.size + ' 🔒)' : ''}`); }
     const el = document.getElementById('renta-periodes');
     if (!el) return;
     el.innerHTML = RENTA_PERIODES.map(([k, lib]) => `<button onclick="chargerRentabilite('${k}')" style="padding:6px 12px;border-radius:16px;border:1.5px solid ${k === _rentaPeriode ? 'var(--vert)' : '#ddd5c5'};background:${k === _rentaPeriode ? 'var(--vert)' : '#fff'};color:${k === _rentaPeriode ? '#fff' : 'var(--gris)'};font-size:12px;font-weight:600;cursor:pointer">${lib}</button>`).join('')
@@ -26113,8 +26117,12 @@
   }
 
   // Filtre + tri de la vue (réutilisé par l'export Excel pour exporter exactement ce qui est affiché)
+  // V113 : chantiers clôturés visibles uniquement dans la vue « Tous les chantiers (y compris clôturés) »
+  let _rentaNomsClotures = new Set(), _rentaAvecClotures = false;
+  function basculerRentaClotures(v) { _rentaAvecClotures = !!v; renderRentabilite(); }
   function rentaLignesFiltrees(d, taux, coef, q, avecHors, tri) {
     let lignes = calculerRentaChantiers(d, taux, coef);
+    if (!_rentaAvecClotures) lignes = lignes.filter(c => !_rentaNomsClotures.has(c.nom));
     const analyses = lignes.filter(c => !c.horsAnalyse);
     if (!avecHors) lignes = analyses.slice();
     if (q) lignes = lignes.filter(c => c.nom.toLowerCase().includes(q));
@@ -26214,9 +26222,9 @@
       const ouvert = _rentaOuverts.has(c.nom);
       const coul = couleurRenta(c.renta);
       const conso = c.prix ? Math.min(c.cout / c.prix, 1.5) : null;
-      const badge = c.horsAnalyse ? '<span style="font-size:10px;color:#999;font-style:italic">Hors analyse</span>'
+      const badge = (_rentaNomsClotures.has(c.nom) ? '<span style="font-size:10px;font-weight:700;color:#555;background:#eee;border-radius:8px;padding:2px 7px;margin-right:4px">🔒 Clôturé</span>' : '') + (c.horsAnalyse ? '<span style="font-size:10px;color:#999;font-style:italic">Hors analyse</span>'
         : c.prix === null ? '<span style="font-size:10px;font-weight:700;color:#856404;background:#fef3cd;border-radius:8px;padding:2px 7px">Sans prix</span>'
-        : `<span style="font-size:12px;font-weight:800;color:#fff;background:${coul};border-radius:8px;padding:2px 8px">${(c.marge * 100).toFixed(1)} %</span>`;
+        : `<span style="font-size:12px;font-weight:800;color:#fff;background:${coul};border-radius:8px;padding:2px 8px">${(c.marge * 100).toFixed(1)} %</span>`);
       const chiffre = (lib, v, coulV) => `<div style="min-width:0"><div style="font-size:9px;color:var(--gris-moyen);text-transform:uppercase;font-weight:700">${lib}</div><div style="font-size:12px;font-weight:700;color:${coulV || 'var(--gris)'};white-space:nowrap">${v}</div></div>`;
       const detail = ouvert ? `
         <div style="margin-top:10px;border-top:1px dashed #e5ded0;padding-top:8px;font-size:11px;color:var(--gris)">
@@ -26569,6 +26577,7 @@
       <div style="font-size:13px;font-weight:700;color:var(--gris)">💶 Rentabilité chantiers</div>
       <button onclick="exportRentaFiltre(this)" title="Exporte les chantiers affichés (filtre, tri, taux et coefficient)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
     </div>
+    <div id="renta-vues" style="margin:0 16px 8px;display:flex;gap:4px;border-bottom:2px solid #eee"></div>
     <div id="renta-periodes" style="margin:0 16px 10px;display:flex;gap:6px;flex-wrap:wrap"></div>
     <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--gris)">
       <label style="display:flex;align-items:center;gap:4px">Taux <input id="renta-taux" type="number" step="1" min="0" value="50" oninput="renderRentabilite()" style="width:60px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"> €/h</label>
