@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V111';
+  const APP_VERSION = 'V112';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -8672,7 +8672,7 @@
   function htmlInterruptionsAffaire(a) {
     const l = lireInterruptionsCharge(a); if (!l.length) return '';
     const fr = d => String(d).split('-').reverse().join('/');
-    return `<div style="margin-top:6px">${l.map(i => `<div style="font-size:10px;font-weight:700;color:#5b6b7a;background:#eef3f8;border-radius:6px;padding:3px 7px;margin-top:3px">⛈ ${i.poste === 'tous' ? 'Toutes phases' : echapperHtmlNote(i.poste)} interrompue du ${fr(i.debut)} au ${fr(i.fin)}${i.motif ? ' — ' + echapperHtmlNote(i.motif) : ''}</div>`).join('')}</div>`;
+    return `<div style="margin-top:6px">${l.map(i => `<div style="font-size:10px;font-weight:700;color:#5b6b7a;background:#eef3f8;border-radius:6px;padding:3px 7px;margin-top:3px">⏸ ${i.poste === 'tous' ? 'Toutes phases' : echapperHtmlNote(i.poste)} interrompue du ${fr(i.debut)} au ${fr(i.fin)}${i.motif ? ' — ' + echapperHtmlNote(i.motif) : ''}</div>`).join('')}</div>`;
   }
   function ouvrirInterruptionsCharge(id) {
     const a = (_affairesListeCache || []).find(x => x.id === id); if (!a) return;
@@ -8692,7 +8692,7 @@
     const l = lireInterruptionsCharge(a);
     const auj = dateYMD(new Date());
     m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:420px;max-height:88vh;overflow-y:auto;padding:16px">
-      <div style="font-size:15px;font-weight:800;color:var(--gris)">⛈ Interruptions — ${esc(nom)}</div>
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">⏸ Interruptions — ${esc(nom)}</div>
       <div style="font-size:11px;color:#777;margin:4px 0 10px;line-height:1.4">Intempéries, attente client… La phase est suspendue sur ces jours et se prolonge d'autant. Les heures, personnes et la date de pose de l'affaire ne sont pas modifiées.</div>
       ${l.length ? l.map(i => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:#eef3f8;border-radius:8px;padding:6px 9px;margin-bottom:5px;font-size:12px">
         <span><b>${i.poste === 'tous' ? 'Toutes phases' : esc(i.poste)}</b> du ${fr(i.debut)} au ${fr(i.fin)}${i.motif ? '<br><span style="color:#777">' + esc(i.motif) + '</span>' : ''}</span>
@@ -8813,7 +8813,7 @@
             ${(!livraison || !postes) ? `<div style="margin-top:6px;font-size:10px;font-weight:700;color:#c0392b">⚠️ Non visible sur le planning : ${!livraison && !postes ? 'date de pose et heures manquantes' : (!livraison ? 'date de pose manquante' : 'aucune heure saisie')}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;margin-left:8px">
-            <button onclick="ouvrirInterruptionsCharge(${a.id})" title="Interruption (intempéries…) : suspend la phase sans modifier l'affaire" style="background:#eef3f8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">⛈</button>
+            <button onclick="ouvrirInterruptionsCharge(${a.id})" title="Interruption (intempéries…) : suspend la phase sans modifier l'affaire" style="background:#eef3f8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">⏸</button>
             <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
             <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
           </div>
