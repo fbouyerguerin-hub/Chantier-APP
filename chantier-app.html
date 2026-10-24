@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V107';
+  const APP_VERSION = 'V108';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -6886,7 +6886,7 @@
             <thead>
               <tr style="background:#f8f8f8">
                 <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Chantiers</th>
-                ${jourColonnes.map(jc => `<th data-today="${jc.estActuelle}" style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:44px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                ${jourColonnes.map(jc => `<th data-today="${jc.estActuelle}" data-date="${jc.dateStr}" style="padding:4px 3px;text-align:center;font-size:8px;color:${jc.estActuelle ? '#fff' : '#888'};background:${jc.estActuelle ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:44px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
@@ -6939,7 +6939,10 @@
   function scrollChargeVersAujourdhui() {
     requestAnimationFrame(() => {
       document.querySelectorAll('#charge-content .charge-scroll-wrap').forEach(wrap => {
-        const th = wrap.querySelector('th[data-today="true"]');
+        // V108 : le week-end (ou un jour férié) il n'y a pas de colonne « aujourd'hui » :
+        // on se place alors sur le prochain jour ouvré affiché
+        const auj = dateYMD(new Date());
+        const th = wrap.querySelector('th[data-today="true"]') || [...wrap.querySelectorAll('th[data-date]')].find(t => t.dataset.date >= auj);
         if (!th) return;
         const wrapRect = wrap.getBoundingClientRect();
         const thRect = th.getBoundingClientRect();
@@ -7216,7 +7219,7 @@
             <thead>
               <tr style="background:#f8f8f8">
                 <th style="padding:6px 8px;text-align:left;font-size:10px;color:#888;font-weight:600;white-space:nowrap;min-width:180px;position:sticky;left:0;top:0;background:#f8f8f8;z-index:4">Ressources / Chantiers</th>
-                ${jourColonnes.map(jc => `<th data-today="${jc.dateStr === todayStrCharge}" style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:52px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
+                ${jourColonnes.map(jc => `<th data-today="${jc.dateStr === todayStrCharge}" data-date="${jc.dateStr}" style="padding:4px 3px;text-align:center;font-size:9px;color:${jc.dateStr === todayStrCharge ? '#fff' : '#888'};background:${jc.dateStr === todayStrCharge ? 'var(--vert)' : '#f8f8f8'};font-weight:700;white-space:nowrap;min-width:52px;position:sticky;top:0;z-index:3;${bordureSemaine(jc)}">${jc.label}</th>`).join('')}
               </tr>
             </thead>
             <tbody>
