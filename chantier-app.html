@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V114';
+  const APP_VERSION = 'V115';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -25952,11 +25952,12 @@
   function renderPeriodesRenta() {
     const ev = document.getElementById('renta-vues');
     if (ev) { const ong = (v, lib) => `<button onclick="basculerRentaClotures(${v})" style="padding:6px 10px;border:none;border-bottom:3px solid ${_rentaAvecClotures === v ? 'var(--vert)' : 'transparent'};background:none;font-size:12px;font-weight:700;cursor:pointer;color:${_rentaAvecClotures === v ? 'var(--vert)' : '#aaa'}">${lib}</button>`;
-      ev.innerHTML = ong(false, '🟢 Chantiers actifs') + ong(true, `🗂 Tous, y compris clôturés${_rentaNomsClotures.size ? ' (' + _rentaNomsClotures.size + ' 🔒)' : ''}`); }
+      ev.innerHTML = ong(false, '🟢 Actifs') + ong(true, `🗂 Tous + clôturés${_rentaNomsClotures.size ? ' (' + _rentaNomsClotures.size + ' 🔒)' : ''}`); }
     const el = document.getElementById('renta-periodes');
     if (!el) return;
-    el.innerHTML = RENTA_PERIODES.map(([k, lib]) => `<button onclick="chargerRentabilite('${k}')" style="padding:6px 12px;border-radius:16px;border:1.5px solid ${k === _rentaPeriode ? 'var(--vert)' : '#ddd5c5'};background:${k === _rentaPeriode ? 'var(--vert)' : '#fff'};color:${k === _rentaPeriode ? '#fff' : 'var(--gris)'};font-size:12px;font-weight:600;cursor:pointer">${lib}</button>`).join('')
-      + `<button onclick="chargerRentabilite(_rentaPeriode)" title="Recharger" style="padding:6px 10px;border-radius:16px;border:1.5px solid #ddd5c5;background:#fff;font-size:12px;cursor:pointer">🔄</button>`;
+    // V115 : période en liste déroulante + bouton recharger
+    el.innerHTML = `<select onchange="chargerRentabilite(this.value)" style="padding:7px 8px;border:1.5px solid var(--vert);border-radius:8px;font-size:12px;font-weight:700;background:#fff;color:var(--vert)">${RENTA_PERIODES.map(([k, lib]) => `<option value="${k}" ${k === _rentaPeriode ? 'selected' : ''}>📅 ${lib}</option>`).join('')}</select>`
+      + `<button onclick="chargerRentabilite(_rentaPeriode)" title="Recharger" style="padding:6px 9px;border-radius:8px;border:1.5px solid #ddd5c5;background:#fff;font-size:12px;cursor:pointer">🔄</button>`;
   }
 
   // ── STATUT DES COMMANDES CLIENTS (Rentabilité) : affiché et modifiable ──
@@ -26602,26 +26603,32 @@
   <!-- EXPORT -->
   <div id="gestion-rentabilite" style="display:none">
   <div class="filtre-fige">
-    <div style="margin:0 16px 10px;display:flex;align-items:center;gap:8px">
-      <div style="font-size:13px;font-weight:700;color:var(--gris)">💶 Rentabilité chantiers</div>
-      <button onclick="exportRentaFiltre(this)" title="Exporte les chantiers affichés (filtre, tri, taux et coefficient)" style="margin-left:auto;background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">📥 Excel</button>
+    <!-- V115 : bandeau compact (comme le plan de charge) : titre + vues + menus sur une ligne, filtres sur une ligne -->
+    <div style="display:flex;align-items:flex-end;gap:4px;flex-wrap:wrap;margin:0 16px 8px;border-bottom:2px solid #eee">
+      <div style="font-size:15px;font-weight:800;color:var(--gris);margin-right:6px;padding-bottom:8px">💶 Renta</div>
+      <div id="renta-vues" style="display:flex;gap:2px"></div>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:6px">
+        <details id="renta-menu-reglages" style="position:relative">
+          <summary style="list-style:none;cursor:pointer;background:#fff;color:var(--gris);border:1.5px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;white-space:nowrap">⚙️<span class="lib-long"> Réglages</span> ▾</summary>
+          <div style="position:absolute;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:10px;min-width:220px;font-size:12px;color:var(--gris)">
+            <label style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">Taux horaire <span><input id="renta-taux" type="number" step="1" min="0" value="50" oninput="renderRentabilite()" style="width:64px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"> €/h</span></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">Coefficient <input id="renta-coef" type="number" step="0.05" min="0" value="1.2" oninput="renderRentabilite()" style="width:64px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"></label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px"><input type="checkbox" id="renta-hors" onchange="renderRentabilite()"> Afficher les chantiers hors analyse</label>
+          </div>
+        </details>
+        <button onclick="exportRentaFiltre(this)" title="Exporte les chantiers affichés (filtre, tri, taux et coefficient)" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥<span class="lib-long"> Excel</span></button>
+      </div>
     </div>
-    <div id="renta-vues" style="margin:0 16px 8px;display:flex;gap:4px;border-bottom:2px solid #eee"></div>
-    <div id="renta-periodes" style="margin:0 16px 10px;display:flex;gap:6px;flex-wrap:wrap"></div>
-    <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--gris)">
-      <label style="display:flex;align-items:center;gap:4px">Taux <input id="renta-taux" type="number" step="1" min="0" value="50" oninput="renderRentabilite()" style="width:60px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"> €/h</label>
-      <label style="display:flex;align-items:center;gap:4px">Coef <input id="renta-coef" type="number" step="0.05" min="0" value="1.2" oninput="renderRentabilite()" style="width:56px;padding:5px 6px;border:1.5px solid #ddd5c5;border-radius:6px;background:#fff2cc;font-size:12px"></label>
-    </div>
-    <div style="margin:0 16px 10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <input id="renta-recherche" type="search" placeholder="🔍 Rechercher un chantier…" oninput="renderRentabilite()" style="flex:1;min-width:150px;padding:8px 10px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px;background:var(--beige-clair);outline:none">
-      <select id="renta-tri" onchange="renderRentabilite()" style="padding:8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:var(--beige-clair);color:var(--gris)">
+    <div style="margin:0 16px 8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <div id="renta-periodes" style="display:flex;gap:4px;align-items:center"></div>
+      <select id="renta-tri" onchange="renderRentabilite()" style="padding:7px 8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff;color:var(--gris)">
         <option value="renta-asc">Rentabilité ↑ (pires d'abord)</option>
         <option value="renta-desc">Rentabilité ↓</option>
         <option value="marge-asc">Marge % ↑</option>
         <option value="heures-desc">Heures ↓</option>
         <option value="nom">Nom</option>
       </select>
-      <label style="font-size:11px;color:var(--gris-moyen);display:flex;align-items:center;gap:4px"><input type="checkbox" id="renta-hors" onchange="renderRentabilite()"> Hors analyse</label>
+      <input id="renta-recherche" type="search" placeholder="🔍 Chantier…" oninput="renderRentabilite()" style="flex:1 1 140px;min-width:120px;padding:7px 10px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:var(--beige-clair);outline:none">
     </div>
   </div>
     <div id="renta-avert" style="display:none;margin:0 16px 10px;font-size:11px;color:#856404;background:#fef3cd;border-radius:8px;padding:6px 10px"></div>
