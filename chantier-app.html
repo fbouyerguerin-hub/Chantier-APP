@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V110';
+  const APP_VERSION = 'V111';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -6610,56 +6610,61 @@
       if (!heures) return 0;
       return Math.ceil(heures / capJour(posteKey));
     };
-    // Recule de nbJours jours OUVRÉS (lun-ven) par rapport à dateStr (dateStr exclue du décompte)
-    const reculerJoursOuvres = (dateStr, jours) => {
+    // V111 : interruptions (intempéries…) : jours suspendus pour un poste, sans toucher aux données de base
+    const interr = lireInterruptionsCharge(a);
+    const interrompu = (poste, ds) => interr.some(i => (i.poste === 'tous' || i.poste === poste) && ds >= i.debut && ds <= i.fin);
+    const ouvre = ds => { const d = new Date(ds + 'T12:00:00'), dow = d.getDay(); return dow !== 0 && dow !== 6 && !estJourFerie(ds); };
+    const actif = (poste, ds) => ouvre(ds) && !interrompu(poste, ds);
+    // Recule de nbJours jours ACTIFS (ouvrés, non interrompus) par rapport à dateStr (dateStr exclue du décompte)
+    const reculerJoursOuvres = (dateStr, jours, poste) => {
       const d = new Date(dateStr + 'T12:00:00');
       let restant = jours;
-      while (restant > 0) {
-        d.setDate(d.getDate() - 1);
-        const dow = d.getDay();
-        if (dow !== 0 && dow !== 6 && !estJourFerie(dateYMD(d))) restant--;
-      }
+      while (restant > 0) { d.setDate(d.getDate() - 1); if (actif(poste, dateYMD(d))) restant--; }
       return dateYMD(d);
     };
-    // Avance de nbJours jours OUVRÉS (lun-ven) par rapport à dateStr (dateStr exclue du décompte)
-    const avancerJoursOuvres = (dateStr, jours) => {
+    // Avance de nbJours jours ACTIFS par rapport à dateStr (dateStr exclue du décompte)
+    const avancerJoursOuvres = (dateStr, jours, poste) => {
       const d = new Date(dateStr + 'T12:00:00');
       let restant = jours;
-      while (restant > 0) {
-        d.setDate(d.getDate() + 1);
-        const dow = d.getDay();
-        if (dow !== 0 && dow !== 6 && !estJourFerie(dateYMD(d))) restant--;
-      }
+      while (restant > 0) { d.setDate(d.getDate() + 1); if (actif(poste, dateYMD(d))) restant--; }
       return dateYMD(d);
     };
-    // Point de départ d'une phase de durée `jours` se terminant (dernier jour inclus) à `finStr`
-    const debutDe = (finStr, jours) => jours > 0 ? reculerJoursOuvres(finStr, jours - 1) : finStr;
-    // Point de fin d'une phase de durée `jours` commençant (premier jour inclus) à `debutStr`
-    const finDe = (debutStr, jours) => jours > 0 ? avancerJoursOuvres(debutStr, jours - 1) : debutStr;
-    // Veille ouvrée de dateStr (pour enchaîner une phase juste avant une autre, sans chevauchement)
-    const veilleOuvree = (dateStr) => reculerJoursOuvres(dateStr, 1);
+    // Premier jour actif à partir de / dernier jour actif jusqu'à dateStr (inclus)
+    const premierActif = (dateStr, poste) => actif(poste, dateStr) ? dateStr : avancerJoursOuvres(dateStr, 1, poste);
+    const dernierActif = (dateStr, poste) => actif(poste, dateStr) ? dateStr : reculerJoursOuvres(dateStr, 1, poste);
+    const debutDe = (finStr, jours, poste) => jours > 0 ? reculerJoursOuvres(finStr, jours - 1, poste) : finStr;
+    const finDe = (debutStr, jours, poste) => jours > 0 ? avancerJoursOuvres(debutStr, jours - 1, poste) : debutStr;
+    const veilleOuvree = (dateStr, poste) => reculerJoursOuvres(dateStr, 1, poste);
 
-    // La Pose commence à la date de pose et se poursuit en avançant
+    // La Pose commence à la date de pose (premier jour non interrompu) et se poursuit en avançant
     const joursPose = nbJours('Pose');
-    const debutPose = datePose;
-    const finPose = finDe(debutPose, joursPose);
+    const debutPose = premierActif(datePose, 'Pose');
+    const finPose = finDe(debutPose, joursPose, 'Pose');
 
     // Le reste (Fab Acier / Fab Bois puis Étude) se planifie AVANT la date de pose, comme auparavant
-    const finFab = veilleOuvree(debutPose);
     const joursFabAcier = nbJours('Fab Acier');
     const joursFabBois = nbJours('Fab Bois');
-    const debutFabAcier = debutDe(finFab, joursFabAcier);
-    const debutFabBois = debutDe(finFab, joursFabBois);
+    const finFabAcier = veilleOuvree(datePose, 'Fab Acier'), finFabBois = veilleOuvree(datePose, 'Fab Bois');
+    const finFab = finFabAcier > finFabBois ? finFabAcier : finFabBois;
+    const debutFabAcier = debutDe(finFabAcier, joursFabAcier, 'Fab Acier');
+    const debutFabBois = debutDe(finFabBois, joursFabBois, 'Fab Bois');
 
-    const finEtude = veilleOuvree(debutFabAcier < debutFabBois ? debutFabAcier : debutFabBois);
     const joursEtude = nbJours('Étude');
-    const debutEtude = debutDe(finEtude, joursEtude);
+    const finEtude = veilleOuvree(debutFabAcier < debutFabBois ? debutFabAcier : debutFabBois, 'Étude');
+    const debutEtude = debutDe(finEtude, joursEtude, 'Étude');
+    // Jours suspendus à l'intérieur de chaque phase (exclus de la charge et des barres du planning)
+    const offDe = (poste, d0, d1) => {
+      if (!interr.length || !d0 || !d1 || d1 < d0) return null;
+      const set = new Set(), d = new Date(d0 + 'T12:00:00');
+      while (dateYMD(d) <= d1) { const ds = dateYMD(d); if (ouvre(ds) && interrompu(poste, ds)) set.add(ds); d.setDate(d.getDate() + 1); }
+      return set.size ? set : null;
+    };
 
     return {
-      'Pose':      { debut: debutPose,     fin: finPose,   jours: joursPose,     semaines: joursPose },
-      'Fab Acier': { debut: debutFabAcier, fin: finFab,     jours: joursFabAcier, semaines: joursFabAcier },
-      'Fab Bois':  { debut: debutFabBois,  fin: finFab,     jours: joursFabBois,  semaines: joursFabBois },
-      'Étude':     { debut: debutEtude,    fin: finEtude,   jours: joursEtude,    semaines: joursEtude },
+      'Pose':      { debut: debutPose,     fin: finPose,     jours: joursPose,     semaines: joursPose,     off: offDe('Pose', debutPose, finPose) },
+      'Fab Acier': { debut: debutFabAcier, fin: finFabAcier, jours: joursFabAcier, semaines: joursFabAcier, off: offDe('Fab Acier', debutFabAcier, finFabAcier) },
+      'Fab Bois':  { debut: debutFabBois,  fin: finFabBois,  jours: joursFabBois,  semaines: joursFabBois,  off: offDe('Fab Bois', debutFabBois, finFabBois) },
+      'Étude':     { debut: debutEtude,    fin: finEtude,    jours: joursEtude,    semaines: joursEtude,    off: offDe('Étude', debutEtude, finEtude) },
     };
   }
 
@@ -6839,7 +6844,7 @@
             const heures = parseFloat(a[p.field]) || 0;
             if (!heures || !per.jours) return;
             const hParJour = heures / per.jours;
-            jc.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+            jc.jours.forEach(dateStr => { if (dansPeriode(per, dateStr)) consSem += hParJour; });
           });
           consJour[p.key][jc.dateStr] = Math.round(consSem);
         });
@@ -6873,7 +6878,7 @@
           return `<tr class="gantt-row-chantier" style="background:${bgRow}">
             <td onclick="ouvrirFormCharge(${a.id})" title="${nom} — cliquer pour modifier" style="padding:4px 8px;font-size:10px;font-weight:600;color:var(--gris);position:sticky;left:0;background:${bgRow};z-index:1;cursor:pointer;white-space:normal;word-break:break-word;min-width:180px">🏗 ${nom}</td>
             ${jourColonnes.map(jc => {
-              const heuresSemaine = jc.jours.reduce((s, dateStr) => dateStr >= per.debut && dateStr <= per.fin ? s + hParJour : s, 0);
+              const heuresSemaine = jc.jours.reduce((s, dateStr) => dansPeriode(per, dateStr) ? s + hParJour : s, 0);
               const actif = heuresSemaine > 0;
               return `<td onclick="${actif ? `ouvrirFormCharge(${a.id})` : ''}" title="${actif ? nom + ' — cliquer pour modifier' : ''}" style="padding:2px 3px;text-align:center;font-size:8px;font-weight:700;${bordureSemaine(jc)};${actif ? `background:${p.color};color:#fff;cursor:pointer` : ''}">${actif ? Math.round(heuresSemaine * 10) / 10 + 'h' : ''}</td>`;
             }).join('')}
@@ -7207,7 +7212,7 @@
           return `<tr class="gantt-row-chantier" style="background:${bgRow}">
             <td onclick="ouvrirFormCharge(${a.id})" title="${nom} — cliquer pour modifier" style="padding:4px 8px;font-size:10px;font-weight:600;color:var(--gris);position:sticky;left:0;background:${bgRow};z-index:1;cursor:pointer;white-space:normal;word-break:break-word;min-width:180px">🏗 ${nom}</td>
             ${jourColonnes.map(jc => {
-              const actif = jc.dateStr >= per.debut && jc.dateStr <= per.fin;
+              const actif = dansPeriode(per, jc.dateStr);
               return `<td onclick="${actif ? `ouvrirFormCharge(${a.id})` : ''}" title="${actif ? nom + ' — cliquer pour modifier' : ''}" style="padding:2px 3px;text-align:center;font-size:8px;font-weight:700;${bordureSemaine(jc)};${actif ? `background:${p.color};color:#fff;cursor:pointer` : ''}">${actif ? Math.round(hParJour * 10) / 10 + 'h' : ''}</td>`;
             }).join('')}
           </tr>`;
@@ -7435,7 +7440,7 @@
           const periodes = calculerPeriodesAffaire(a, collabs);
           const per = periodes[p.key];
           const heures = parseFloat(a[p.field]) || 0;
-          const joursCouverts = jourColonnesExp.filter(jc => jc.dateStr >= per.debut && jc.dateStr <= per.fin);
+          const joursCouverts = jourColonnesExp.filter(jc => dansPeriode(per, jc.dateStr));
           const hParJour = heures / per.jours;
           const bgRow = idx % 2 === 0 ? BLANC : 'FFF8F8F8';
 
@@ -7448,7 +7453,7 @@
           cNom.border = { left: { style: 'medium', color: { argb: posteArgb } } };
 
           jourColonnesExp.forEach((jc, i) => {
-            const actif = jc.dateStr >= per.debut && jc.dateStr <= per.fin;
+            const actif = dansPeriode(per, jc.dateStr);
             const c = ws.getCell(row, 2 + i);
             c.value = actif ? Math.round(hParJour * 10) / 10 : '';
             c.font = { name: 'Arial', size: 8, bold: true, color: { argb: actif ? VERT : GRIS } };
@@ -7493,7 +7498,7 @@
             const per = calculerPeriodesAffaire(a, collabs)[p.key];
             const heures = parseFloat(a[p.field]) || 0;
             if (!per.jours) return;
-            if (jc.dateStr >= per.debut && jc.dateStr <= per.fin) cons += heures / per.jours;
+            if (dansPeriode(per, jc.dateStr)) cons += heures / per.jours;
           });
           consJourExp[jc.dateStr] = Math.round(cons);
         });
@@ -7727,7 +7732,7 @@
 
           semainesAnnee.forEach((s, i) => {
             const hSemaine = s.jours.reduce((sum, dateStr) => {
-              if (dateStr >= per.debut && dateStr <= per.fin) {
+              if (dansPeriode(per, dateStr)) {
                 sum += hParJour;
                 consSemaineAn[s.lundiStr] += hParJour;
               }
@@ -7963,7 +7968,7 @@
           const postesActifs = ['Étude','Fab Bois','Fab Acier','Pose'].filter(k => {
             const per = periodes[k];
             if (!(per.jours > 0)) return false;
-            return s.jours.some(j => j >= per.debut && j <= per.fin);
+            return s.jours.some(j => dansPeriode(per, j));
           });
           const c = ws.getCell(row, 2 + i);
           if (postesActifs.length === 1) {
@@ -8038,7 +8043,7 @@
             const heures = parseFloat(a[p.field]) || 0;
             if (!per.jours || !heures) return;
             const hParJour = heures / per.jours;
-            s.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+            s.jours.forEach(dateStr => { if (dansPeriode(per, dateStr)) consSem += hParJour; });
           });
           consSem = Math.round(consSem);
           const dispo = capSem - consSem;
@@ -8230,7 +8235,7 @@
           cNom.border = { left: { style: 'medium', color: { argb: posteArgb } } };
 
           semainesAnnee.forEach((s, i) => {
-            const hSemaine = s.jours.reduce((sum, dateStr) => dateStr >= per.debut && dateStr <= per.fin ? sum + hParJour : sum, 0);
+            const hSemaine = s.jours.reduce((sum, dateStr) => dansPeriode(per, dateStr) ? sum + hParJour : sum, 0);
             const c = ws.getCell(row, 2 + i);
             if (hSemaine > 0) {
               c.value = Math.round(hSemaine * 10) / 10;
@@ -8293,7 +8298,7 @@
             const heures = parseFloat(a[p.field]) || 0;
             if (!per.jours || !heures) return;
             const hParJour = heures / per.jours;
-            s.jours.forEach(dateStr => { if (dateStr >= per.debut && dateStr <= per.fin) consSem += hParJour; });
+            s.jours.forEach(dateStr => { if (dansPeriode(per, dateStr)) consSem += hParJour; });
           });
           consSem = Math.round(consSem);
           const dispo = capSem - consSem;
@@ -8596,7 +8601,7 @@
               const perAutre = calculerPeriodesAffaire(a, collabs)?.[k];
               const heuresAutre = parseFloat(a[poste.field]) || 0;
               if (!perAutre || !perAutre.jours || !heuresAutre) return;
-              if (dateStr >= perAutre.debut && dateStr <= perAutre.fin) chargeExistante += heuresAutre / perAutre.jours;
+              if (dansPeriode(perAutre, dateStr)) chargeExistante += heuresAutre / perAutre.jours;
             });
             if (chargeExistante + hParJourNouvelle > capaciteJour) joursEnConflit.push(dateStr);
           }
@@ -8653,6 +8658,86 @@
   }
 
   let _affairesListeCache = [];
+
+
+  // ── V111 : INTERRUPTIONS DE CHANTIER (plan de charge) ──
+  // Champ texte long « Interruptions » de la table Plan de charge : [{ id, poste, debut, fin, motif, par, le }]
+  // poste = 'Pose' | 'Fab Acier' | 'Fab Bois' | 'Étude' | 'tous'. Les heures, personnes et la date de pose ne changent pas :
+  // la phase est simplement suspendue sur ces jours et se prolonge d'autant.
+  const CHAMP_INTERRUPTIONS = 'Interruptions';
+  function lireInterruptionsCharge(a) {
+    try { const l = JSON.parse(a?.[CHAMP_INTERRUPTIONS] || '[]'); return Array.isArray(l) ? l.filter(i => i && i.debut && i.fin) : []; } catch (e) { return []; }
+  }
+  function dansPeriode(per, ds) { return !!per && ds >= per.debut && ds <= per.fin && !(per.off && per.off.has(ds)); }
+  function htmlInterruptionsAffaire(a) {
+    const l = lireInterruptionsCharge(a); if (!l.length) return '';
+    const fr = d => String(d).split('-').reverse().join('/');
+    return `<div style="margin-top:6px">${l.map(i => `<div style="font-size:10px;font-weight:700;color:#5b6b7a;background:#eef3f8;border-radius:6px;padding:3px 7px;margin-top:3px">⛈ ${i.poste === 'tous' ? 'Toutes phases' : echapperHtmlNote(i.poste)} interrompue du ${fr(i.debut)} au ${fr(i.fin)}${i.motif ? ' — ' + echapperHtmlNote(i.motif) : ''}</div>`).join('')}</div>`;
+  }
+  function ouvrirInterruptionsCharge(id) {
+    const a = (_affairesListeCache || []).find(x => x.id === id); if (!a) return;
+    if (!Object.prototype.hasOwnProperty.call(a, CHAMP_INTERRUPTIONS)) {
+      alert("Les interruptions ont besoin d'un champ dans Baserow :\n\nTable « Plan de charge » → ajouter un champ de type « Texte long » nommé exactement : Interruptions\n\nPuis rechargez l'onglet.");
+      return;
+    }
+    let m = document.getElementById('modal-interruptions');
+    if (!m) {
+      m = document.createElement('div'); m.id = 'modal-interruptions';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;align-items:center;justify-content:center;padding:16px';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    const esc = echapperHtmlNote, fr = d => String(d).split('-').reverse().join('/');
+    const nom = (a['Chantier'] || [])[0]?.value || 'Affaire';
+    const l = lireInterruptionsCharge(a);
+    const auj = dateYMD(new Date());
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:420px;max-height:88vh;overflow-y:auto;padding:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">⛈ Interruptions — ${esc(nom)}</div>
+      <div style="font-size:11px;color:#777;margin:4px 0 10px;line-height:1.4">Intempéries, attente client… La phase est suspendue sur ces jours et se prolonge d'autant. Les heures, personnes et la date de pose de l'affaire ne sont pas modifiées.</div>
+      ${l.length ? l.map(i => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;background:#eef3f8;border-radius:8px;padding:6px 9px;margin-bottom:5px;font-size:12px">
+        <span><b>${i.poste === 'tous' ? 'Toutes phases' : esc(i.poste)}</b> du ${fr(i.debut)} au ${fr(i.fin)}${i.motif ? '<br><span style="color:#777">' + esc(i.motif) + '</span>' : ''}</span>
+        <a href="#" onclick="event.preventDefault();supprimerInterruptionCharge(${id}, '${esc(i.id)}')" style="color:#c0392b;font-weight:700;text-decoration:none">🗑</a></div>`).join('') : '<div style="font-size:12px;color:#aaa;margin-bottom:8px">Aucune interruption.</div>'}
+      <div style="border-top:1px solid #eee;margin-top:10px;padding-top:10px">
+        <div style="font-size:12px;font-weight:800;color:var(--gris);margin-bottom:6px">+ Nouvelle interruption</div>
+        <select id="interr-poste" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;margin-bottom:6px">
+          <option value="Pose">Pose</option><option value="Fab Acier">Fab Acier</option><option value="Fab Bois">Fab Bois</option><option value="Étude">Étude</option><option value="tous">Toutes les phases</option></select>
+        <div style="display:flex;gap:6px"><label style="flex:1;font-size:11px;color:#777">Du<input type="date" id="interr-debut" value="${auj}" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:7px;font-size:13px"></label>
+          <label style="flex:1;font-size:11px;color:#777">Au (inclus)<input type="date" id="interr-fin" value="${auj}" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:7px;font-size:13px"></label></div>
+        <input type="text" id="interr-motif" placeholder="Motif (ex. intempéries)" maxlength="150" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;margin-top:6px">
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button onclick="document.getElementById('modal-interruptions').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">Fermer</button>
+          <button onclick="ajouterInterruptionCharge(${id})" style="flex:2;background:#5b6b7a;color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">Ajouter ✓</button></div>
+      </div></div>`;
+    m.style.display = 'flex';
+  }
+  async function ecrireInterruptionsCharge(id, modifier) {
+    const url = `https://api.baserow.io/api/database/rows/table/${TABLE_PLAN_CHARGE}/${id}/?user_field_names=true`;
+    const rg = await fetch(url, { headers: HEADERS });
+    if (!rg.ok) throw new Error('Lecture impossible (' + rg.status + ')');
+    const row = await rg.json();
+    const l = lireInterruptionsCharge(row);
+    const l2 = modifier(l) || l;
+    const rp = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_INTERRUPTIONS]: JSON.stringify(l2) }) });
+    if (!rp.ok) throw new Error('Enregistrement refusé (' + rp.status + ')');
+    const maj = await rp.json();
+    const i = (_affairesListeCache || []).findIndex(x => x.id === id);
+    if (i >= 0) _affairesListeCache[i] = { ..._affairesListeCache[i], ...maj };
+    try { _jalonsCmdDate = 0; } catch (e) {}
+  }
+  async function ajouterInterruptionCharge(id) {
+    const poste = document.getElementById('interr-poste').value, debut = document.getElementById('interr-debut').value, fin = document.getElementById('interr-fin').value;
+    const motif = (document.getElementById('interr-motif').value || '').trim();
+    if (!debut || !fin || fin < debut) { alert('Vérifiez les dates (la fin doit être après le début).'); return; }
+    try {
+      await ecrireInterruptionsCharge(id, l => l.concat([{ id: Date.now().toString(36), poste, debut, fin, motif, par: connectedCollab || '', le: dateYMD(new Date()) }]).sort((x, y) => x.debut.localeCompare(y.debut)));
+      ouvrirInterruptionsCharge(id); renderListeAffaires();
+    } catch (e) { alert('❌ ' + e.message); }
+  }
+  async function supprimerInterruptionCharge(id, iid) {
+    if (!confirm('Supprimer cette interruption ?')) return;
+    try { await ecrireInterruptionsCharge(id, l => l.filter(i => i.id !== iid)); ouvrirInterruptionsCharge(id); renderListeAffaires(); }
+    catch (e) { alert('❌ ' + e.message); }
+  }
 
   async function chargerListeAffaires() {
     const container = document.getElementById('charge-affaires-liste');
@@ -8724,9 +8809,11 @@
             ${nomCaChantier((a['Chantier']||[])[0]?.id) ? `<div style="margin-bottom:4px">${badgeCaHtml(nomCaChantier((a['Chantier']||[])[0]?.id))}</div>` : ''}
             ${livraison ? `<div style="font-size:10px;color:#aaa;margin-bottom:6px">🔨 Pose ${livraison}</div>` : ''}
             <div>${postes}</div>
+            ${htmlInterruptionsAffaire(a)}
             ${(!livraison || !postes) ? `<div style="margin-top:6px;font-size:10px;font-weight:700;color:#c0392b">⚠️ Non visible sur le planning : ${!livraison && !postes ? 'date de pose et heures manquantes' : (!livraison ? 'date de pose manquante' : 'aucune heure saisie')}</div>` : ''}
           </div>
           <div style="display:flex;gap:6px;margin-left:8px">
+            <button onclick="ouvrirInterruptionsCharge(${a.id})" title="Interruption (intempéries…) : suspend la phase sans modifier l'affaire" style="background:#eef3f8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">⛈</button>
             <button onclick="ouvrirFormCharge(${a.id})" style="background:#f5f0eb;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">✏️</button>
             <button onclick="supprimerCharge(${a.id})" style="background:#fde8e8;border:none;border-radius:8px;padding:7px 10px;font-size:12px;cursor:pointer">🗑️</button>
           </div>
@@ -9973,7 +10060,7 @@
         if (!pose || !pose.jours || pose.fin < dDeb || pose.debut > dFin) return;
         const ch = (a['Chantier'] || [])[0];
         const nom = ch?.value || a['Nom'] || a['Nom affaire'] || ('Affaire #' + a.id);
-        const joursPrevus = jours.filter(j => j >= pose.debut && j <= pose.fin);
+        const joursPrevus = jours.filter(j => dansPeriode(pose, j));
         const joursPlanifies = joursPrevus.filter(j => (planningCollectifData || []).some(p =>
           String(p['Date'] || '').slice(0, 10) === j && (p['Collaborateurs'] || []).length &&
           (p['Chantier'] || []).some(c => (ch && c.id === ch.id) || normRechCmd(c.value) === normRechCmd(nom))));
