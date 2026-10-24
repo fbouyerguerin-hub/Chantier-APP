@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V100';
+  const APP_VERSION = 'V104';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22232,6 +22232,7 @@
     { id: 'J4',  phase: 'Conception', nom: 'Croquis, avant-projet ou PC', resp: 'CA ou dessinatrice', designer: true, roles: ['CA'] },
     { id: 'J5',  phase: 'Conception', nom: 'Avant-projet / PC validé client', resp: "Chargé d'affaires", cond: true, roles: ['CA'] },
     { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: "Chargé d'affaires", designer: true, cond: true, roles: ['CA'] },
+    { id: 'J6b', phase: 'Conception', nom: 'Prévision achats et commandes', resp: 'CA + resp. production', roles: ['CA', 'Resp. production'] }, // V103 : appro anticipable avant l'étude (demandes de prix, besoins au groupe d'achat)
     { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production + DO', roles: ['CA', 'Resp. production', 'DO'] },
     { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", auto: 'etude', resp: 'Étude', roles: ['Étude'] },
     { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires", roles: ['CA'] },
@@ -22368,6 +22369,8 @@
   }
   function etatsJalonsCalc(c) {
     const d = lireJalons(c);
+    // V103 : le jalon « Prévision achats et commandes » s'appelait J9b en V102
+    ['j', 'resp', 'taches', 'notes', 'masque', 'echRep'].forEach(k => { if (d[k] && d[k].J9b && !d[k].J6b) d[k].J6b = d[k].J9b; });
     const exclu = new Set(d.fabExclu || []);
     const fabs = (d.fab || []).filter(f => !exclu.has(f.k)).map(f => ({ id: 'F-' + f.k, phase: 'Production', nom: 'Fabrication · ' + f.nom, txt: f.txt || f.nom, resp: 'Resp. atelier', fab: true, kind: 'fab', roles: ['Resp. atelier'] }));
     const poses = (d.fab || []).filter(f => f.pose && !exclu.has(f.k) && !exclu.has('P:' + f.k)).map(f => ({ id: 'P-' + f.k, phase: 'Chantier', nom: 'Pose · ' + f.nom, txt: f.txt || f.nom, resp: "Chef d'équipe pose", fab: true, kind: 'pose', roles: ["Chef d'équipe pose"] }));
@@ -22424,8 +22427,11 @@
     const fabs = [P['Fab Acier'], P['Fab Bois']].filter(f => f && f.jours > 0);
     const debutFab = fabs.length ? fabs.map(f => f.debut).sort()[0] : P['Pose'].debut;
     const finFab = fabs.length ? fabs.map(f => f.fin).sort().at(-1) : P['Pose'].debut;
-    const debutEtude = P['Étude'].jours > 0 ? P['Étude'].debut : debutFab, finEtude = P['Étude'].jours > 0 ? P['Étude'].fin : debutFab;
-    return { J1: debutEtude, J2: debutEtude, J3: debutEtude, J7: debutEtude, J4: finEtude, J5: finEtude, J6: finEtude, J8: finEtude, J9: finEtude,
+    // V101 : on ne peut pas commander sans avoir fait l'étude → la période d'études du plan de charge est
+    // avancée de la durée d'approvisionnement : les études se terminent au plus tard au jalon commandes (J10).
+    const decalAppro = -7 * appro;
+    const debutEtude = ajouterJours(P['Étude'].jours > 0 ? P['Étude'].debut : debutFab, decalAppro), finEtude = ajouterJours(P['Étude'].jours > 0 ? P['Étude'].fin : debutFab, decalAppro);
+    return { J1: debutEtude, J2: debutEtude, J3: debutEtude, J7: debutEtude, J4: finEtude, J5: finEtude, J6: finEtude, J8: finEtude, J9: finEtude, J6b: debutEtude,
       J10: ajouterJours(debutFab, -7 * appro), J11: debutFab, F: finFab, J12: finFab, J13: finFab, J14: P['Pose'].fin,
       J15: ajouterJours(P['Pose'].fin, 7 * reserves), pose: P['Pose'].debut, appro, reserves, P, debutEtude, finEtude, debutFab, finFab };
   }
@@ -23214,7 +23220,8 @@
     // en-tête des mois
     html += `<div style="display:flex;height:22px;background:#faf7f2"><div style="width:${COL};flex-shrink:0"></div><div style="flex:1;position:relative">${mois.map(d => `<div style="position:absolute;left:${X(d)}%;top:4px;font-size:10px;color:#999;padding-left:3px">${NOMS_MOIS[Number(d.slice(5, 7)) - 1]}</div>`).join('')}<div style="position:absolute;left:${X(auj)}%;top:4px;font-size:9px;color:#c0392b;font-weight:800;transform:translateX(-50%)">auj.</div></div></div>`;
     // périodes du plan de charge
-    html += ligne('📐 Études', barre(P['Étude']?.jours ? P['Étude'].debut : '', P['Étude']?.jours ? P['Étude'].fin : '', '#1F6AA5', `Études ${fr(P['Étude']?.debut)} → ${fr(P['Étude']?.fin)}`), { couleur: '#1F6AA5', gras: true });
+    html += ligne('📐 Études', barre(P['Étude']?.jours ? ech.debutEtude : '', P['Étude']?.jours ? ech.finEtude : '', '#1F6AA5', `Études ${fr(ech.debutEtude)} → ${fr(ech.finEtude)} (avancées de ${ech.appro} sem. d'appro)`), { couleur: '#1F6AA5', gras: true });
+    if (ech.appro > 0) html += ligne('📦 Appro', barre(ech.J10, ech.debutFab, '#c9a227', `Approvisionnement ${fr(ech.J10)} → ${fr(ech.debutFab)}`), { couleur: '#a5761f', gras: true });
     html += ligne('🏭 Fabrication', barre(P['Fab Bois']?.jours ? P['Fab Bois'].debut : '', P['Fab Bois']?.jours ? P['Fab Bois'].fin : '', '#2D8A4E', 'Fab bois') + barre(P['Fab Acier']?.jours ? P['Fab Acier'].debut : '', P['Fab Acier']?.jours ? P['Fab Acier'].fin : '', '#8B6340', `Fabrication ${fr(ech.debutFab)} → ${fr(ech.finFab)}`), { couleur: '#8B6340', gras: true });
     html += ligne('🏗 Pose', barre(P['Pose']?.debut, P['Pose']?.fin, '#6B4EA8', `Pose ${fr(P['Pose']?.debut)} → ${fr(P['Pose']?.fin)}`), { couleur: '#6B4EA8', gras: true });
     // jalons (V58 : seules les 5 premières phases de fabrication, le reste replié)
