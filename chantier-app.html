@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V96';
+  const APP_VERSION = 'V98';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22346,7 +22346,20 @@
   // État calculé de chaque jalon : 'ok' | 'auto' | 'na' | 'bloque' | 'afaire'
   // V44 : les chapitres (lignes de titre) des commandes clients EBP deviennent des jalons
   // « Fabrication · <chapitre> », insérés avant J12 ; J12 se valide seul quand ils sont tous franchis.
+  // V97 : mémorisation du calcul des jalons par chantier (le calcul complet n'est refait que si les jalons
+  // du chantier, les données chargées (plan de charge, commandes, collaborateurs) ou la date ont changé)
+  const _etatsJalonsMemo = new Map();
+  let _jalonsRev = 0;
   function etatsJalons(c) {
+    if (!c) return [];
+    const k = String(c[CHAMP_JALONS] || '') + '|' + _jalonsCmdDate + '|' + _jalonsRev + '|' + dateYMD(new Date()) + '|' + (c['Statue']?.value || c['Statue'] || '') + '|' + (caDuChantierRow(c)?.nom || '');
+    const m = _etatsJalonsMemo.get(c.id);
+    if (m && m.k === k) return m.v;
+    const v = etatsJalonsCalc(c);
+    _etatsJalonsMemo.set(c.id, { k, v });
+    return v;
+  }
+  function etatsJalonsCalc(c) {
     const d = lireJalons(c);
     const exclu = new Set(d.fabExclu || []);
     const fabs = (d.fab || []).filter(f => !exclu.has(f.k)).map(f => ({ id: 'F-' + f.k, phase: 'Production', nom: 'Fabrication · ' + f.nom, txt: f.txt || f.nom, resp: 'Resp. atelier', fab: true, kind: 'fab', roles: ['Resp. atelier'] }));
@@ -22683,11 +22696,54 @@
     const c = chantierJalons();
     if (c) { try { await synchroniserPhasesFab(c); renderJalonsChantier(); } catch (e) {} }
   }
+  // V97 : fermeture immédiate ; les listes ne sont recalculées qu'après l'affichage, et seulement si elles sont visibles
   function fermerJalons() {
     const m = document.getElementById('modal-jalons'); if (m) m.style.display = 'none';
-    try { filtrerChantiersGestion(); } catch (e) {}
-    try { renderTableauJalons(); } catch (e) {}
-    try { calculerMesJalons(); } catch (e) {}
+    const visible = id => { const el = document.getElementById(id); return !!el && el.offsetParent !== null; };
+    requestAnimationFrame(() => setTimeout(() => {
+      try { if (visible('page-gestion')) filtrerChantiersGestion(); } catch (e) {}
+      try { if (visible('page-jalons')) renderTableauJalons(); } catch (e) {}
+      try { calculerMesJalons(); } catch (e) {}
+    }, 30));
+  }
+  // V98 : accès direct à la commande client (EBP) et au bon de commande depuis le titre des jalons
+  function htmlLiensCommandeJalons(c) {
+    const esc = echapperHtmlNote;
+    const cmds = (() => { try { return commandesClientsDuChantier(c) || []; } catch (e) { return []; } })();
+    const fichiers = Array.isArray(c['Fichiers']) ? c['Fichiers'] : [];
+    const chip = (lib, fn, titre) => `<button onclick="event.stopPropagation();${fn}" title="${esc(titre)}" style="border:1px solid #c8a96e;background:#fff8e6;color:#8b6340;border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">${lib}</button>`;
+    const l = cmds.map(r => chip(`🧾 ${esc(r['Numero commande'] || 'Commande')}`, `ouvrirCommandeJalons(${r.id})`, 'Voir la commande client'));
+    if (!cmds.length && fichiers.length) l.push(chip('📄 Bon de commande', `ouvrirCommandeJalons(0)`, 'Voir le bon de commande joint au chantier'));
+    return l.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${l.join('')}</div>` : '';
+  }
+  async function ouvrirCommandeJalons(id) {
+    const c = chantierJalons(); if (!c) return;
+    const esc = echapperHtmlNote;
+    let m = document.getElementById('modal-cmd-jalons');
+    if (!m) {
+      m = document.createElement('div'); m.id = 'modal-cmd-jalons';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:330;align-items:flex-end;justify-content:center';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    const r = id ? ((() => { try { return commandesClientsDuChantier(c); } catch (e) { return []; } })().find(x => x.id === id) || null) : null;
+    const fichiers = Array.isArray(c['Fichiers']) ? c['Fichiers'] : [];
+    const montant = r && r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '' ? Number(r['Montant HT']).toFixed(2) + ' € HT' : '';
+    const entete = r ? `<div style="font-size:13px;font-weight:700;color:var(--gris)">${esc(r['Client'] || '')}</div>
+      <div style="font-size:11px;color:#888;margin:2px 0 6px">${r['Numero commande'] ? 'N° ' + esc(r['Numero commande']) : ''}${r['Date commande'] ? ' · ' + new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : ''}${extraireValeurChamp(r['Statut'], '') ? ' · ' + esc(extraireValeurChamp(r['Statut'], '')) : ''}${montant ? ` · <b style="color:var(--vert)">${montant}</b>` : ''}</div>` : '';
+    const docs = fichiers.length ? `<div style="font-size:11px;font-weight:800;color:#8b6340;text-transform:uppercase;margin:10px 0 4px">📄 Bon de commande de l'affaire</div>` + fichiers.map(f => `<a href="${f.url}" target="_blank" style="display:block;font-size:12px;color:var(--vert);font-weight:700;padding:4px 0">📎 ${esc(f.visible_name || f.name || 'Fichier')}</a>`).join('') : '';
+    m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;flex-shrink:0">
+        <div style="font-size:15px;font-weight:800;color:var(--gris)">🧾 ${r ? 'Commande client' : 'Bon de commande'} · ${esc(c['Nom du chantier'] || '')}</div>
+        <button onclick="document.getElementById('modal-cmd-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
+      <div style="padding:12px 16px 20px;overflow-y:auto">${entete}${docs}<div id="cmd-jalons-lignes">${r ? '<div class="feuille-loading">⏳ Chargement des lignes…</div>' : ''}</div></div></div>`;
+    m.style.display = 'flex';
+    if (!r) return;
+    try {
+      const lignes = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`);
+      const z = document.getElementById('cmd-jalons-lignes');
+      if (z) z.innerHTML = `<div style="font-size:11px;font-weight:800;color:#8b6340;text-transform:uppercase;margin:10px 0 4px">Détail de la commande</div>` + renderLignesCommandeClient(lignes.filter(l => (l['Commande'] || []).some(x => x.id === id)));
+    } catch (e) { const z = document.getElementById('cmd-jalons-lignes'); if (z) z.innerHTML = '<div style="color:#c0392b;font-size:12px">Erreur de chargement des lignes.</div>'; }
   }
   function chantierJalons() { return (chantiersGestionCache || []).find(c => c.id === _jalonsChantierId); }
   // V45 : on ne montre que les jalons EN COURS (disponibles). Les jalons franchis sont repliés
@@ -22793,6 +22849,7 @@
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:${vueGantt ? 980 : 640}px;height:90vh;display:flex;flex-direction:column;overflow:hidden">
       <div style="padding:14px 18px;background:#fff;border-bottom:1px solid #f1ece3;display:flex;justify-content:space-between;gap:10px;flex-shrink:0">
         <div><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 ${esc(c['Nom du chantier'] || '')}</div>
+          ${htmlLiensCommandeJalons(c)}
           <div style="display:flex;gap:6px;margin-top:6px">${onglet('gantt', '📊 Gantt')}${onglet('liste', '📋 Liste')}${echG ? `<button onclick="imprimerGanttJalons()" title="Imprimer le Gantt des jalons (A4 paysage)" style="border:1px solid #ddd;background:#fff;color:var(--gris);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">🖨 Imprimer</button>` : ''}</div>
           <div style="font-size:11px;color:var(--gris-moyen);margin-top:2px">${faits}/${et.length} jalons franchis${caDuChantierRow(c)?.nom ? ' · CA : ' + esc(caDuChantierRow(c).nom) : ''}${peut ? '' : ' · lecture seule'}</div>
           ${(() => { const ech = echeancesChantier(c, lireJalons(c)); return ech
@@ -23497,6 +23554,7 @@
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_ROLE_JALONS]: [...roles].join(', ') }) });
       if (!r.ok) throw new Error('Baserow ' + r.status);
       c[CHAMP_ROLE_JALONS] = [...roles].join(', ');
+      _jalonsRev++;
       renderTitulairesJalons();
     } catch (e) { alert('Enregistrement impossible : ' + e.message); if (input) { input.disabled = false; input.checked = !oui; } }
   }
