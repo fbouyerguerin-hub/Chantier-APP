@@ -298,6 +298,7 @@
     .modal-message-card { background: #fff; border-radius: 20px; padding: 28px 24px; max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
     .modal-message-icon { font-size: 36px; text-align: center; margin-bottom: 12px; }
     .modal-message-title { font-size: 16px; font-weight: 800; color: var(--gris); margin-bottom: 12px; text-align: center; }
+    #modal-jalons summary::-webkit-details-marker { display: none; }
     .modal-message-body { font-size: 14px; color: var(--gris-moyen); line-height: 1.6; margin-bottom: 20px; text-align: center; white-space: pre-wrap; }
     .modal-message-btn { width: 100%; background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; }
 
@@ -766,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V84';
+  const APP_VERSION = 'V90';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -917,6 +918,14 @@
   // Postes assimilés à "Fab Acier"/"Fab Bois" : accès à toutes les commandes
   // (pas de restriction aux chantiers personnellement affectés).
   const POSTES_ASSIMILES_FAB = ['Fab Acier', 'Fab Bois', 'Apprenti atelier'];
+  // V90 : « Responsable Fab Acier » / « Responsable Fab Bois » comptent comme Fab Acier / Fab Bois pour
+  // la capacité du plan de charge, les droits des commandes et les groupes de messages. Le libellé
+  // complet reste affiché et sert aux jalons (rôle Resp. atelier).
+  function posteBase(v) {
+    const t = String((v && typeof v === 'object' ? v.value : v) || '').trim();
+    const m = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/^resp\w*\.?\s+(fab\s+(acier|bois))$/i);
+    return m ? (m[2].toLowerCase() === 'acier' ? 'Fab Acier' : 'Fab Bois') : t;
+  }
   // Postes dont les RTT (36h→40h) sont majorées de 25% (apprentis).
   const POSTES_RTT_MAJOREE_25 = ['Apprenti poseur', 'Apprenti atelier'];
 
@@ -1078,6 +1087,8 @@
     if (navGestion) navGestion.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navCharge = document.getElementById('nav-charge');
     if (navCharge) navCharge.style.display = (droit === 'Administrateur' || droit === 'Gestionnaire' || connectedAccesCharge) ? '' : 'none';
+    const navJalons = document.getElementById('nav-jalons');
+    if (navJalons) navJalons.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
     const tabRttAdmin = document.getElementById('tab-rtt-admin');
@@ -2387,6 +2398,10 @@
       const rechercheClients = document.getElementById('commandes-clients-recherche');
       if (rechercheClients) rechercheClients.value = '';
       chargerCommandesClientsPage();
+    } else if (nav === 'jalons') {
+      if (!jalonsVisibles()) { switchPage('saisie'); return; }
+      showPage('page-jalons');
+      chargerTableauJalons();
     } else if (nav === 'repertoire') {
       showPage('page-repertoire');
       chargerRepertoirePage();
@@ -6151,7 +6166,7 @@
       const posteParNom = {};
       (dataCollabs.results || []).forEach(c => {
         const nomLower = (c['Nom Complet'] || '').trim().toLowerCase();
-        if (nomLower) posteParNom[nomLower] = c['Poste / Métier'] || '';
+        if (nomLower) posteParNom[nomLower] = posteBase(c['Poste / Métier']);
       });
       const collabs = (data.results || [])
         .filter(u => u['Actif'] !== false && String(u['Vue ID'] || '').trim() !== String(connectedViewId || '').trim())
@@ -6510,7 +6525,7 @@
         return;
       }
       const esc = echapperHtmlNote;
-      const postes = POSTES_CHARGE.map(p => ({ p, liste: collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab) })).filter(g => g.liste.length);
+      const postes = POSTES_CHARGE.map(p => ({ p, liste: collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab) })).filter(g => g.liste.length);
       el.innerHTML = `<div style="font-size:11px;color:#777;margin-bottom:10px">Décochez les collaborateurs <b>fictifs</b> : ils restent utilisables dans l'appli mais ne comptent plus dans la capacité du plan de charge.</div>`
         + postes.map(({ p, liste }) => `<div style="font-size:11px;font-weight:800;color:${p.color};text-transform:uppercase;margin:12px 0 4px">${esc(p.label || p.key)} · ${liste.filter(c => !estHorsCapacite(c)).length} compté(s)</div>`
           + liste.sort((a, b) => String(a['Nom Complet'] || a['Nom complet'] || '').localeCompare(String(b['Nom Complet'] || b['Nom complet'] || ''), 'fr')).map(c => {
@@ -6579,7 +6594,7 @@
       const p = POSTES_CHARGE.find(pp => pp.key === posteKey);
       const personnes = parseFloat(a[p.personnesField]) || 0;
       if (personnes > 0) return personnes * 8;
-      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+      const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
       return (collabsPoste.length * 8) || 8;
     };
     const nbJours = (posteKey) => {
@@ -6783,7 +6798,7 @@
       // Capacité et charge par poste et par jour, sur toute l'année
       const capJour = {}, consJour = {}, presentsJour = {};
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         capJour[p.key] = {}; consJour[p.key] = {}; presentsJour[p.key] = {};
         jourColonnes.forEach(jc => {
           let capSem = 0;
@@ -6826,7 +6841,7 @@
 
       let html = '';
       postesAffiches.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         const affairesPosteAnnee = affaires.filter(a => {
           if (!(parseFloat(a[p.field]) > 0)) return false;
@@ -7000,7 +7015,7 @@
       // Capacité et consommation par poste avec détail par collaborateur
       const capacites = {}, consommes = {}, detailsCollabs = {};
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         let joursAbsentTotal = 0;
         const detail = collabsPoste.map(c => {
           const absences = congesValides.filter(r => (r['Collaborateurs'] || []).some(cc => cc.id === c.id));
@@ -7059,7 +7074,7 @@
       const capJour = {}, presentsJour = {}; // capJour[posteKey][dateStr]
       POSTES_CHARGE.forEach(p => {
         capJour[p.key] = {}; presentsJour[p.key] = {};
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         jourColonnes.forEach(jc => {
           let joursAbs = 0;
           const presentsSet = new Set();
@@ -7442,7 +7457,7 @@
         }
 
         // ── Capacité / Charge / Disponible par jour ──
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         const capJourExp = {}, consJourExp = {};
         jourColonnesExp.forEach(jc => {
           let joursAbs = 0;
@@ -7590,7 +7605,7 @@
         const ws = wb.addWorksheet(p.key);
         const NB_COLS = 1 + semainesAnnee.length;
         const posteArgb = 'FF' + p.color.replace('#', '');
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         ws.getColumn(1).width = 32;
         semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 7; });
@@ -7975,7 +7990,7 @@
       row++;
 
       POSTES_CHARGE.forEach(p => {
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
         const posteArgb = 'FF' + p.color.replace('#', '');
 
         ws.getRow(row).height = 15;
@@ -8119,7 +8134,7 @@
         const ws = wb.addWorksheet(p.key);
         const NB_COLS = 1 + semainesAnnee.length;
         const posteArgb = 'FF' + p.color.replace('#', '');
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab && !estHorsCapacite(c)); // fictifs exclus
 
         ws.getColumn(1).width = 32;
         semainesAnnee.forEach((_, i) => { ws.getColumn(2 + i).width = 6.5; });
@@ -8363,7 +8378,7 @@
       POSTES_CHARGE.forEach(p => {
         const prevu = parseFloat(a[p.field]) || 0;
         // Saisies réelles : collaborateurs du poste sur ce chantier
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab);
         const collabIds = new Set(collabsPoste.map(c => c.id));
         const saisiesChantier = saisiesParChantier[chantierId] || [];
         const reel = saisiesChantier.filter(s => {
@@ -8539,7 +8554,7 @@
       if (!p.jours) return `<div style="color:#ccc">${k} : —</div>`;
 
       // Détection de conflit de capacité pour ce poste sur sa période
-      const collabsPoste = collabs.filter(c => (c['Poste / Métier'] || '') === poste.posteCollab && !estHorsCapacite(c)); // fictifs exclus
+      const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === poste.posteCollab && !estHorsCapacite(c)); // fictifs exclus
       const heuresNouvelleAffaire = parseFloat(aFictif[poste.field]) || 0;
       const hParJourNouvelle = heuresNouvelleAffaire / p.jours;
       let joursEnConflit = [];
@@ -8852,7 +8867,7 @@
       // Calcul générique Prévu/Réel pour un poste donné
       const calculPoste = (p) => {
         const prevu = parseFloat(a[p.field]) || 0;
-        const collabsPoste = collabs.filter(c => (c['Poste / Métier']||'') === p.posteCollab);
+        const collabsPoste = collabs.filter(c => posteBase(c['Poste / Métier']) === p.posteCollab);
         const collabIds = new Set(collabsPoste.map(c => c.id));
         const saisiesChantier = saisiesParChantier[chantierId] || [];
         // Le Réel reflète TOUTES les heures réellement saisies sur ce chantier pour ce poste,
@@ -12661,7 +12676,7 @@
 
   async function obtenirPosteCollaborateurConnecte() {
     const row = await obtenirCollaborateurConnecte();
-    return row['Poste / Métier'] || '';
+    return posteBase(row['Poste / Métier']);
   }
 
   // Droit de voir les prix des commandes fournisseurs : toujours vrai pour
@@ -21442,7 +21457,7 @@
   const TABLE_CONGES_ADMIN = '1022869';
 
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','jalons','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -22206,19 +22221,19 @@
   const JALONS_MODELE = [
     { id: 'J1',  phase: 'Commercial', nom: 'Devis signé', resp: "Chargé d'affaires", roles: ['CA'] },
     { id: 'J2',  phase: 'Commercial', nom: 'Revue de direction', resp: 'Direction', roles: ['Direction'] },
-    { id: 'J3',  phase: 'Commercial', nom: 'ARC client validé et envoyé', resp: "Chargé d'affaires", auto: 'arc', roles: ['CA'] },
+    { id: 'J3',  phase: 'Commercial', nom: 'ARC client validé et envoyé', resp: 'RAF', auto: 'arc', roles: ['RAF'] },
     { id: 'J4',  phase: 'Conception', nom: 'Croquis, avant-projet ou PC', resp: 'CA ou dessinatrice', designer: true, roles: ['CA'] },
     { id: 'J5',  phase: 'Conception', nom: 'Avant-projet / PC validé client', resp: "Chargé d'affaires", cond: true, roles: ['CA'] },
-    { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: 'À désigner', designer: true, cond: true, roles: [] },
+    { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: "Chargé d'affaires", designer: true, cond: true, roles: ['CA'] },
     { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production', roles: ['CA', 'Resp. production'] },
-    { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", auto: 'etude', resp: 'Dessinatrice', roles: ['Dessinatrice'] },
+    { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", auto: 'etude', resp: 'Étude', roles: ['Étude'] },
     { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires", roles: ['CA'] },
     { id: 'J10', phase: 'Production', nom: 'Commandes passées, AR validés', resp: 'Resp. production', auto: 'ar', roles: ['Resp. production'] },
     { id: 'J11', phase: 'Production', nom: 'Matière réceptionnée', resp: 'Atelier', auto: 'recu', roles: ['Resp. atelier'] },
     { id: 'J12', phase: 'Production', nom: 'Fabrication terminée', resp: 'Resp. atelier', auto: 'fab', roles: ['Resp. atelier'] },
     { id: 'J13', phase: 'Production', nom: 'Chantier chargé', resp: 'Atelier + poseurs', auto: 'parti', roles: ['Resp. atelier', "Chef d'équipe pose"] },
     { id: 'J14', phase: 'Chantier',   nom: 'Pose terminée, PV signé', auto: 'pose', resp: "Chef d'équipe pose", roles: ["Chef d'équipe pose"] },
-    { id: 'J15', phase: 'Chantier',   nom: 'Réserves levées, dossier clos', resp: "Chargé d'affaires" }
+    { id: 'J15', phase: 'Chantier',   nom: 'Réserves levées, dossier clos', resp: "Chargé d'affaires", roles: ['CA'] }
   ];
   function detecterChampJalons(rows) {
     if (rows && rows.length) _champJalonsDisponible = rows.some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_JALONS));
@@ -22337,7 +22352,7 @@
     const fabs = (d.fab || []).filter(f => !exclu.has(f.k)).map(f => ({ id: 'F-' + f.k, phase: 'Production', nom: 'Fabrication · ' + f.nom, txt: f.txt || f.nom, resp: 'Resp. atelier', fab: true, kind: 'fab', roles: ['Resp. atelier'] }));
     const poses = (d.fab || []).filter(f => f.pose && !exclu.has(f.k) && !exclu.has('P:' + f.k)).map(f => ({ id: 'P-' + f.k, phase: 'Chantier', nom: 'Pose · ' + f.nom, txt: f.txt || f.nom, resp: "Chef d'équipe pose", fab: true, kind: 'pose', roles: ["Chef d'équipe pose"] }));
     // V64 : chaque section a aussi sa phase d'ÉTUDE (plans), avant J8
-    const etudes = (d.fab || []).filter(f => !exclu.has(f.k) && !exclu.has('E:' + f.k)).map(f => ({ id: 'E-' + f.k, phase: 'Conception', nom: 'Étude · ' + f.nom, txt: f.txt || f.nom, resp: 'Dessinatrice', fab: true, kind: 'etude', roles: ['Dessinatrice'] }));
+    const etudes = (d.fab || []).filter(f => !exclu.has(f.k) && !exclu.has('E:' + f.k)).map(f => ({ id: 'E-' + f.k, phase: 'Conception', nom: 'Étude · ' + f.nom, txt: f.txt || f.nom, resp: 'Étude', fab: true, kind: 'etude', roles: ['Étude'] }));
     const modele = [];
     JALONS_MODELE.forEach(m => { if (m.id === 'J8') modele.push(...etudes); if (m.id === 'J12') modele.push(...fabs); if (m.id === 'J14') modele.push(...poses); modele.push(m); });
     const res = [];
@@ -22348,10 +22363,23 @@
         const lf = res.filter(x => x.m.kind === m.auto);
         if (lf.length && lf.every(x => x.etat === 'ok' || x.etat === 'na')) { etat = 'auto'; info = `les ${lf.length} phase(s) ${({ fab: 'de fabrication', pose: 'de pose', etude: "d'étude" })[m.auto]} sont validées`; }
       } else if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto, c); if (a) { etat = 'auto'; info = a; } }
-      res.push({ m, e, etat, info, resp: (m.designer && d.resp[m.id]) || m.resp });
+      res.push({ m, e, etat, info, resp: m.resp });
     });
     const ech = echeancesChantier(c, d);
-    res.forEach(x => { x.ech = ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; { const rp = (d.echRep || {})[x.m.id]; x.echInit = x.ech; x.reportsEch = rp?.reports || []; if (rp?.ech) x.ech = rp.ech; const mq = (d.masque || {})[x.m.id]; x.masque = mq && mq.jusqu > dateYMD(new Date()) ? mq : null; } x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
+    // V85 : les phases d'un même type s'enchaînent : la période du plan de charge (études, fabrication, pose)
+    // est divisée par le nombre de phases ; chaque phase reçoit sa tranche (début → échéance).
+    const tranches = new Map();
+    if (ech) {
+      const per = { etude: [ech.debutEtude, ech.finEtude], fab: [ech.debutFab, ech.finFab], pose: [ech.P?.['Pose']?.debut, ech.P?.['Pose']?.fin] };
+      Object.entries(per).forEach(([kind, [d0, d1]]) => {
+        const l = res.filter(x => x.m.fab && x.m.kind === kind);
+        if (!l.length || !d0 || !d1) return;
+        const t0 = new Date(d0 + 'T12:00:00').getTime(), jours = Math.max(0, Math.round((new Date(d1 + 'T12:00:00').getTime() - t0) / 864e5));
+        l.forEach((x, i) => tranches.set(x.m.id, { debut: ajouterJours(d0, Math.round(jours * i / l.length)), fin: ajouterJours(d0, Math.round(jours * (i + 1) / l.length)) }));
+      });
+    }
+    res.forEach(x => { const tr = tranches.get(x.m.id); x.debutPhase = tr ? tr.debut : null;
+      x.ech = tr ? tr.fin : ech ? (x.m.kind === 'pose' ? ech.J14 : x.m.kind === 'etude' ? ech.J8 : x.m.fab ? ech.F : ech[x.m.id]) || null : null; { const rp = (d.echRep || {})[x.m.id]; x.echInit = x.ech; x.reportsEch = rp?.reports || []; if (rp?.ech) x.ech = rp.ech; const mq = (d.masque || {})[x.m.id]; x.masque = mq && mq.jusqu > dateYMD(new Date()) ? mq : null; } x.personnes = personnesJalon(c, x, d); x.temps = tempsJalon(x); });
     // V78 : un jalon de synthèse (J8 études, J12 fabrication, J14 pose) suit le report de ses phases :
     // son échéance passe à la plus tardive des phases repoussées encore ouvertes.
     res.forEach(x => {
@@ -22364,7 +22392,7 @@
 
   // ── V46 : échéances tirées du plan de charge, titulaires des rôles ──
   const APPRO_SEMAINES_DEFAUT = 3, RESERVES_SEMAINES_DEFAUT = 4;
-  const ROLES_JALONS = ['Direction', 'Dessinatrice', 'Resp. production', 'Resp. atelier', "Chef d'équipe pose"];
+  const ROLES_JALONS = ['Direction', 'Étude', 'Resp. production', 'Resp. atelier', "Chef d'équipe pose", 'RAF'];
   const CHAMP_ROLE_JALONS = 'Rôle jalons';
   const ajouterJours = (ymd, n) => { const t = new Date(ymd + 'T12:00:00'); t.setDate(t.getDate() + n); return dateYMD(t); };
   function echeancesChantier(c, d) {
@@ -22382,30 +22410,95 @@
       J15: ajouterJours(P['Pose'].fin, 7 * reserves), pose: P['Pose'].debut, appro, reserves, P, debutEtude, finEtude, debutFab, finFab };
   }
   function nomCollab(c) { return c['Nom Complet'] || c['Nom complet'] || ''; }
-  function titulairesRole(role) {
-    return (_jalonsCollabs || []).filter(c => String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes(role)).map(nomCollab).filter(Boolean);
-  }
+  function titulairesRole(role) { return titulairesRoleCollabs(role).map(nomCollab).filter(Boolean); }
   // V81 : un collaborateur d'atelier (poste Fab Acier, Fab Bois, Apprenti atelier) ne reçoit une phase de
   // fabrication que s'il est affecté à ce chantier dans le planning collectif. Les autres titulaires du
   // rôle (responsable d'atelier…) la reçoivent toujours.
   let _jalonsPlanningCollab = null;
+  // V87 : les titulaires d'un RÔLE sont les collaborateurs actifs dont le « Poste / Métier » correspond
+  // (table Collaborateurs), plus ceux ajoutés à la main dans « Rôle jalons ». Les codes du gabarit
+  // (J1…J15, Phases …) restent uniquement manuels.
+  const POSTES_ROLES_JALONS = {
+    'Direction': /direct|gerant|president|\bpdg\b|\bdg\b/,
+    'Étude': /^etudes?$|bureau d.?etudes?/, // V88 : poste « Étude » de la table Collaborateurs
+    'Resp. production': /resp\w*\.? *(de )?prod|chef de prod|directeur de prod|^production$/,
+    'Resp. atelier': /resp\w*\.? *(d.?)?atelier|chef d.?atelier|resp\w*\.? *fab/,
+    "Chef d'équipe pose": /chef d.?equipe|chef de chantier|resp\w*\.? *(de )?(chantier|pose)|conducteur de travaux/,
+    'RAF': /\braf\b|administratif|financ|comptab/,
+    'CA': /charge.? d.?affaires?/
+  };
+  function manuelRoleJalons(c, code) { const t = String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()); return t.includes(code) || (code === 'Étude' && t.includes('Dessinatrice')); } // V89 : ancien libellé « Dessinatrice »
+  function posteCorrespondRole(c, role) { const re = POSTES_ROLES_JALONS[role]; return !!re && re.test(normTexte(posteCollabJalon(c))); }
   function titulairesRoleCollabs(role) {
-    return (_jalonsCollabs || []).filter(c => String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes(role));
+    const l = (_jalonsCollabsActifs || _jalonsCollabs || []);
+    return l.filter(c => manuelRoleJalons(c, role) || posteCorrespondRole(c, role));
   }
   function posteCollabJalon(c) { const v = c['Poste / Métier']; return String((v && typeof v === 'object' ? v.value : v) || '').trim(); }
+  // ── V86 : responsables des jalons ──
+  // 1) choix sur l'affaire (Jalons.resp[jid] = [noms]) ; 2) sinon GABARIT : collaborateurs dont le champ
+  // « Rôle jalons » contient le code du jalon (J1…J15) ou du type de phase ; 3) sinon ancien réglage par rôle.
+  const CODES_PHASES_JALONS = { etude: 'Phases étude', fab: 'Phases fabrication', pose: 'Phases pose' };
+  function codeGabaritJalon(x) { return x.m.fab ? CODES_PHASES_JALONS[x.m.kind] : x.m.id; }
+  function filtreAtelierPlanning(c, x, collabs) {
+    if (!(x.m.fab && x.m.kind === 'fab' && _jalonsPlanningCollab)) return collabs;
+    const planifies = _jalonsPlanningCollab.get(c.id) || new Set();
+    return collabs.filter(t => !POSTES_ASSIMILES_FAB.includes(posteCollabJalon(t)) || planifies.has(String(t.id)));
+  }
   function personnesJalon(c, x, d) {
-    if (x.m.designer && d.resp[x.m.id]) return [d.resp[x.m.id]];
+    const sp = (d.resp || {})[x.m.id];
+    const liste = Array.isArray(sp) ? sp.filter(Boolean) : (sp ? [sp] : []);
+    if (liste.length) { x.sourceResp = 'affaire'; return liste; }
+    const gab = titulairesRoleCollabs(codeGabaritJalon(x));
+    if (gab.length) { x.sourceResp = 'gabarit'; return [...new Set(filtreAtelierPlanning(c, x, gab).map(nomCollab).filter(Boolean))]; }
+    x.sourceResp = 'role';
     const l = [];
     (x.m.roles || []).forEach(r => {
       if (r === 'CA') { const ca = caDuChantierRow(c)?.nom; if (ca) l.push(ca); return; }
-      if (x.m.fab && x.m.kind === 'fab' && _jalonsPlanningCollab) {
-        const planifies = _jalonsPlanningCollab.get(c.id) || new Set();
-        titulairesRoleCollabs(r).forEach(t => { if (!POSTES_ASSIMILES_FAB.includes(posteCollabJalon(t)) || planifies.has(String(t.id))) { const n = nomCollab(t); if (n) l.push(n); } });
-        return;
-      }
-      l.push(...titulairesRole(r));
+      l.push(...filtreAtelierPlanning(c, x, titulairesRoleCollabs(r)).map(nomCollab).filter(Boolean));
     });
     return [...new Set(l)];
+  }
+  // Choix des responsables d'un jalon / d'une phase pour CETTE affaire
+  function designerRespJalon(jid) {
+    if (!peutValiderJalons()) return;
+    const c = chantierJalons(); if (!c) return;
+    const et = etatsJalons(c), x = et.find(y => y.m.id === jid); if (!x) return;
+    const d = lireJalons(c), sp = d.resp[jid];
+    const actuels = new Set((Array.isArray(sp) ? sp : sp ? [sp] : x.personnes).map(normTexte));
+    const noms = [...new Set((_jalonsCollabsActifs || _jalonsCollabs || []).map(nomCollab).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
+    const esc = echapperHtmlNote;
+    const memes = x.m.fab ? et.filter(y => y.m.fab && y.m.kind === x.m.kind && y.m.id !== jid) : [];
+    let m = document.getElementById('modal-resp-jalon');
+    if (!m) {
+      m = document.createElement('div'); m.id = 'modal-resp-jalon';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:320;align-items:center;justify-content:center;padding:16px';
+      m.onclick = e => { if (e.target === m) m.style.display = 'none'; };
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:420px;max-height:88vh;display:flex;flex-direction:column;padding:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">👤 Responsables sur cette affaire</div>
+      <div style="font-size:12px;color:#555;margin:4px 0 8px">${esc(x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom)}<br><span style="color:#999">${x.sourceResp === 'affaire' ? 'Choix propre à cette affaire' : x.sourceResp === 'gabarit' ? 'Actuellement : gabarit par défaut' : 'Actuellement : réglage par rôle (' + esc(x.resp) + ')'}</span></div>
+      <div id="resp-jalon-liste" style="overflow-y:auto;border:1px solid #eee;border-radius:8px;padding:4px 8px;flex:1">${noms.map(n => `<label style="display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:13px;cursor:pointer"><input type="checkbox" value="${esc(n)}" ${actuels.has(normTexte(n)) ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--vert)"> ${esc(n)}</label>`).join('')}</div>
+      ${memes.length ? `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#555;margin-top:8px"><input type="checkbox" id="resp-jalon-toutes" style="accent-color:var(--vert)"> Appliquer aussi aux ${memes.length} autre(s) phase(s) ${({ etude: "d'étude", fab: 'de fabrication', pose: 'de pose' })[x.m.kind]} de l'affaire</label>` : ''}
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        ${x.sourceResp === 'affaire' ? `<button onclick="enregistrerRespJalon('${jid}', true)" style="background:#fff;border:1px solid #ddd;border-radius:8px;padding:9px 10px;font-size:12px;font-weight:700;cursor:pointer;color:#777">↺ Revenir au défaut</button>` : ''}
+        <button onclick="document.getElementById('modal-resp-jalon').style.display='none'" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
+        <button onclick="enregistrerRespJalon('${jid}', false)" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">Enregistrer ✓</button>
+      </div></div>`;
+    m.style.display = 'flex';
+  }
+  async function enregistrerRespJalon(jid, defaut) {
+    const c = chantierJalons(); if (!c) return;
+    const x = etatsJalons(c).find(y => y.m.id === jid); if (!x) return;
+    const choix = defaut ? [] : [...document.querySelectorAll('#resp-jalon-liste input:checked')].map(i => i.value);
+    const ids = [jid];
+    if (document.getElementById('resp-jalon-toutes')?.checked) etatsJalons(c).filter(y => y.m.fab && y.m.kind === x.m.kind && y.m.id !== jid).forEach(y => ids.push(y.m.id));
+    try {
+      await ecrireJalons(d => { d.resp = d.resp || {}; ids.forEach(id => { if (choix.length) d.resp[id] = choix; else delete d.resp[id]; }); });
+      document.getElementById('modal-resp-jalon').style.display = 'none';
+      renderJalonsChantier();
+      try { await rafraichirMesJalonsOuverts(); } catch (e) {}
+    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
   function tempsJalon(x) {
     if (!x.ech || x.etat === 'ok' || x.etat === 'auto' || x.etat === 'na') return null;
@@ -22646,13 +22739,12 @@
       return `<div style="background:${st.fond};border:1.5px solid ${st.bord};border-radius:10px;padding:10px 12px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
           <div style="font-size:13px;font-weight:700;color:var(--gris)">${st.ic} ${titre(x)}</div>
-          <div style="font-size:11px;color:#a5761f;white-space:nowrap;text-align:right">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}${x.m.designer && admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}${x.personnes.length ? `<div style="font-size:10px;color:#bbb">${esc(x.resp)}</div>` : ''}</div>
+          <div style="font-size:11px;color:#a5761f;white-space:nowrap;text-align:right">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}${admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}${x.personnes.length ? `<div style="font-size:10px;color:#bbb">${esc(x.resp)}</div>` : ''}</div>
         </div>
         <div style="font-size:11px;margin-top:3px">${esc(x.m.phase)}${x.ech ? ' · ' + htmlEcheance(x) : ''}</div>
         ${detail ? `<div style="font-size:11px;margin-top:3px">${detail}</div>` : ''}
-        <div style="margin-top:3px">${htmlReportPhase(x)}</div>
         ${actions ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${actions}</div>` : ''}
-        ${htmlNotesJalon(c, x.m.id)}
+        ${htmlBlocJalon(c, x, admin)}
       </div>`;
     }).join('') : '<div style="font-size:12px;color:var(--vert);font-weight:700;padding:6px 0">✔ Tous les jalons sont franchis.</div>';
 
@@ -22672,11 +22764,11 @@
         const peutCe = admin || estMoi(x.personnes);
         const actions = fait ? (admin ? `<a href="#" onclick="event.preventDefault();actionJalon('${x.m.id}','annuler')" style="font-size:11px;color:#999">↺</a>` : '')
           : peutCe ? btn('✅', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + btn('⛔', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + btn('⊘', `actionJalon('${x.m.id}','na')`) : '';
-        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px dotted #e5ded0;${!fait && !dispo ? 'opacity:.6' : ''}">
+        return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-top:1px dotted #e5ded0;${!fait && !dispo ? 'opacity:.6' : ''}">
           <span style="font-size:14px">${fait || dispo || x.etat === 'bloque' ? st.ic : '○'}</span>
           <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;color:var(--gris)">${f.txt && f.txt.length > nom.length ? `<details style="display:inline"><summary style="cursor:pointer">${esc(nom)}…</summary><div style="font-weight:400;color:#555;margin-top:3px;line-height:1.4;white-space:pre-line">${esc(f.txt)}</div></details>` : esc(nom)}${f.manu ? ' <span style="font-size:10px;color:#aaa;font-weight:600">(manuelle)</span>' + (admin ? ` <a href="#" onclick="event.preventDefault();retirerPhaseFab('${f.k}')" style="color:#c0392b;font-size:10px">✕</a>` : '') : ''}</div>
-            <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlReportPhase(x)}${htmlNotesJalon(c, x.m.id)}</div>
-          <div style="display:flex;gap:4px;flex-shrink:0">${actions}${admin && !f.manu ? `<a href="#" title="Les phases commencent ici" onclick="event.preventDefault();ecarterPhaseFab('${f.k}', true)" style="font-size:12px;color:#8b6340;text-decoration:none">▲</a><a href="#" title="Supprimer cette phase" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${f.k}', false)" style="font-size:12px;color:#c0392b;text-decoration:none">🗑</a>` : ''}</div>
+            <div style="font-size:10px;color:#888">${fait ? detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : x.ech ? htmlEcheance(x) : ''}</div>${htmlBlocJalon(c, x, admin && !f.manu)}</div>
+          <div style="display:flex;gap:4px;flex-shrink:0">${actions}</div>
         </div>`;
       }).join('');
       if (phasesFab.length > NB_PHASES_VISIBLES) html += `<div onclick="_fabToutes=!_fabToutes;renderJalonsChantier()" style="padding:7px 0 0;font-size:11px;font-weight:700;color:#8b6340;cursor:pointer;border-top:1px dotted #e5ded0">${_fabToutes ? '▾ Masquer les phases supplémentaires' : `▸ ${phasesFab.length - NB_PHASES_VISIBLES} autre(s) phase(s) — afficher`}</div>`;
@@ -22748,6 +22840,66 @@
   function cleElementJalon(n) { return n.id || ((n.par || '') + '|' + (n.le || '') + '|' + (n.txt || '')); }
   // Suppression : l'auteur, ou un Gestionnaire / Administrateur
   function peutSupprimerElementJalon(n) { return peutValiderJalons() || (!!connectedCollab && n.par === connectedCollab); }
+  // ── V85 : bloc sous chaque jalon / phase : tâches et notes en bandeaux déroulants, actions dans un menu ──
+  const _detailsOuverts = new Set();
+  function memoDetails(el) { const k = el.dataset.k; if (!k) return; if (el.open) _detailsOuverts.add(k); else _detailsOuverts.delete(k); }
+  function htmlBlocJalon(c, x, admin) {
+    const esc = echapperHtmlNote, jid = x.m.id, l = notesJalon(c, jid), t = tachesJalon(c, jid);
+    const cle = s => encodeURIComponent(s).replace(/'/g, '%27');
+    const ouv = k => _detailsOuverts.has(k) ? 'open' : '';
+    const k0 = c.id + '|' + jid;
+    const sum = (txt, coul) => `<summary onclick="event.stopPropagation()" style="cursor:pointer;font-size:11px;font-weight:800;color:${coul};list-style:none;padding:3px 0">${txt}</summary>`;
+    const corbeille = (type, n) => peutSupprimerElementJalon(n) ? `<a href="#" onclick="event.preventDefault();event.stopPropagation();supprimerElementJalon('${jid}','${type}','${cle(cleElementJalon(n))}')" style="color:#c0392b;font-weight:700">🗑 Supprimer</a>` : '';
+    let html = '';
+    // Infos de report / mise de côté (sans les liens, qui sont dans le menu Actions)
+    const rp = x.reportsEch || [];
+    if (x.debutPhase && !JALON_FAIT(x)) html += `<div style="font-size:10px;color:#888">🗓 Tranche du ${x.debutPhase.split('-').reverse().join('/')} au ${(x.ech || '').split('-').reverse().join('/')}</div>`;
+    if (rp.length) html += `<div style="font-size:10px;color:#1F6AA5;font-weight:700">⏭ reportée ${rp.length} fois · échéance initiale ${x.echInit ? x.echInit.split('-').reverse().join('/') : '—'}${rp.at(-1).motif ? ' · ' + esc(rp.at(-1).motif) : ''}</div>`;
+    if (x.m.fab) html += `<div style="font-size:10px;color:#a5761f;font-weight:700">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : 'personne')} <span style="font-weight:400;color:#bbb">${x.sourceResp === 'affaire' ? '(choisi sur l\'affaire)' : x.sourceResp === 'gabarit' ? '(gabarit)' : '(par rôle)'}</span></div>`;
+    if (x.masque) html += `<div style="font-size:10px;color:#7a6a99;font-weight:700">⏰ mise de côté jusqu'au ${x.masque.jusqu.split('-').reverse().join('/')}${x.masque.par ? ' (' + esc(x.masque.par) + ')' : ''}</div>`;
+    // Tâches : bandeau déroulant ; les infos de chaque tâche dans un sous-menu ⓘ
+    if (t.length) {
+      const aFaire = t.filter(z => !z.fait).length, pourMoi = t.filter(z => !z.fait && z.pour && estMoi([z.pour])).length;
+      html += `<details data-k="t|${k0}" ${ouv('t|' + k0)} ontoggle="memoDetails(this)" style="margin-top:5px;background:#f2f7fc;border:1px solid #cfe0f0;border-radius:8px;padding:2px 8px" onclick="event.stopPropagation()">
+        ${sum(`▸ ☑ Tâches · ${t.length - aFaire}/${t.length}${aFaire ? ` <span style="color:#a5761f">(${aFaire} à faire${pourMoi ? `, dont ${pourMoi} pour vous` : ''})</span>` : ' ✔'}`, '#1F6AA5')}
+        ${t.map(z => `<div style="display:flex;align-items:flex-start;gap:6px;font-size:12px;padding:4px 0;border-top:1px dotted #cfe0f0">
+          <input type="checkbox" ${z.fait ? 'checked' : ''} ${peutCocherTacheJalon(z) ? '' : `disabled title="À valider par ${esc(z.pour)}"`} onclick="event.stopPropagation()" onchange="cocherTacheJalon('${jid}','${cle(z.id)}',this.checked)" style="margin:2px 0 0;width:16px;height:16px;flex-shrink:0;cursor:${peutCocherTacheJalon(z) ? 'pointer' : 'not-allowed'};accent-color:var(--vert)">
+          <div style="flex:1;min-width:0">
+            <span style="${z.fait ? 'text-decoration:line-through;color:#999' : 'color:var(--gris);font-weight:600'}">${esc(z.txt)}</span>${z.pour ? ` <span style="font-size:10px;color:${estMoi([z.pour]) && !z.fait ? '#c0392b' : '#a5761f'};font-weight:700">👤 ${esc(z.pour)}</span>` : ''}${!z.fait && z.ech && z.ech < dateYMD(new Date()) ? ' <span style="font-size:10px;color:#c0392b;font-weight:700">🔴</span>' : ''}
+            <details data-k="ti|${k0}|${z.id}" ${ouv('ti|' + k0 + '|' + z.id)} ontoggle="memoDetails(this)" onclick="event.stopPropagation()" style="margin-top:1px">
+              <summary style="cursor:pointer;font-size:10px;color:#999;list-style:none">ⓘ infos</summary>
+              <div style="font-size:10px;color:#777;padding:3px 0 2px;line-height:1.5">
+                ${z.pour ? `👤 Pour <b>${esc(z.pour)}</b>${z.fait ? '' : ' · à valider par ' + (estMoi([z.pour]) ? 'vous' : 'lui/elle')}<br>` : '👥 Non attribuée<br>'}
+                ${htmlEcheanceTache(z)}
+                ${z.fait ? `✔ validée par ${esc(z.faitPar || '')}${z.faitLe ? ' le ' + esc(z.faitLe) : ''}` : `créée par ${esc(z.par || '')}${z.le ? ' le ' + esc(z.le) : ''}`}
+                ${(z.reports || []).length ? `<br>⏭ ${z.reports.length} report(s), dernier par ${esc(z.reports.at(-1).par || '')}${z.reports.at(-1).motif ? ' (' + esc(z.reports.at(-1).motif) + ')' : ''}` : ''}
+                <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:3px">${peutRepousserTacheJalon(z) ? `<a href="#" onclick="event.preventDefault();event.stopPropagation();repousserTacheJalon('${jid}','${cle(z.id)}')" style="color:#1F6AA5;font-weight:700">⏭ Repousser l'échéance</a>` : ''}${corbeille('t', z)}</div>
+              </div></details></div></div>`).join('')}
+      </details>`;
+    }
+    // Notes : bandeau déroulant
+    if (l.length) html += `<details data-k="n|${k0}" ${ouv('n|' + k0)} ontoggle="memoDetails(this)" onclick="event.stopPropagation()" style="margin-top:5px;background:#fcf8ef;border:1px solid #eadcb8;border-radius:8px;padding:2px 8px">
+        ${sum(`▸ 📝 Notes · ${l.length}`, '#a5761f')}
+        ${l.map(n => `<div style="font-size:11px;color:#555;padding:4px 0;border-top:1px dotted #eadcb8"><b>${esc(n.par || '')}</b> <span style="color:#aaa">${esc(n.le || '')}</span><br>${esc(n.txt)}${peutSupprimerElementJalon(n) ? `<div style="margin-top:2px">${corbeille('n', n)}</div>` : ''}</div>`).join('')}
+      </details>`;
+    // Menu Actions
+    const item = (lib, fn, coul) => `<a href="#" onclick="event.preventDefault();event.stopPropagation();this.closest('details').open=false;${fn}" style="display:block;padding:6px 4px;font-size:12px;font-weight:700;color:${coul || 'var(--gris)'};text-decoration:none;border-top:1px dotted #eee">${lib}</a>`;
+    const kPh = x.m.fab ? x.m.id.slice(2) : '';
+    const items = [
+      item('☑ Ajouter une tâche', `ajouterTacheJalon('${jid}')`, '#1F6AA5'),
+      peutValiderJalons() ? item('👤 Responsables sur cette affaire', `designerRespJalon('${jid}')`, '#a5761f') : '',
+      item('📝 Ajouter une note', `ajouterNoteJalon('${jid}')`, 'var(--vert)'),
+      peutMasquerJalon(x) ? item('⏰ Plus tard / repousser', `repousserPhaseJalon('${jid}')`, '#7a6a99') : '',
+      x.masque && peutMasquerJalon(x) ? item('↺ Remettre dans le 🚩', `remettreJalon('${jid}')`, '#7a6a99') : '',
+      admin && x.m.fab ? item('▲ Les phases commencent ici', `ecarterPhaseFab('${kPh}', true)`, '#8b6340') : '',
+      admin && x.m.fab ? item('🗑 Supprimer cette phase', `ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${kPh}', false)`, '#c0392b') : ''
+    ].join('');
+    html += `<details data-k="a|${k0}" onclick="event.stopPropagation()" style="margin-top:5px">
+        <summary style="cursor:pointer;list-style:none;display:inline-block;font-size:11px;font-weight:700;color:var(--gris);background:#fff;border:1px solid #ddd;border-radius:8px;padding:3px 10px">⋯ Actions</summary>
+        <div style="margin-top:3px;max-width:280px;background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 3px 10px rgba(0,0,0,.08);padding:2px 8px">${items}</div>
+      </details>`;
+    return html;
+  }
   function htmlNotesJalon(c, jid) {
     const esc = echapperHtmlNote, l = notesJalon(c, jid), t = tachesJalon(c, jid);
     const cle = s => encodeURIComponent(s).replace(/'/g, '%27');
@@ -23014,9 +23166,11 @@
       const reel = frEnYmd(x.e.le);
       const coul = x.etat === 'bloque' ? '#c0392b' : fait ? (x.etat === 'na' ? '#aaa' : '#4a7c3f') : x.temps?.niveau === 'retard' ? '#c0392b' : x.temps?.niveau === 'bientot' ? '#d4800a' : dispo ? '#e0a33a' : '#bbb';
       let contenu = '';
-      if (x.m.kind === 'fab' && !fait) contenu += barre(ech.debutFab, ech.finFab, 'rgba(139,99,64,.22)', 'Période de fabrication');
-      if (x.m.kind === 'pose' && !fait) contenu += barre(P['Pose']?.debut, P['Pose']?.fin, 'rgba(107,78,168,.22)', 'Période de pose');
-      if (x.m.kind === 'etude' && !fait) contenu += barre(ech.debutEtude, ech.finEtude, 'rgba(31,106,165,.2)', "Période d'études");
+      // V85 : chaque phase a sa propre tranche (enchaînement), décalée si la phase a été repoussée
+      const finTr = x.ech && x.debutPhase && x.ech > x.debutPhase ? x.ech : null;
+      if (x.m.kind === 'fab' && !fait) contenu += barre(x.debutPhase || ech.debutFab, finTr || ech.finFab, 'rgba(139,99,64,.35)', `Fabrication ${fr(x.debutPhase || ech.debutFab)} → ${fr(finTr || ech.finFab)}`);
+      if (x.m.kind === 'pose' && !fait) contenu += barre(x.debutPhase || P['Pose']?.debut, finTr || P['Pose']?.fin, 'rgba(107,78,168,.35)', `Pose ${fr(x.debutPhase || P['Pose']?.debut)} → ${fr(finTr || P['Pose']?.fin)}`);
+      if (x.m.kind === 'etude' && !fait) contenu += barre(x.debutPhase || ech.debutEtude, finTr || ech.finEtude, 'rgba(31,106,165,.3)', `Études ${fr(x.debutPhase || ech.debutEtude)} → ${fr(finTr || ech.finEtude)}`);
       if (!fait && x.ech && x.ech < auj) contenu += `<div style="position:absolute;top:50%;height:2px;left:${X(x.ech)}%;width:${X(auj) - X(x.ech)}%;background:#c0392b;opacity:.5"></div>`;
       contenu += losange(x.ech, fait ? '#bbb' : coul, `Échéance ${fr(x.ech)}`, !fait);
       if (fait && reel) contenu += losange(reel, coul, `${x.etat === 'na' ? 'Sans objet' : 'Validé'} le ${fr(reel)}${x.e.par ? ' par ' + x.e.par : ''}`);
@@ -23025,12 +23179,10 @@
       const rapide = !fait && (dispo || x.etat === 'bloque') && (o.admin || estMoi(x.personnes)) && x.etat !== 'bloque'
         ? ` <span onclick="event.stopPropagation();actionJalon('${x.m.id}','ok')" title="Cliquer pour valider ce jalon" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.45" style="float:right;cursor:pointer;opacity:.45;background:transparent;border:1px dashed #a5761f;border-radius:5px;padding:0 6px;font-size:10px;color:#a5761f;font-weight:700">☐ à valider</span>` : '';
       html += ligne(lib + rapide, contenu, { click: `_jalonGanttSel=_jalonGanttSel==='${x.m.id}'?null:'${x.m.id}';renderJalonsChantier()`, sel: _jalonGanttSel === x.m.id, couleur: fait ? '#999' : 'var(--gris)', titre: x.m.nom + (x.personnes?.length ? ' · ' + x.personnes.join(', ') : '') });
-      if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? `<div style="white-space:pre-line">${esc(x.m.txt || x.m.nom)}</div>` : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
+      if (_jalonGanttSel === x.m.id) html += `<div style="padding:6px 10px 8px 22px;font-size:12px;color:#555;background:#fff8e6;white-space:normal;line-height:1.4">${x.m.fab ? `<div style="white-space:pre-line">${esc(x.m.txt || x.m.nom)}</div>` : `<b>${esc(x.m.id)} · ${esc(x.m.nom)}</b> <span style="color:#a5761f">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}</span>${o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}`}
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
-        ${htmlReportPhase(x)}
         ${(o.admin || estMoi(x.personnes)) ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${fait ? (o.admin && x.etat !== 'auto' ? o.btn('↺ Annuler', `actionJalon('${x.m.id}','annuler')`) : '') : !(dispo || x.etat === 'bloque') ? '<span style="font-size:11px;color:#aaa">🔒 Pas encore disponible : les étapes précédentes doivent être franchies.</span>' : o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`)}</div>` : ''}
-        ${htmlNotesJalon(c, x.m.id)}
-        ${o.admin && x.m.fab ? `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px"><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${x.m.id.slice(2)}', true)" style="color:#8b6340;font-weight:700">▲ Les phases commencent ici</a><a href="#" onclick="event.preventDefault();ecarterPhaseFab('${({ pose: 'P:', etude: 'E:' })[x.m.kind] || ''}${x.m.id.slice(2)}', false)" style="color:#c0392b;font-weight:700">🗑 Supprimer cette phase</a></div>` : ''}</div>`;
+        ${htmlBlocJalon(c, x, o.admin)}</div>`;
       if (x.m.fab && _fabToutes && nFab === totalFab && totalFab > NB_PHASES_VISIBLES) html += `<div onclick="_fabToutes=false;renderJalonsChantier()" style="padding:6px 8px;font-size:11px;font-weight:700;color:#8b6340;cursor:pointer;border-top:1px solid #f1ece3;background:#fdf8f0">▾ Masquer les phases supplémentaires</div>`;
     });
     html += `</div><div style="font-size:10px;color:#999;margin-top:6px">◆ plein = échéance · ◆ vert = date de validation · trait rouge = retard · ligne pointillée = aujourd'hui. ☐ à valider = cliquer pour valider en un clic · touchez une ligne pour le détail, le blocage, « sans objet » et les notes.</div>`;
@@ -23045,7 +23197,7 @@
         : peutCe ? o.btn('☐ Valider', `actionJalon('${x.m.id}','ok')`, 'var(--vert)') + o.btn('⛔ Bloqué', `actionJalon('${x.m.id}','bloque')`, '#c0392b') + o.btn('⊘ Sans objet', `actionJalon('${x.m.id}','na')`) : '';
       html += `<div style="background:#fff;border:1.5px solid #e0a33a;border-radius:10px;padding:10px 12px;margin-top:10px">
         <div style="display:flex;justify-content:space-between;gap:8px"><div style="font-size:13px;font-weight:700;color:var(--gris)">${x.m.fab ? '🏭 ' + esc(x.m.txt || x.m.nom) : o.titre(x)}</div>
-          <div style="font-size:11px;color:#a5761f;text-align:right">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}${x.m.designer && o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}</div></div>
+          <div style="font-size:11px;color:#a5761f;text-align:right">👤 ${esc(x.personnes.length ? x.personnes.join(', ') : x.resp)}${o.admin ? ` <a href="#" onclick="event.preventDefault();designerRespJalon('${x.m.id}')" style="color:var(--vert)">✏️</a>` : ''}</div></div>
         <div style="font-size:11px;margin-top:4px">${fait ? o.detailFait(x) : x.etat === 'bloque' ? `<b style="color:#c0392b">Bloqué : ${esc(x.e.com || '')}</b>` : htmlEcheance(x)}</div>
         ${actions ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${actions}</div>` : ''}
         ${htmlNotesJalon(c, x.m.id)}
@@ -23263,18 +23415,6 @@
       renderJalonsChantier();
     } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
   }
-  async function designerRespJalon(jid) {
-    const c = chantierJalons(); if (!c) return;
-    const actuel = lireJalons(c).resp[jid] || '';
-    const v = prompt(`Responsable de ${jid} pour ce chantier :`, actuel);
-    if (v === null) return;
-    try {
-      await ecrireJalons(d => { if (v.trim()) d.resp[jid] = v.trim(); else delete d.resp[jid]; });
-      renderJalonsChantier();
-    } catch (e) { if (!/champ Jalons/.test(e.message)) alert('❌ ' + e.message); }
-  }
-
-
   // Délais du chantier (approvisionnement avant fabrication, levée des réserves)
   async function reglerDelaisJalons() {
     const c = chantierJalons(); if (!c) return;
@@ -23310,21 +23450,35 @@
     const esc = echapperHtmlNote;
     const champOk = (_jalonsCollabs || []).some(c => Object.prototype.hasOwnProperty.call(c, CHAMP_ROLE_JALONS));
     const collabs = (_jalonsCollabs || []).filter(c => nomCollab(c) && c['Actif'] !== false).sort((a, b) => nomCollab(a).localeCompare(nomCollab(b), 'fr'));
+    const bloc = (code, titre, defautTxt, ouvertSiVide) => {
+      const tit = titulairesRole(code);
+      const k = 'gab|' + code;
+      return `<details data-k="${esc(k)}" ${_detailsOuverts.has(k) ? 'open' : ''} ontoggle="memoDetails(this)" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px 10px;margin-bottom:6px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--gris)">${titre} <span style="font-weight:600;color:${tit.length ? 'var(--vert)' : '#999'}">· ${tit.length ? esc(tit.join(', ')) : esc(defautTxt)}</span></summary>
+        <div style="margin-top:6px;max-height:220px;overflow-y:auto">${collabs.map(c => {
+          const a = manuelRoleJalons(c, code), parPoste = posteCorrespondRole(c, code);
+          return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;cursor:pointer"><input type="checkbox" ${a || parPoste ? 'checked' : ''} ${parPoste ? 'disabled title="Déduit du Poste / Métier"' : ''} onchange="basculerRoleJalons(${c.id}, ${JSON.stringify(code).replace(/"/g, '&quot;')}, this.checked, this)" style="width:16px;height:16px;accent-color:var(--vert)"> ${esc(nomCollab(c))}${parPoste ? ` <span style="font-size:10px;color:#999">(poste : ${esc(posteCollabJalon(c))})</span>` : ''}</label>`;
+        }).join('')}</div></details>`;
+    };
+    const defautRole = mod => {
+      const r = (mod.roles || []).map(x => x === 'CA' ? "CA de l'affaire" : (titulairesRole(x).join(', ') || x + ' (non désigné)'));
+      return r.length ? 'par défaut : ' + r.join(' + ') : 'personne';
+    };
     const corps = !champOk
       ? `<div style="background:#fff3e0;border-radius:10px;padding:12px;font-size:12px;color:#7c4a12;line-height:1.5">⚙️ Créez d'abord dans Baserow, table <b>Collaborateurs</b>, un champ <b>Texte</b> nommé exactement <b>${CHAMP_ROLE_JALONS}</b>, puis rouvrez cette fenêtre.</div>`
-      : ROLES_JALONS.map(role => {
-          const tit = titulairesRole(role);
-          return `<details ${tit.length ? '' : 'open'} style="background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px 10px;margin-bottom:8px">
-            <summary style="cursor:pointer;font-size:13px;font-weight:800;color:var(--gris)">${esc(role)} <span style="font-weight:600;color:${tit.length ? 'var(--vert)' : '#c0392b'}">· ${tit.length ? esc(tit.join(', ')) : 'non désigné'}</span></summary>
-            <div style="margin-top:6px;max-height:220px;overflow-y:auto">${collabs.map(c => {
-              const a = String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes(role);
-              return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;cursor:pointer"><input type="checkbox" ${a ? 'checked' : ''} onchange="basculerRoleJalons(${c.id}, ${JSON.stringify(role).replace(/"/g, '&quot;')}, this.checked, this)"> ${esc(nomCollab(c))} <span style="color:#aaa;font-size:11px">${esc(c['Poste / Métier'] || '')}</span></label>`;
-            }).join('')}</div></details>`;
-        }).join('');
+      : `<div style="font-size:11px;font-weight:800;color:#8b6340;text-transform:uppercase;margin:6px 0">🏭 Phases (chaque section de la commande)</div>
+        ${bloc(CODES_PHASES_JALONS.etude, '📐 Phases d\'étude', defautRole({ roles: ['Étude'] }))}
+        ${bloc(CODES_PHASES_JALONS.fab, '🏭 Phases de fabrication', defautRole({ roles: ['Resp. atelier'] }))}
+        ${bloc(CODES_PHASES_JALONS.pose, '🏗 Phases de pose', defautRole({ roles: ["Chef d'équipe pose"] }))}
+        <div style="font-size:11px;font-weight:800;color:#8b6340;text-transform:uppercase;margin:12px 0 6px">🚩 Jalons</div>
+        ${JALONS_MODELE.map(j => bloc(j.id, esc(j.id) + ' · ' + esc(j.nom), defautRole(j))).join('')}
+        <details style="margin-top:12px"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#999;text-transform:uppercase">⚙️ Rôles (utilisés quand le gabarit est vide)</summary>
+          <div style="font-size:11px;color:#777;margin:6px 0">Les titulaires sont trouvés automatiquement par le champ <b>Poste / Métier</b> de la table Collaborateurs (cases grisées). Vous pouvez en ajouter à la main.</div>
+          <div>${ROLES_JALONS.map(role => bloc(role, esc(role), 'aucun collaborateur avec ce poste')).join('')}</div></details>`;
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-size:15px;font-weight:800;color:var(--gris)">⚙️ Titulaires des rôles</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-size:15px;font-weight:800;color:var(--gris)">⚙️ Gabarit des responsables</div>
         <button onclick="document.getElementById('modal-titulaires-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
-      <div style="font-size:11px;color:var(--gris-moyen);margin-bottom:10px">Le chargé d'affaires vient de la fiche chantier. Pour les autres rôles, cochez qui reçoit les jalons correspondants.</div>
+      <div style="font-size:11px;color:var(--gris-moyen);margin-bottom:10px;line-height:1.5">Responsables <b>par défaut</b> de chaque jalon et de chaque type de phase, pour toutes les affaires. Sur une affaire, le menu <b>⋯ Actions › 👤 Responsables</b> permet de choisir d'autres personnes pour ce jalon ou cette phase. Si un jalon n'a personne ici, le réglage par rôle s'applique (le chargé d'affaires vient de la fiche chantier).</div>
       ${corps}</div>`;
   }
   async function basculerRoleJalons(collabId, role, oui, input) {
@@ -25867,7 +26021,7 @@
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','jalons','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -25877,7 +26031,6 @@
     if (tab === 'utilisateurs') loadUtilisateurs();
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
-    if (tab === 'jalons') chargerTableauJalons();
     if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
     if (tab === 'tv') chargerGestionTV();
     if (tab === 'export') {
@@ -26051,7 +26204,6 @@
   <div class="onglets-gestion" style="display:flex;margin:0 16px 16px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none">
     <button class="tab-btn active" id="tab-g-utilisateurs" onclick="switchGestionTab('utilisateurs')" style="font-size:11px">👤 Users</button>
     <button class="tab-btn" id="tab-g-chantiers" onclick="switchGestionTab('chantiers')" style="font-size:11px">🏗️ Chantiers</button>
-    <button class="tab-btn" id="tab-g-jalons" onclick="switchGestionTab('jalons')" style="font-size:11px">🚩 Jalons</button>
     <button class="tab-btn" id="tab-g-conges" onclick="switchGestionTab('conges-admin')" style="font-size:11px">🏖️ Congés</button>
     <button class="tab-btn" id="tab-g-conges-groupe" onclick="switchGestionTab('conges-groupe')" style="font-size:11px">👥 Saisie groupée</button>
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
@@ -26078,23 +26230,6 @@
     </div>
   </div>
     <div id="liste-utilisateurs"><div class="feuille-loading">⏳ Chargement…</div></div>
-  </div>
-
-  <!-- V42 : JALONS (suivi des étapes de chaque chantier) -->
-  <div id="gestion-jalons" style="display:none">
-    <div style="margin:0 16px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-      <div><div style="font-size:13px;font-weight:700;color:var(--gris)">🚩 Jalons des chantiers en cours</div>
-        <div style="font-size:11px;color:var(--gris-moyen)">Touchez un chantier pour ouvrir sa frise et valider les étapes.</div></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <input type="text" id="jalons-recherche" placeholder="🔍 Chantier, chargé d'affaires…" oninput="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
-        <select id="jalons-filtre" onchange="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
-          <option value="">Tous</option><option value="retard">🔴 Avec un retard</option><option value="bloque">⛔ Avec un blocage</option><option value="moi">👤 Où c'est à moi</option>
-        </select>
-        <button onclick="ouvrirTitulairesJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer">⚙️ Titulaires</button>
-      </div>
-    </div>
-    <div id="jalons-alerte" style="display:none;margin:0 16px 10px;background:#fff3e0;border:1px solid #f0c48a;border-radius:10px;padding:10px 12px;font-size:12px;color:#a2560f"></div>
-    <div id="jalons-tableau" style="margin:0 16px 30px"><div class="feuille-loading">⏳ Chargement…</div></div>
   </div>
 
   <!-- CHANTIERS -->
@@ -27081,6 +27216,10 @@
     <span class="nav-icon">👷</span>
     Charge
   </button>
+  <button class="nav-btn" id="nav-jalons" style="display:none" onclick="switchPage('jalons')">
+    <span class="nav-icon">🚩</span>
+    Jalons
+  </button>
   <button class="nav-btn" id="nav-collectif" style="display:none" onclick="switchPage('collectif')">
     <span class="nav-icon">📋</span>
     Collectif
@@ -27326,6 +27465,28 @@
 </div>
 
 <!-- PAGE RÉPERTOIRE (contacts clients, fournisseurs, sous-traitants…) — consultation pour tous, édition Admin/Gestionnaire -->
+<!-- V85 : PAGE JALONS (onglet du bandeau principal, Gestionnaire / Administrateur) -->
+<div id="page-jalons" class="page" style="display:none">
+  <div class="bandeau-fige">
+  <div style="padding:16px 16px 6px;font-size:16px;font-weight:800;color:var(--gris)">🚩 Jalons</div>
+
+    <div style="margin:0 16px 10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div><div style="font-size:13px;font-weight:700;color:var(--gris)">🚩 Jalons des chantiers en cours</div>
+        <div style="font-size:11px;color:var(--gris-moyen)">Touchez un chantier pour ouvrir sa frise et valider les étapes.</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <input type="text" id="jalons-recherche" placeholder="🔍 Chantier, chargé d'affaires…" oninput="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
+        <select id="jalons-filtre" onchange="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
+          <option value="">Tous</option><option value="retard">🔴 Avec un retard</option><option value="bloque">⛔ Avec un blocage</option><option value="moi">👤 Où c'est à moi</option>
+        </select>
+        <button onclick="ouvrirTitulairesJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer">⚙️ Gabarit des responsables</button>
+      </div>
+    </div>
+  </div>
+    <div id="jalons-alerte" style="display:none;margin:0 16px 10px;background:#fff3e0;border:1px solid #f0c48a;border-radius:10px;padding:10px 12px;font-size:12px;color:#a2560f"></div>
+    <div id="jalons-tableau" style="margin:0 16px 30px"><div class="feuille-loading">⏳ Chargement…</div></div>
+  
+</div>
+
 <div id="page-repertoire" class="page" style="display:none">
   <div class="bandeau-fige">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
