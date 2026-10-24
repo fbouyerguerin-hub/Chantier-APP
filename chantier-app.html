@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V98';
+  const APP_VERSION = 'V100';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1088,7 +1088,10 @@
     const navCharge = document.getElementById('nav-charge');
     if (navCharge) navCharge.style.display = (droit === 'Administrateur' || droit === 'Gestionnaire' || connectedAccesCharge) ? '' : 'none';
     const navJalons = document.getElementById('nav-jalons');
+    _jalonsAccesPoste = false;
     if (navJalons) navJalons.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
+    // V99 : onglet Jalons aussi pour les Utilisateurs « Responsable Fab Acier / Fab Bois »
+    verifierAccesJalonsPoste();
     const navCollectif = document.getElementById('nav-collectif');
     if (navCollectif) navCollectif.style.display = 'flex'; // Visible pour tous
     const tabRttAdmin = document.getElementById('tab-rtt-admin');
@@ -1106,6 +1109,7 @@
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     const navRepertoire = document.getElementById('nav-repertoire');
     if (navRepertoire) navRepertoire.style.display = 'flex'; // Visible pour tous (édition réservée Admin/Gestionnaire)
+    { const bx = document.getElementById('btn-excel-relances'); if (bx) bx.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // V100
     const tabCommandesChantier = document.getElementById('tab-commandes-chantier');
     if (tabCommandesChantier) tabCommandesChantier.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'block' : 'none';
     { const tabCommandesArticles = document.getElementById('tab-commandes-articles');
@@ -2401,6 +2405,7 @@
     } else if (nav === 'jalons') {
       if (!jalonsVisibles()) { switchPage('saisie'); return; }
       showPage('page-jalons');
+      { const bg = document.getElementById('btn-gabarit-jalons'); if (bg) bg.style.display = peutValiderJalons() ? '' : 'none'; }
       chargerTableauJalons();
     } else if (nav === 'repertoire') {
       showPage('page-repertoire');
@@ -3117,6 +3122,7 @@
     _validationAutoOuverte = null;
     connectedCollab = null;
     connectedViewId = null;
+    try { _jalonsAccesPoste = false; } catch (e) {}
     try { const bj = document.getElementById('header-jalons-btn'); if (bj) bj.style.display = 'none'; const mj = document.getElementById('modal-mes-jalons'); if (mj) mj.style.display = 'none'; } catch (e) {}
     try { _sondageConnexionOuvert = false; const ms = document.getElementById('modal-sondage-connexion'); if (ms) ms.style.display = 'none'; } catch (e) {}
     feuilleCollab = null;
@@ -13771,6 +13777,7 @@
   // Feuille 2 « À relancer » : uniquement celles dont la date de réception prévue est dépassée,
   // regroupées par fournisseur (prêtes pour les appels / mails de relance).
   async function exporterCommandesEnAttenteReception() {
+    if (!estProfilPrix()) { alert('Export réservé aux profils Gestionnaire et Administrateur.'); return; } // V100
     const prix = estProfilPrix();
     const toutes = _commandesCache.filter(r => {
       if (estCommandePartielle(r)) return true;
@@ -22708,6 +22715,7 @@
   }
   // V98 : accès direct à la commande client (EBP) et au bon de commande depuis le titre des jalons
   function htmlLiensCommandeJalons(c) {
+    if (!estProfilPrix()) return ''; // commandes chiffrées : Administrateur / Gestionnaire uniquement
     const esc = echapperHtmlNote;
     const cmds = (() => { try { return commandesClientsDuChantier(c) || []; } catch (e) { return []; } })();
     const fichiers = Array.isArray(c['Fichiers']) ? c['Fichiers'] : [];
@@ -23055,7 +23063,8 @@
       const u = ((await r.json()).results || []).find(u => normTexte(u['Nom complet'] || '') === normTexte(pour) && u['Vue ID']);
       if (!u) return;
       // V83 : jalons masqués au profil Utilisateur → pas de message de tâche/phase pour lui (provisoire)
-      if (!['Administrateur', 'Gestionnaire'].includes(u['Droit']?.value || u['Droit'] || 'Utilisateur')) return;
+      const collabU = (_jalonsCollabs || []).find(x => normTexte(nomCollab(x)) === normTexte(pour));
+      if (!['Administrateur', 'Gestionnaire'].includes(u['Droit']?.value || u['Droit'] || 'Utilisateur') && !estPosteResponsableFab(collabU?.['Poste / Métier'])) return;
       await envoyerMessageGroupe([String(u['Vue ID']).trim()], `${titre || '☑ Nouvelle tâche pour vous'}\n🏗 ${c?.['Nom du chantier'] || ''}\n🚩 ${x ? (x.m.fab ? x.m.nom : x.m.id + ' · ' + x.m.nom) : jid}\n\n${txt}\n\nÀ valider dans les jalons du chantier (🚩 en haut de l'écran).`);
     } catch (e) {}
   }
@@ -23569,7 +23578,18 @@
     if (mj && mj.style.display === 'flex') ouvrirMesJalons();
   }
   // V82 : jalons masqués pour le profil Utilisateur (provisoire) — réservés aux Gestionnaires et Administrateurs
-  function jalonsVisibles() { return peutValiderJalons(); }
+  let _jalonsAccesPoste = false;
+  function estPosteResponsableFab(v) { return /^resp\w*\.?\s+fab\s+(acier|bois)$/.test(normTexte(String((v && typeof v === 'object' ? v.value : v) || ''))); }
+  function jalonsVisibles() { return peutValiderJalons() || _jalonsAccesPoste; }
+  async function verifierAccesJalonsPoste() {
+    if (peutValiderJalons() || !connectedCollab) return;
+    try {
+      const row = await obtenirCollaborateurConnecte();
+      _jalonsAccesPoste = estPosteResponsableFab(row?.['Poste / Métier']);
+      const nj = document.getElementById('nav-jalons'); if (nj) nj.style.display = _jalonsAccesPoste ? 'flex' : 'none';
+      if (_jalonsAccesPoste) { try { calculerMesJalons(); } catch (e) {} }
+    } catch (e) {}
+  }
   async function calculerMesJalons() {
     if (!connectedCollab) return;
     if (!jalonsVisibles()) {
@@ -27393,7 +27413,7 @@
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <div id="commandes-resume" style="flex:1;font-size:12px;color:var(--gris-moyen)"></div>
-        <button onclick="exporterCommandesEnAttenteReception()" title="Export Excel : toutes les commandes en attente + feuille « À relancer » (délai dépassé)" style="flex:0 0 auto;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer">📥 Excel relances</button>
+        <button id="btn-excel-relances" onclick="exporterCommandesEnAttenteReception()" title="Export Excel : toutes les commandes en attente + feuille « À relancer » (délai dépassé)" style="flex:0 0 auto;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer">📥 Excel relances</button>
       </div>
       <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
@@ -27578,7 +27598,7 @@
         <select id="jalons-filtre" onchange="renderTableauJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px">
           <option value="">Tous</option><option value="retard">🔴 Avec un retard</option><option value="bloque">⛔ Avec un blocage</option><option value="moi">👤 Où c'est à moi</option>
         </select>
-        <button onclick="ouvrirTitulairesJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer">⚙️ Gabarit des responsables</button>
+        <button onclick="ouvrirTitulairesJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer" id="btn-gabarit-jalons">⚙️ Gabarit des responsables</button>
       </div>
     </div>
   </div>
