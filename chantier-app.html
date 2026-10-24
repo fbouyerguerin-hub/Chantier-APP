@@ -767,7 +767,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V90';
+  const APP_VERSION = 'V92';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22225,7 +22225,7 @@
     { id: 'J4',  phase: 'Conception', nom: 'Croquis, avant-projet ou PC', resp: 'CA ou dessinatrice', designer: true, roles: ['CA'] },
     { id: 'J5',  phase: 'Conception', nom: 'Avant-projet / PC validé client', resp: "Chargé d'affaires", cond: true, roles: ['CA'] },
     { id: 'J6',  phase: 'Conception', nom: 'Passage site : cotes, niveaux', resp: "Chargé d'affaires", designer: true, cond: true, roles: ['CA'] },
-    { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production', roles: ['CA', 'Resp. production'] },
+    { id: 'J7',  phase: 'Conception', nom: 'Lancement interne', resp: 'CA + resp. production + DO', roles: ['CA', 'Resp. production', 'DO'] },
     { id: 'J8',  phase: 'Conception', nom: "Plans d'exécution prêts", auto: 'etude', resp: 'Étude', roles: ['Étude'] },
     { id: 'J9',  phase: 'Conception', nom: "Plans d'exécution validés client", resp: "Chargé d'affaires", roles: ['CA'] },
     { id: 'J10', phase: 'Production', nom: 'Commandes passées, AR validés', resp: 'Resp. production', auto: 'ar', roles: ['Resp. production'] },
@@ -22392,7 +22392,7 @@
 
   // ── V46 : échéances tirées du plan de charge, titulaires des rôles ──
   const APPRO_SEMAINES_DEFAUT = 3, RESERVES_SEMAINES_DEFAUT = 4;
-  const ROLES_JALONS = ['Direction', 'Étude', 'Resp. production', 'Resp. atelier', "Chef d'équipe pose", 'RAF'];
+  const ROLES_JALONS = ['Direction', 'DO', 'Étude', 'Resp. production', 'Resp. atelier', "Chef d'équipe pose", 'RAF'];
   const CHAMP_ROLE_JALONS = 'Rôle jalons';
   const ajouterJours = (ymd, n) => { const t = new Date(ymd + 'T12:00:00'); t.setDate(t.getDate() + n); return dateYMD(t); };
   function echeancesChantier(c, d) {
@@ -22419,7 +22419,8 @@
   // (table Collaborateurs), plus ceux ajoutés à la main dans « Rôle jalons ». Les codes du gabarit
   // (J1…J15, Phases …) restent uniquement manuels.
   const POSTES_ROLES_JALONS = {
-    'Direction': /direct|gerant|president|\bpdg\b|\bdg\b/,
+    'Direction': /^(?!.*operation)(.*(direct|gerant|president|\bpdg\b|\bdg\b))/, // V91 : le DO a son propre rôle
+    'DO': /directeur des operations|direction des operations|dir\w*\.? *(des )?op|^do$/,
     'Étude': /^etudes?$|bureau d.?etudes?/, // V88 : poste « Étude » de la table Collaborateurs
     'Resp. production': /resp\w*\.? *(de )?prod|chef de prod|directeur de prod|^production$/,
     'Resp. atelier': /resp\w*\.? *(d.?)?atelier|chef d.?atelier|resp\w*\.? *fab/,
@@ -22429,9 +22430,11 @@
   };
   function manuelRoleJalons(c, code) { const t = String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()); return t.includes(code) || (code === 'Étude' && t.includes('Dessinatrice')); } // V89 : ancien libellé « Dessinatrice »
   function posteCorrespondRole(c, role) { const re = POSTES_ROLES_JALONS[role]; return !!re && re.test(normTexte(posteCollabJalon(c))); }
+  // V92 : « -Rôle » dans « Rôle jalons » retire un collaborateur d'un rôle déduit de son poste
+  function exclusRoleJalons(c, role) { return String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).includes('-' + role); }
   function titulairesRoleCollabs(role) {
     const l = (_jalonsCollabsActifs || _jalonsCollabs || []);
-    return l.filter(c => manuelRoleJalons(c, role) || posteCorrespondRole(c, role));
+    return l.filter(c => !exclusRoleJalons(c, role) && (manuelRoleJalons(c, role) || posteCorrespondRole(c, role)));
   }
   function posteCollabJalon(c) { const v = c['Poste / Métier']; return String((v && typeof v === 'object' ? v.value : v) || '').trim(); }
   // ── V86 : responsables des jalons ──
@@ -23456,8 +23459,9 @@
       return `<details data-k="${esc(k)}" ${_detailsOuverts.has(k) ? 'open' : ''} ontoggle="memoDetails(this)" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:10px;padding:8px 10px;margin-bottom:6px">
         <summary style="cursor:pointer;font-size:12px;font-weight:800;color:var(--gris)">${titre} <span style="font-weight:600;color:${tit.length ? 'var(--vert)' : '#999'}">· ${tit.length ? esc(tit.join(', ')) : esc(defautTxt)}</span></summary>
         <div style="margin-top:6px;max-height:220px;overflow-y:auto">${collabs.map(c => {
-          const a = manuelRoleJalons(c, code), parPoste = posteCorrespondRole(c, code);
-          return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;cursor:pointer"><input type="checkbox" ${a || parPoste ? 'checked' : ''} ${parPoste ? 'disabled title="Déduit du Poste / Métier"' : ''} onchange="basculerRoleJalons(${c.id}, ${JSON.stringify(code).replace(/"/g, '&quot;')}, this.checked, this)" style="width:16px;height:16px;accent-color:var(--vert)"> ${esc(nomCollab(c))}${parPoste ? ` <span style="font-size:10px;color:#999">(poste : ${esc(posteCollabJalon(c))})</span>` : ''}</label>`;
+          const parPoste = posteCorrespondRole(c, code), exclu = exclusRoleJalons(c, code);
+          const a = !exclu && (manuelRoleJalons(c, code) || parPoste);
+          return `<label style="display:flex;align-items:center;gap:8px;padding:4px 2px;font-size:12px;cursor:pointer"><input type="checkbox" ${a ? 'checked' : ''} onchange="basculerRoleJalons(${c.id}, ${JSON.stringify(code).replace(/"/g, '&quot;')}, this.checked, this)" style="width:16px;height:16px;accent-color:var(--vert)"> ${esc(nomCollab(c))}${parPoste ? ` <span style="font-size:10px;color:${exclu ? '#c0392b' : '#999'}">(poste : ${esc(posteCollabJalon(c))}${exclu ? ' — retiré à la main' : ''})</span>` : ''}</label>`;
         }).join('')}</div></details>`;
     };
     const defautRole = mod => {
@@ -23473,7 +23477,7 @@
         <div style="font-size:11px;font-weight:800;color:#8b6340;text-transform:uppercase;margin:12px 0 6px">🚩 Jalons</div>
         ${JALONS_MODELE.map(j => bloc(j.id, esc(j.id) + ' · ' + esc(j.nom), defautRole(j))).join('')}
         <details style="margin-top:12px"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#999;text-transform:uppercase">⚙️ Rôles (utilisés quand le gabarit est vide)</summary>
-          <div style="font-size:11px;color:#777;margin:6px 0">Les titulaires sont trouvés automatiquement par le champ <b>Poste / Métier</b> de la table Collaborateurs (cases grisées). Vous pouvez en ajouter à la main.</div>
+          <div style="font-size:11px;color:#777;margin:6px 0">Les titulaires sont trouvés automatiquement par le champ <b>Poste / Métier</b> de la table Collaborateurs (mention « poste : … »). Vous pouvez cocher d'autres personnes, ou décocher quelqu'un dont le poste ne correspond pas à son rôle réel.</div>
           <div>${ROLES_JALONS.map(role => bloc(role, esc(role), 'aucun collaborateur avec ce poste')).join('')}</div></details>`;
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><div style="font-size:15px;font-weight:800;color:var(--gris)">⚙️ Gabarit des responsables</div>
@@ -23485,7 +23489,9 @@
     if (input) input.disabled = true;
     const c = (_jalonsCollabs || []).find(x => x.id === collabId); if (!c) return;
     const roles = new Set(String(c[CHAMP_ROLE_JALONS] || '').split(',').map(x => x.trim()).filter(Boolean));
-    if (oui) roles.add(role); else roles.delete(role);
+    // V92 : rôle déduit du poste → décocher ajoute une exclusion « -Rôle », recocher la retire
+    if (posteCorrespondRole(c, role)) { roles.delete(role); if (oui) roles.delete('-' + role); else roles.add('-' + role); }
+    else { roles.delete('-' + role); if (oui) roles.add(role); else roles.delete(role); }
     try {
       const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COLLABS_ADMIN}/${collabId}/?user_field_names=true`,
         { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_ROLE_JALONS]: [...roles].join(', ') }) });
