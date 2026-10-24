@@ -299,6 +299,7 @@
     .modal-message-icon { font-size: 36px; text-align: center; margin-bottom: 12px; }
     .modal-message-title { font-size: 16px; font-weight: 800; color: var(--gris); margin-bottom: 12px; text-align: center; }
     #modal-jalons summary::-webkit-details-marker { display: none; }
+    @media (max-width: 480px) { .lib-long { display: none; } }
     .modal-message-body { font-size: 14px; color: var(--gris-moyen); line-height: 1.6; margin-bottom: 20px; text-align: center; white-space: pre-wrap; }
     .modal-message-btn { width: 100%; background: linear-gradient(135deg, var(--vert), #3a6331); color: #fff; border: none; border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; }
 
@@ -767,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V108';
+  const APP_VERSION = 'V110';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -6676,6 +6677,7 @@
     // Afficher/masquer le bouton + Affaire
     const btnNew = document.getElementById('btn-nouvelle-affaire');
     if (btnNew) btnNew.style.display = tab === 'affaires' ? '' : 'none';
+    { const mo = document.getElementById('charge-menu-outils'); if (mo) { mo.style.display = tab === 'capacite' ? '' : 'none'; mo.open = false; } }
     if (tab === 'affaires') chargerListeAffaires();
     if (tab === 'capacite') { chargeVueAnnuelle ? chargerCapaciteAnnuelle() : loadPlanCharge(); }
     if (tab === 'suivi') chargerSuiviAffairesOnglet();
@@ -6704,6 +6706,7 @@
 
   function filtrerPosteCharge(poste) {
     chargePosteActif = poste;
+    { const sel = document.getElementById('charge-poste-select'); if (sel && sel.value !== poste) sel.value = poste; }
     // Mettre à jour les boutons
     const btns = {
       'tous': 'btn-poste-tous',
@@ -25581,6 +25584,8 @@
           const type = m['Type']?.value || m['Type'] || '';
           if (type !== 'Sortie' && type !== 'Retour') return;
           if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
+          // V110 : kit atelier ou matériel interne (identifié par l'article lui-même, quelle que soit la note du mouvement)
+          { const art = artParId.get((m['Article'] || [])[0]?.id); if (art && ((art['Origine'] || '') === 'Kit' || estMateriel(art))) return; }
           let nom = nomParCle.get(normTexte(m['Chantier'] || ''));
           // sortie vers un chantier sans heure ni commande sur la période : inclus aussi
           if (!nom) { nom = String(m['Chantier'] || '').trim(); if (!nom || normTexte(nom).includes('stock atelier')) return; }
@@ -27145,19 +27150,28 @@
 <!-- PAGE PLAN DE CHARGE -->
 <div id="page-charge" class="page" style="display:none">
   <div class="bandeau-fige">
-  <div style="padding:16px 16px 10px;display:flex;justify-content:space-between;align-items:center">
-    <div style="font-size:16px;font-weight:800;color:var(--gris)">👷 Plan de charge</div>
-    <button id="btn-nouvelle-affaire" onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
-  </div>
-
-  <!-- Sous-onglets -->
-  <div style="display:flex;gap:6px;margin:0 16px 12px;border-bottom:2px solid #eee;padding-bottom:0">
+  <!-- V109 : titre, sous-onglets et menus sur une seule ligne (gain de hauteur pour les tableaux) -->
+  <div style="display:flex;align-items:flex-end;gap:4px;flex-wrap:wrap;margin:0 16px 8px;padding-top:10px;border-bottom:2px solid #eee">
+    <div style="font-size:15px;font-weight:800;color:var(--gris);margin-right:6px;padding-bottom:8px">👷 Charge</div>
     <button id="charge-tab-btn-affaires" onclick="switchChargeTab('affaires')"
-      style="padding:8px 16px;border:none;border-bottom:3px solid var(--vert);background:none;font-size:13px;font-weight:700;cursor:pointer;color:var(--vert)">📋 Affaires</button>
+      style="padding:7px 10px;border:none;border-bottom:3px solid var(--vert);background:none;font-size:12px;font-weight:700;cursor:pointer;color:var(--vert)">📋 Affaires</button>
     <button id="charge-tab-btn-capacite" onclick="switchChargeTab('capacite')"
-      style="padding:8px 16px;border:none;border-bottom:3px solid transparent;background:none;font-size:13px;font-weight:700;cursor:pointer;color:#aaa">📊 Capacité</button>
+      style="padding:7px 10px;border:none;border-bottom:3px solid transparent;background:none;font-size:12px;font-weight:700;cursor:pointer;color:#aaa">📊 Capacité</button>
     <button id="charge-tab-btn-suivi" onclick="switchChargeTab('suivi')"
-      style="padding:8px 16px;border:none;border-bottom:3px solid transparent;background:none;font-size:13px;font-weight:700;cursor:pointer;color:#aaa">📈 Suivi</button>
+      style="padding:7px 10px;border:none;border-bottom:3px solid transparent;background:none;font-size:12px;font-weight:700;cursor:pointer;color:#aaa">📈 Suivi</button>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:6px">
+      <details id="charge-menu-outils" style="position:relative;display:none">
+        <summary style="list-style:none;cursor:pointer;background:#6B4EA8;color:#fff;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;white-space:nowrap">📊<span class="lib-long"> Gantt / exports</span> ▾</summary>
+        <div style="position:absolute;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:6px;min-width:230px" onclick="if(event.target.tagName==='BUTTON')this.parentElement.open=false">
+          <button id="btn-collabs-capacite" onclick="ouvrirCollabsCapacite()" title="Collaborateurs comptés dans la capacité (exclure les fictifs)" style="display:block;width:100%;text-align:left;margin:3px 0;background:#fff;color:var(--gris);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">👥 Collaborateurs</button>
+          <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="display:block;width:100%;text-align:left;margin:3px 0;background:#fff;color:var(--gris);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Export Excel du mois</button>
+          <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="display:block;width:100%;text-align:left;margin:3px 0;background:#fff;color:var(--gris);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Export Excel de l'année</button>
+          <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="display:block;width:100%;text-align:left;margin:3px 0;background:#fff;color:var(--gris);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Export Gantt annuel</button>
+          <button id="btn-export-charge-gantt-poste" onclick="exportPlanChargeGanttParPoste()" style="display:block;width:100%;text-align:left;margin:3px 0;background:#fff;color:var(--gris);border:1px solid #eee;border-radius:8px;padding:8px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Export Gantt par poste</button>
+        </div>
+      </details>
+      <button id="btn-nouvelle-affaire" onclick="ouvrirFormCharge(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">+ Affaire</button>
+    </div>
   </div>
   </div>
 
@@ -27176,29 +27190,18 @@
 
   <!-- Sous-onglet Capacité -->
   <div id="charge-tab-capacite" style="display:none">
-    <!-- Filtres par poste -->
   <div class="filtre-fige">
-    <div style="display:flex;gap:6px;margin:8px 16px 12px;overflow-x:auto;padding-bottom:2px">
-      <button id="btn-poste-tous" onclick="filtrerPosteCharge('tous')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">Tous</button>
-      <button id="btn-poste-etude" onclick="filtrerPosteCharge('Étude')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Étude</button>
-      <button id="btn-poste-fabbois" onclick="filtrerPosteCharge('Fab Bois')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Bois</button>
-      <button id="btn-poste-fabacier" onclick="filtrerPosteCharge('Fab Acier')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Fab Acier</button>
-      <button id="btn-poste-pose" onclick="filtrerPosteCharge('Pose')" style="flex:0 0 auto;padding:6px 12px;border:none;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;background:#f0f0f0;color:#555">Pose</button>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;margin:0 16px 14px;flex-wrap:wrap">
-      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(-1) : changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">‹</button>
-      <div id="charge-mois-label" style="flex:1;text-align:center;font-size:14px;font-weight:700;color:var(--gris);min-width:120px"></div>
-      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(1) : changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:7px 12px;font-size:16px;cursor:pointer">›</button>
-      <button id="btn-collabs-capacite" onclick="ouvrirCollabsCapacite()" title="Collaborateurs comptés dans la capacité (exclure les fictifs)" style="background:#fff;color:var(--gris);border:1.5px solid #ddd;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">👥 Collaborateurs</button>
-      <button id="btn-toggle-vue-capacite" onclick="toggleVueCapacite()" style="background:#494949;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🗓 Vue mensuelle</button>
-      <button id="btn-export-charge" onclick="exportPlanChargeExcel()" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📥 Mois</button>
-      <button id="btn-export-charge-annuel" onclick="exportPlanChargeExcelAnnuel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📅 Année</button>
-      <button id="btn-export-charge-gantt" onclick="exportPlanChargeGanttAnnuel()" style="background:#6B4EA8;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt</button>
-      <button id="btn-export-charge-gantt-poste" onclick="exportPlanChargeGanttParPoste()" style="background:#8B6340;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📊 Gantt par poste</button>
-    </div>
-    <div style="margin:0 16px 12px">
-      <input type="text" id="charge-capacite-recherche" placeholder="🔍 Rechercher un chantier dans le calendrier…" oninput="filtrerCapaciteChantier(this.value)"
-        style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;background:#fafafa">
+    <!-- V109 : poste, période, vue et recherche sur une seule ligne -->
+    <div style="display:flex;gap:6px;align-items:center;margin:6px 16px 8px;flex-wrap:wrap">
+      <select id="charge-poste-select" onchange="filtrerPosteCharge(this.value)" style="padding:7px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px;font-weight:700;background:#fff;color:var(--gris)">
+        <option value="tous">Tous les postes</option><option value="Étude">Étude</option><option value="Fab Bois">Fab Bois</option><option value="Fab Acier">Fab Acier</option><option value="Pose">Pose</option>
+      </select>
+      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(-1) : changerMoisCharge(-1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:15px;cursor:pointer">‹</button>
+      <div id="charge-mois-label" style="text-align:center;font-size:13px;font-weight:700;color:var(--gris);min-width:90px"></div>
+      <button onclick="chargeVueAnnuelle ? changerAnneeCharge(1) : changerMoisCharge(1)" style="background:#f0f0f0;border:none;border-radius:8px;padding:5px 10px;font-size:15px;cursor:pointer">›</button>
+      <button id="btn-toggle-vue-capacite" onclick="toggleVueCapacite()" style="background:#494949;color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">🗓 Vue mensuelle</button>
+      <input type="text" id="charge-capacite-recherche" placeholder="🔍 Chantier…" oninput="filtrerCapaciteChantier(this.value)"
+        style="flex:1 1 140px;min-width:120px;box-sizing:border-box;padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;background:#fafafa">
     </div>
   </div>
     <div id="charge-content" style="padding:0 16px 100px">
