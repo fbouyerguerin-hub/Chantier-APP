@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V116';
+  const APP_VERSION = 'V118';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1108,6 +1108,7 @@
     if (btnRefreshHeader) btnRefreshHeader.style.display = 'block';
     const navCommandesClients = document.getElementById('nav-commandes-clients');
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
+    { const nm = document.getElementById('nav-materiel'); if (nm) nm.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none'; } // V117
     const navRepertoire = document.getElementById('nav-repertoire');
     if (navRepertoire) navRepertoire.style.display = 'flex'; // Visible pour tous (édition réservée Admin/Gestionnaire)
     { const bx = document.getElementById('btn-excel-relances'); if (bx) bx.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // V100
@@ -2408,10 +2409,285 @@
       showPage('page-jalons');
       { const bg = document.getElementById('btn-gabarit-jalons'); if (bg) bg.style.display = peutValiderJalons() ? '' : 'none'; }
       chargerTableauJalons();
+    } else if (nav === 'materiel') {
+      if (!peutVoirMateriel()) { switchPage('saisie'); return; }
+      showPage('page-materiel');
+      chargerMaterielPage(false);
     } else if (nav === 'repertoire') {
       showPage('page-repertoire');
       chargerRepertoirePage();
     }
+  }
+
+  // ── V117 : ONGLET « SORTIE MATÉRIEL GUÉRIN » (Administrateur / Gestionnaire) ──
+  // Accès direct aux kits internes et au matériel interne + journal filtrable des sorties et retours.
+  // Source : mouvements de stock notés « Kit CODE — désignation » (écran kit / matériel interne).
+  let _matOnglet = 'kits';
+  let _matOuverts = new Set();
+  function peutVoirMateriel() { return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire'; }
+  function escMat(s) { return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+  function frMat(d) { return d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—'; }
+  function codeKitArticle(a) { return String(a['Code EBP'] || '').trim() || ('ART-' + a.id); }
+  function kitsMateriel() {
+    return (_articlesCache || []).filter(a => a['Actif'] !== false && (estKit(a) || estMateriel(a)))
+      .map(a => ({ id: a.id, code: codeKitArticle(a), nom: a['Designation'] || codeKitArticle(a), type: estKit(a) ? 'Kit' : 'Matériel', a }))
+      .sort((x, y) => x.nom.localeCompare(y.nom, 'fr'));
+  }
+  // Mouvements de kit / matériel interne, rattachés à leur kit
+  function mouvementsMateriel() {
+    const kits = kitsMateriel().sort((x, y) => y.code.length - x.code.length); // code le plus long d'abord
+    const nomArt = new Map((_articlesCache || []).map(a => [a.id, a['Designation'] || '?']));
+    return (_mouvementsCache || []).map(m => {
+      const note = String(m['Note'] || '');
+      if (!note.startsWith('Kit ')) return null;
+      const t = m['Type']?.value || m['Type'] || '';
+      if (t !== 'Sortie' && t !== 'Retour') return null;
+      const reste = note.slice(4);
+      const k = kits.find(x => reste === x.code || reste.startsWith(x.code + ' '));
+      const sep = reste.indexOf(' — ');
+      const aid = (m['Article'] || [])[0]?.id;
+      return {
+        id: m.id, type: t, date: String(m['Date'] || '').slice(0, 10), chantier: String(m['Chantier'] || '').trim(), par: String(m['Par'] || '').trim(),
+        kitCode: k ? k.code : (sep > 0 ? reste.slice(0, sep) : reste), kitNom: k ? k.nom : (sep > 0 ? reste.slice(sep + 3) : reste), kitId: k ? k.id : null,
+        articleId: aid, article: nomArt.get(aid) || (m['Article'] || [])[0]?.value || '?', qte: Math.abs(Number(m['Quantite']) || 0), signe: -(Number(m['Quantite']) || 0)
+      };
+    }).filter(Boolean);
+  }
+  // Matériel encore sur chantier : kit × chantier × composant (sorties − retours)
+  function soldesMateriel(mvts) {
+    const s = {};
+    mvts.forEach(m => {
+      if (!m.chantier) return;
+      const k = m.kitCode + '|' + m.chantier;
+      const o = s[k] || (s[k] = { kitCode: m.kitCode, kitNom: m.kitNom, kitId: m.kitId, chantier: m.chantier, comps: {}, derniere: null });
+      const c = o.comps[m.articleId] || (o.comps[m.articleId] = { article: m.article, qte: 0 });
+      c.qte += m.signe;
+      if (m.type === 'Sortie' && (!o.derniere || m.date >= o.derniere.date)) o.derniere = { date: m.date, par: m.par };
+    });
+    return Object.values(s).map(o => ({ ...o, comps: Object.values(o.comps).filter(c => c.qte > 0.0005) })).filter(o => o.comps.length);
+  }
+  async function chargerMaterielPage(force) {
+    const z = document.getElementById('materiel-liste');
+    if (!stockTablesConfigurees()) { z.innerHTML = '<div class="feuille-empty">Module stock non configuré.</div>'; return; }
+    if (force) _matVeh.cle = '';
+    if (!_stockCharge || force) z.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try { await chargerStock(!!force); } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>'; return; }
+    remplirFiltresMateriel();
+    renderMateriel();
+  }
+  function remplirFiltresMateriel() {
+    const mvts = mouvementsMateriel();
+    const remplir = (id, valeurs, tous) => {
+      const sel = document.getElementById(id); if (!sel) return;
+      const v = sel.value;
+      sel.innerHTML = `<option value="">${tous}</option>` + [...new Set(valeurs.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr')).map(x => `<option value="${escMat(x)}">${escMat(x)}</option>`).join('');
+      if ([...sel.options].some(o => o.value === v)) sel.value = v;
+    };
+    if (_matOnglet === 'vehicules') {
+      remplir('materiel-f-kit', [..._matVeh.vehicules, ..._matVeh.entrees.map(x => x.immat)], 'Tous les véhicules');
+      remplir('materiel-f-chantier', _matVeh.entrees.map(x => x.chantier), 'Tous les chantiers');
+      remplir('materiel-f-par', _matVeh.entrees.flatMap(x => x.par), 'Tout le monde');
+      return;
+    }
+    remplir('materiel-f-kit', [...kitsMateriel().map(k => k.nom), ...mvts.map(m => m.kitNom)], 'Tous les kits');
+    remplir('materiel-f-chantier', mvts.map(m => m.chantier), 'Tous les chantiers');
+    remplir('materiel-f-par', mvts.map(m => m.par), 'Tout le monde');
+  }
+  function filtresMateriel() {
+    const g = id => (document.getElementById(id)?.value || '').trim();
+    return { kit: g('materiel-f-kit'), chantier: g('materiel-f-chantier'), par: g('materiel-f-par'), du: g('materiel-f-du'), au: g('materiel-f-au'), q: normTexte(g('materiel-recherche')) };
+  }
+  function razFiltresMateriel() {
+    ['materiel-f-kit', 'materiel-f-chantier', 'materiel-f-par', 'materiel-f-du', 'materiel-f-au', 'materiel-recherche'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    renderMateriel();
+  }
+  function switchMaterielOnglet(o) {
+    const changeDomaine = (o === 'vehicules') !== (_matOnglet === 'vehicules');
+    _matOnglet = o;
+    if (changeDomaine) { const k = document.getElementById('materiel-f-kit'); if (k) k.value = ''; remplirFiltresMateriel(); }
+    document.querySelectorAll('#materiel-onglets button').forEach(b => {
+      const actif = b.dataset.o === o;
+      b.style.background = actif ? 'var(--vert)' : 'none'; b.style.color = actif ? '#fff' : 'var(--gris-moyen)';
+    });
+    const f = document.getElementById('materiel-filtres-dates');
+    if (f) f.style.display = (o === 'sorties' || o === 'retours' || o === 'vehicules') ? 'flex' : 'none';
+    renderMateriel();
+  }
+  // Opérations : une par (date, type, chantier, auteur, kit)
+  function operationsMateriel(type, f) {
+    const ops = {};
+    mouvementsMateriel().filter(m => m.type === type).forEach(m => {
+      const k = [m.date, m.chantier, m.par, m.kitCode].join('|');
+      const o = ops[k] || (ops[k] = { cle: type + '|' + k, type, date: m.date, chantier: m.chantier, par: m.par, kitCode: m.kitCode, kitNom: m.kitNom, kitId: m.kitId, lignes: [] });
+      o.lignes.push(m);
+    });
+    return Object.values(ops).filter(o =>
+      (!f.kit || o.kitNom === f.kit) && (!f.chantier || o.chantier === f.chantier) && (!f.par || o.par === f.par)
+      && (!f.du || o.date >= f.du) && (!f.au || o.date <= f.au)
+      && (!f.q || normTexte([o.kitNom, o.kitCode, o.chantier, o.par, ...o.lignes.map(l => l.article)].join(' ')).includes(f.q))
+    ).sort((a, b) => b.date.localeCompare(a.date) || a.chantier.localeCompare(b.chantier, 'fr'));
+  }
+  function toggleMateriel(cle) { const k = decodeURIComponent(cle); if (_matOuverts.has(k)) _matOuverts.delete(k); else _matOuverts.add(k); renderMateriel(); }
+  function renderMateriel() {
+    const z = document.getElementById('materiel-liste'), res = document.getElementById('materiel-resume');
+    if (!z) return;
+    const f = filtresMateriel();
+    const btn = (lib, onclick, coul) => `<button onclick="event.stopPropagation();${onclick}" style="background:${coul};color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">${lib}</button>`;
+    const carte = (bord, contenu, cle) => `<div ${cle ? `onclick="toggleMateriel('${encodeURIComponent(cle)}')"` : ''} style="${cle ? 'cursor:pointer;' : ''}background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;border-left:4px solid ${bord};padding:10px 12px;margin-bottom:8px">${contenu}</div>`;
+    if (_matOnglet === 'vehicules') { renderVehMateriel(z, res, f); return; }
+    const soldes = soldesMateriel(mouvementsMateriel());
+    if (_matOnglet === 'kits') {
+      const kits = kitsMateriel().filter(k => (!f.kit || k.nom === f.kit)
+        && (!f.chantier || soldes.some(s => s.kitCode === k.code && s.chantier === f.chantier))
+        && (!f.q || normTexte(k.nom + ' ' + k.code + ' ' + soldes.filter(s => s.kitCode === k.code).map(s => s.chantier).join(' ')).includes(f.q)));
+      res.textContent = `${kits.length} kit(s) / matériel(s) interne(s)`;
+      z.innerHTML = kits.length ? kits.map(k => {
+        const dehors = soldes.filter(s => s.kitCode === k.code);
+        const emp = typeof libelleEmplacement === 'function' ? libelleEmplacement(k.a) : '';
+        return carte(dehors.length ? '#e67e22' : '#4a7c3f', `
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:var(--gris)">${k.type === 'Kit' ? '🧰' : '🔧'} ${escMat(k.nom)}</div>
+              <div style="font-size:11px;color:#999">${k.type === 'Kit' ? 'Kit' : 'Matériel interne'}${/^ART-/.test(k.code) ? '' : ' · ' + escMat(k.code)}${emp ? ' · 📍 ' + escMat(emp) : ''}</div></div>
+            ${btn('📤 Sortie', `ouvrirKit(${k.id},'sortie')`, 'var(--vert)')}
+            ${btn('📥 Retour', `ouvrirKit(${k.id},'retour')`, '#2e86c1')}
+          </div>
+          <div style="font-size:12px;margin-top:6px;color:${dehors.length ? '#a35a00' : '#4a7c3f'};font-weight:700">${dehors.length
+            ? dehors.map(s => `📍 ${escMat(s.chantier)} <span style="font-weight:400;color:#999">· sorti le ${frMat(s.derniere?.date)}${s.derniere?.par ? ' par ' + escMat(s.derniere.par) : ''} · ${s.comps.length} composant(s)</span>`).join('<br>')
+            : '✅ À l\'atelier'}</div>`);
+      }).join('') : '<div class="feuille-empty">Aucun kit interne. Un ouvrage devient kit depuis sa fiche article (« 🧰 Gérer comme kit »).</div>';
+      return;
+    }
+    if (_matOnglet === 'chantier') {
+      const l = soldes.filter(s => (!f.kit || s.kitNom === f.kit) && (!f.chantier || s.chantier === f.chantier) && (!f.par || s.derniere?.par === f.par)
+        && (!f.q || normTexte([s.kitNom, s.chantier, s.derniere?.par, ...s.comps.map(c => c.article)].join(' ')).includes(f.q)))
+        .sort((a, b) => a.chantier.localeCompare(b.chantier, 'fr') || a.kitNom.localeCompare(b.kitNom, 'fr'));
+      res.textContent = `${l.length} kit(s) sur ${new Set(l.map(s => s.chantier)).size} chantier(s)`;
+      z.innerHTML = l.length ? l.map(s => carte('#e67e22', `
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:var(--gris)">📍 ${escMat(s.chantier)}</div>
+            <div style="font-size:12px;color:var(--gris)">🧰 ${escMat(s.kitNom)} <span style="color:#999">· sorti le ${frMat(s.derniere?.date)}${s.derniere?.par ? ' par ' + escMat(s.derniere.par) : ''}</span></div></div>
+          ${s.kitId ? btn('📥 Retour', `ouvrirKit(${s.kitId},'retour')`, '#2e86c1') : ''}
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:var(--gris)">${s.comps.map(c => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-top:1px dotted #eee"><span>${escMat(c.article)}</span><b>${fmtQte(c.qte)}</b></div>`).join('')}</div>`)).join('')
+        : '<div class="feuille-empty">Aucun matériel sorti sur chantier.</div>';
+      return;
+    }
+    const type = _matOnglet === 'sorties' ? 'Sortie' : 'Retour';
+    const ops = operationsMateriel(type, f);
+    res.textContent = `${ops.length} ${type === 'Sortie' ? 'sortie(s)' : 'retour(s)'} · ${new Set(ops.map(o => o.chantier)).size} chantier(s) · ${new Set(ops.map(o => o.kitCode)).size} kit(s)`;
+    z.innerHTML = ops.length ? ops.map(o => {
+      const ouvert = _matOuverts.has(o.cle);
+      return carte(type === 'Sortie' ? '#4a7c3f' : '#2e86c1', `
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:12px;font-weight:800;color:var(--gris);white-space:nowrap">${frMat(o.date)}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:800;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ouvert ? '▾' : '▸'} 🧰 ${escMat(o.kitNom)}</div>
+            <div style="font-size:12px;color:var(--gris)">${type === 'Sortie' ? '→' : '←'} 📍 ${escMat(o.chantier || '—')} <span style="color:#999">· 👤 ${escMat(o.par || '—')} · ${o.lignes.length} composant(s)</span></div>
+          </div>
+        </div>
+        ${ouvert ? `<div style="margin-top:6px;font-size:12px;color:var(--gris)">${o.lignes.map(l => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-top:1px dotted #eee"><span>${escMat(l.article)}</span><b>${fmtQte(l.qte)}</b></div>`).join('')}</div>` : ''}`, o.cle);
+    }).join('') : `<div class="feuille-empty">Aucun${type === 'Sortie' ? 'e sortie' : ' retour'} pour ces filtres.</div>`;
+  }
+  // ── V118 : VÉHICULES dans « Sortie matériel Guérin » ──
+  // Prévu = planning collectif (ligne véhicule du chantier) · Réel = saisies d'heures (véhicule déclaré par le collaborateur)
+  let _matVeh = { cle: '', entrees: [], vehicules: [], chargement: null };
+  function periodeVehMateriel() {
+    const auj = new Date();
+    const du = document.getElementById('materiel-f-du')?.value || dateYMD(new Date(auj.getFullYear(), auj.getMonth(), auj.getDate() - 30));
+    const au = document.getElementById('materiel-f-au')?.value || dateYMD(new Date(auj.getFullYear(), auj.getMonth(), auj.getDate() + 14));
+    return { du, au };
+  }
+  async function chargerVehMateriel() {
+    const { du, au } = periodeVehMateriel();
+    const cle = du + '|' + au;
+    if (_matVeh.cle === cle) return;
+    if (_matVeh.chargement && _matVeh.chargement.cle === cle) return _matVeh.chargement.p;
+    const p = (async () => {
+      const [plan, saisies, vehs] = await Promise.all([
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_PLANNING}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${du}&filter__Date__date_before_or_equal=${au}`),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_SAISIE}/?user_field_names=true&size=200&filter__Date__date_after_or_equal=${du}&filter__Date__date_before_or_equal=${au}`),
+        fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLES.Vehicules.id}/?user_field_names=true&size=200`)
+      ]);
+      const e = {};
+      const entree = (date, immat, ch) => { const k = date + '|' + immat + '|' + ch; return e[k] || (e[k] = { date, immat, chantier: ch, prevu: false, par: new Set() }); };
+      plan.forEach(r => {
+        const ch = (r['Chantier'] || r['Chantiers'] || [])[0]?.value || '';
+        (r['Véhicule'] || []).forEach(v => { if (v.value && r['Date']) entree(String(r['Date']).slice(0, 10), String(v.value).trim(), ch).prevu = true; });
+      });
+      saisies.forEach(r => {
+        const ch = (r['Chantiers'] || [])[0]?.value || '';
+        const qui = (r['Collaborateur'] || [])[0]?.value || '';
+        (r['Véhicules'] || []).forEach(v => { if (v.value && r['Date']) { const o = entree(String(r['Date']).slice(0, 10), String(v.value).trim(), ch); if (qui) o.par.add(qui); } });
+      });
+      _matVeh = { cle, entrees: Object.values(e).map(x => ({ ...x, par: [...x.par].sort((a, b) => a.localeCompare(b, 'fr')) })), vehicules: vehs.map(v => String(v['Immatriculation'] || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, 'fr')), chargement: null };
+    })();
+    _matVeh.chargement = { cle, p };
+    try { await p; } catch (err) { _matVeh.chargement = null; throw err; }
+  }
+  function entreesVehFiltrees(f) {
+    return _matVeh.entrees.filter(x => (!f.kit || x.immat === f.kit) && (!f.chantier || x.chantier === f.chantier) && (!f.par || x.par.includes(f.par))
+      && (!f.q || normTexte([x.immat, x.chantier, ...x.par].join(' ')).includes(f.q)))
+      .sort((a, b) => b.date.localeCompare(a.date) || a.immat.localeCompare(b.immat, 'fr'));
+  }
+  async function renderVehMateriel(z, res, f) {
+    const { du, au } = periodeVehMateriel();
+    if (_matVeh.cle !== du + '|' + au) {
+      z.innerHTML = '<div class="feuille-loading">⏳ Chargement des véhicules…</div>';
+      try { await chargerVehMateriel(); } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement des véhicules</div>'; return; }
+      if (_matOnglet !== 'vehicules') return;
+      remplirFiltresMateriel();
+      f = filtresMateriel();
+    }
+    const auj = dateYMD(new Date());
+    const l = entreesVehFiltrees(f);
+    // Aujourd'hui : où est chaque véhicule
+    const ajd = {};
+    _matVeh.entrees.filter(x => x.date === auj).forEach(x => (ajd[x.immat] = ajd[x.immat] || []).push(x));
+    const vehsAff = _matVeh.vehicules.filter(v => (!f.kit || v === f.kit) && (!f.chantier || (ajd[v] || []).some(x => x.chantier === f.chantier)));
+    res.textContent = `${l.length} affectation(s) du ${frMat(du)} au ${frMat(au)} · ${new Set(l.map(x => x.immat)).size} véhicule(s)`;
+    const badge = (txt, bg, c) => `<span style="font-size:10px;font-weight:700;background:${bg};color:${c};border-radius:6px;padding:1px 6px;white-space:nowrap">${txt}</span>`;
+    const etiquette = x => (x.prevu ? badge('📅 Prévu', '#eef4fb', '#2e86c1') : '') + ' ' + (x.par.length ? badge('✔ Réel', '#eaf3e8', '#4a7c3f') : '');
+    let html = `<details ${f.kit || f.chantier ? 'open' : ''} style="background:#fff;border:1.5px solid #ddd5c5;border-radius:12px;padding:8px 12px;margin-bottom:10px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:800;color:var(--gris)">📍 Aujourd'hui (${frMat(auj)}) · ${Object.keys(ajd).length} véhicule(s) sur chantier</summary>
+      ${vehsAff.map(v => { const a = ajd[v] || []; return `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px dotted #eee;font-size:12px"><span style="font-weight:700">🚐 ${escMat(v)}</span><span style="text-align:right;color:${a.length ? '#a35a00' : '#4a7c3f'}">${a.length ? a.map(x => escMat(x.chantier || '—') + (x.par.length ? ' <span style="color:#999">(' + escMat(x.par.join(', ')) + ')</span>' : '')).join('<br>') : 'Disponible'}</span></div>`; }).join('')}
+    </details>`;
+    html += l.length ? l.map(x => `<div style="background:#fff;border-radius:12px;border:1.5px solid #ddd5c5;border-left:4px solid ${x.date > auj ? '#2e86c1' : x.date === auj ? '#e67e22' : '#999'};padding:8px 12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:12px;font-weight:800;color:var(--gris);white-space:nowrap">${frMat(x.date)}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:800;color:var(--gris)">🚐 ${escMat(x.immat)} <span style="font-weight:400">${etiquette(x)}</span></div>
+            <div style="font-size:12px;color:var(--gris)">📍 ${escMat(x.chantier || '—')}${x.par.length ? ` <span style="color:#999">· 👤 ${escMat(x.par.join(', '))}</span>` : ''}</div>
+          </div>
+        </div></div>`).join('') : '<div class="feuille-empty">Aucune affectation de véhicule pour ces filtres.</div>';
+    z.innerHTML = html;
+  }
+
+  async function exportMateriel(btnEl) {
+    if (typeof ExcelJS === 'undefined') { alert('Module Excel indisponible'); return; }
+    const f = filtresMateriel();
+    const wb = new ExcelJS.Workbook();
+    const feuille = (nom, entetes, lignes, larg) => {
+      const ws = wb.addWorksheet(nom);
+      ws.addRow(entetes).eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4A7C3F' } }; });
+      lignes.forEach(l => ws.addRow(l));
+      larg.forEach((w, i) => ws.getColumn(i + 1).width = w);
+      ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: entetes.length } };
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+    };
+    const det = type => operationsMateriel(type, f).flatMap(o => o.lignes.map(l => [frMat(o.date), o.kitNom, o.chantier, o.par, l.article, l.qte]));
+    feuille('Sorties', ['Date', 'Kit', 'Chantier', 'Par', 'Composant', 'Quantité'], det('Sortie'), [12, 32, 36, 20, 40, 10]);
+    feuille('Retours', ['Date', 'Kit', 'Chantier', 'Par', 'Composant', 'Quantité'], det('Retour'), [12, 32, 36, 20, 40, 10]);
+    feuille('Sur chantier', ['Chantier', 'Kit', 'Sorti le', 'Par', 'Composant', 'Quantité'],
+      soldesMateriel(mouvementsMateriel()).filter(s => (!f.kit || s.kitNom === f.kit) && (!f.chantier || s.chantier === f.chantier))
+        .flatMap(s => s.comps.map(c => [s.chantier, s.kitNom, frMat(s.derniere?.date), s.derniere?.par || '', c.article, c.qte])), [36, 32, 12, 20, 40, 10]);
+    try { await chargerVehMateriel(); } catch (e) {}
+    feuille('Véhicules', ['Date', 'Véhicule', 'Chantier', 'Prévu (planning)', 'Utilisé par (saisies)'],
+      entreesVehFiltrees({ ...f, kit: _matOnglet === 'vehicules' ? f.kit : '' }).map(x => [frMat(x.date), x.immat, x.chantier, x.prevu ? 'Oui' : '', x.par.join(', ')]), [12, 22, 36, 16, 40]);
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' }));
+    a.download = 'sorties_materiel_guerin_' + dateYMD(new Date()) + '.xlsx';
+    a.click(); URL.revokeObjectURL(a.href);
   }
 
   // ── RÉPERTOIRE ──
@@ -15262,6 +15538,7 @@
       await chargerStock(true);
       fermerKit();
       if (document.getElementById('commandes-vue-stock')?.style.display === 'block') renderStock();
+      if (currentNav === 'materiel') { remplirFiltresMateriel(); renderMateriel(); }
     } catch (e) { alert('Erreur : ' + e.message); }
   }
 
@@ -27566,6 +27843,10 @@
     <span class="nav-icon">🧾</span>
     Commandes clients
   </button>
+  <button class="nav-btn" id="nav-materiel" style="display:none" onclick="switchPage('materiel')">
+    <span class="nav-icon">🧰</span>
+    Matériel
+  </button>
   <button class="nav-btn" id="nav-repertoire" style="display:none" onclick="switchPage('repertoire')">
     <span class="nav-icon">📇</span>
     Répertoire
@@ -27815,6 +28096,43 @@
     <div id="jalons-alerte" style="display:none;margin:0 16px 10px;background:#fff3e0;border:1px solid #f0c48a;border-radius:10px;padding:10px 12px;font-size:12px;color:#a2560f"></div>
     <div id="jalons-tableau" style="margin:0 16px 30px"><div class="feuille-loading">⏳ Chargement…</div></div>
   
+</div>
+
+<!-- V117 : PAGE SORTIE MATÉRIEL GUÉRIN (Administrateur / Gestionnaire) -->
+<div id="page-materiel" class="page" style="display:none">
+  <div class="bandeau-fige">
+  <div style="padding:14px 16px 4px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">🧰 Sortie matériel Guérin</div>
+    <div style="display:flex;gap:6px">
+      <button onclick="exportMateriel(this)" title="Exporte sorties, retours, matériel sur chantier et véhicules (filtres appliqués)" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">📥 Excel</button>
+      <button onclick="chargerMaterielPage(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer">🔄</button>
+    </div>
+  </div>
+  <div style="padding:6px 16px 4px">
+    <div id="materiel-onglets" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;gap:2px">
+      <button data-o="kits" onclick="switchMaterielOnglet('kits')" style="flex:1;padding:8px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">🧰 Kits</button>
+      <button data-o="sorties" onclick="switchMaterielOnglet('sorties')" style="flex:1;padding:8px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">📤 Sorties</button>
+      <button data-o="retours" onclick="switchMaterielOnglet('retours')" style="flex:1;padding:8px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">📥 Retours</button>
+      <button data-o="chantier" onclick="switchMaterielOnglet('chantier')" style="flex:1;padding:8px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">📍 Sur chantier</button>
+      <button data-o="vehicules" onclick="switchMaterielOnglet('vehicules')" style="flex:1;padding:8px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">🚐 Véhicules</button>
+    </div>
+  </div>
+  <div style="padding:6px 16px 2px;display:flex;gap:6px;flex-wrap:wrap">
+    <input type="text" id="materiel-recherche" placeholder="🔍 Rechercher (kit, véhicule, chantier, personne, composant…)" oninput="renderMateriel()" style="flex:1 1 100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:8px 10px;font-size:13px">
+    <select id="materiel-f-kit" onchange="renderMateriel()" style="flex:1 1 30%;min-width:0;padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff"><option value="">Tous les kits</option></select>
+    <select id="materiel-f-chantier" onchange="renderMateriel()" style="flex:1 1 30%;min-width:0;padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff"><option value="">Tous les chantiers</option></select>
+    <select id="materiel-f-par" onchange="renderMateriel()" style="flex:1 1 30%;min-width:0;padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff"><option value="">Tout le monde</option></select>
+  </div>
+  <div id="materiel-filtres-dates" style="display:none;padding:4px 16px 2px;gap:6px;align-items:center;font-size:12px;color:var(--gris)">
+    Du <input type="date" id="materiel-f-du" onchange="renderMateriel()" style="flex:1;min-width:0;padding:5px 6px;font-size:12px;border-radius:8px">
+    au <input type="date" id="materiel-f-au" onchange="renderMateriel()" style="flex:1;min-width:0;padding:5px 6px;font-size:12px;border-radius:8px">
+  </div>
+  <div style="padding:4px 16px 6px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--gris-moyen)">
+    <span id="materiel-resume"></span>
+    <a href="#" onclick="event.preventDefault();razFiltresMateriel()" style="color:#a5761f;font-weight:700;font-size:11px">✕ Effacer les filtres</a>
+  </div>
+  </div>
+  <div id="materiel-liste" style="padding:0 16px 80px"></div>
 </div>
 
 <div id="page-repertoire" class="page" style="display:none">
