@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V124';
+  const APP_VERSION = 'V125';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2455,6 +2455,7 @@
       if (!note.startsWith('Kit ')) return null;
       const t = m['Type']?.value || m['Type'] || '';
       if (t !== 'Sortie' && t !== 'Retour') return null;
+      if (!(Number(m['Quantite']) || 0)) return null; // V125 : mouvement annulé (quantité remise à 0)
       const reste = note.slice(4);
       const k = kits.find(x => reste === x.code || reste.startsWith(x.code + ' '));
       const sep = reste.indexOf(' — ');
@@ -2599,6 +2600,7 @@
             <div style="font-size:12px;color:var(--gris)">${type === 'Sortie' ? '→' : '←'} 📍 ${escMat(o.chantier || '—')}${chantierMaterielReconnu(o.chantier) ? '' : ' <span style="font-size:10px;font-weight:700;color:#c0392b;background:#fdecea;border-radius:6px;padding:1px 6px">⚠️ chantier non enregistré</span>'} <span style="color:#999">· 👤 ${escMat(o.par || '—')} · ${o.lignes.length} composant(s)</span></div>
           </div>
           <button onclick="event.stopPropagation();corrigerChantierMateriel('${encodeURIComponent(o.lignes.map(l => l.id).join(','))}','${encodeURIComponent(o.chantier)}')" title="Corriger le chantier de cette ${type === 'Sortie' ? 'sortie' : 'entrée'}" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:5px 8px;font-size:12px;cursor:pointer">✏️</button>
+          <button onclick="event.stopPropagation();annulerOperationMateriel('${encodeURIComponent(o.cle)}')" title="Annuler cette ${type === 'Sortie' ? 'sortie' : 'entrée'} (enregistrée à tort)" style="background:#fff;border:1.5px solid #e8a39b;border-radius:8px;padding:5px 8px;font-size:12px;cursor:pointer">🗑</button>
         </div>
         ${ouvert ? `<div style="margin-top:6px;font-size:12px;color:var(--gris)">${o.lignes.map(l => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-top:1px dotted #eee"><span>${escMat(l.article)}</span><b>${fmtQte(l.qte)}</b></div>`).join('')}</div>` : ''}`, o.cle);
     }).join('') : `<div class="feuille-empty">Aucun${type === 'Sortie' ? 'e sortie' : ' retour'} pour ces filtres.</div>`;
@@ -2722,6 +2724,40 @@
       await chargerMaterielPage(true);
     };
     ouvrirChoixChantier(inp);
+  }
+
+
+  // ── V125 : ANNULER une sortie / un retour de kit enregistré à tort ──
+  // Les lignes ne sont pas effacées (traçabilité) : quantité et valeur remises à 0, note « ANNULÉE ».
+  async function annulerOperationMateriel(cleEnc) {
+    const cle = decodeURIComponent(cleEnc);
+    const type = cle.split('|')[0];
+    const o = operationsMateriel(type, { kit: '', chantier: '', par: '', du: '', au: '', q: '' }).find(x => x.cle === cle);
+    if (!o) { alert('Opération introuvable, actualisez la page.'); return; }
+    if (type === 'Sortie') {
+      // Bloqué si un retour a déjà été fait : il ferait passer le solde du chantier en négatif
+      const rendus = {};
+      mouvementsMateriel().filter(m => m.kitCode === o.kitCode && m.chantier === o.chantier && !o.lignes.some(l => l.id === m.id))
+        .forEach(m => { rendus[m.articleId] = (rendus[m.articleId] || 0) + m.signe; });
+      if (Object.values(rendus).some(q => q < -0.0005)) {
+        alert('⛔ Du matériel de cette sortie a déjà été rentré.\n\nAnnulez d\'abord le retour correspondant (onglet 📥 Retours), puis cette sortie.');
+        return;
+      }
+    }
+    const motif = prompt(`Annuler cette ${type === 'Sortie' ? 'sortie' : 'entrée (retour)'} ?\n\n${o.kitNom}\n${type === 'Sortie' ? '→' : '←'} ${o.chantier || '—'} · ${frMat(o.date)} · ${o.par || '—'}\n${o.lignes.length} composant(s)\n\nLe stock atelier est corrigé d'autant. Motif (obligatoire) :`, '');
+    if (motif === null) return;
+    if (!motif.trim()) { alert('Indiquez le motif de l\'annulation.'); return; }
+    const mention = ` — ANNULÉE par ${connectedCollab || ''} le ${new Date().toLocaleDateString('fr-FR')} : ${motif.trim()}`;
+    let ok = 0; const erreurs = [];
+    for (const l of o.lignes) {
+      const m = (_mouvementsCache || []).find(x => x.id === l.id);
+      try {
+        await majMouvementPrise(l.id, { 'Quantite': 0, 'Valeur HT': 0, 'Note': (String(m?.['Note'] || '') + mention).slice(0, 1000) });
+        ok++;
+      } catch (e) { erreurs.push(e.message); }
+    }
+    alert(erreurs.length ? `⚠️ ${ok} ligne(s) annulée(s), ${erreurs.length} en erreur :\n${erreurs[0]}` : `✅ ${type === 'Sortie' ? 'Sortie annulée' : 'Retour annulé'} : ${ok} ligne(s).`);
+    await chargerMaterielPage(true);
   }
 
   async function exportMateriel(btnEl) {
