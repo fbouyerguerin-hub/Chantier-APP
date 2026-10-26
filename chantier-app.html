@@ -90,6 +90,7 @@
     .modal-search input:focus { border-color: var(--vert); }
     .modal-options { overflow-y: auto; flex: 1; }
     .modal-option { display: flex; align-items: center; padding: 14px 20px; border-bottom: 1px solid #f8fafc; cursor: pointer; font-size: 15px; color: var(--gris); gap: 10px; }
+    input[data-choix-chantier] { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23999' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px !important;cursor:pointer; caret-color: transparent; }
     .modal-option.selected { background: var(--vert-clair); color: var(--vert); font-weight: 600; }
     .modal-option .check { margin-left: auto; color: var(--vert); font-size: 18px; }
     /* Affectations Collectif (personnes / véhicules) : rendu un peu plus gris, moins vert vif */
@@ -768,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V118';
+  const APP_VERSION = 'V121';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1002,10 +1003,17 @@
 
     try {
       // Vérification par le Worker (mot de passe jamais lu par l'appli)
-      const res = await _fetchNatifBrut(GB_WORKER + '/login', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifiant: id, mdp })
-      });
+      // V119 : délai maximal, pour ne jamais rester bloqué sur « Connexion… »
+      const ctrlLogin = new AbortController();
+      const minuteur = setTimeout(() => ctrlLogin.abort(), 20000);
+      let res;
+      try {
+        res = await _fetchNatifBrut(GB_WORKER + '/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifiant: id, mdp }), signal: ctrlLogin.signal
+        });
+      } catch (e) { throw new Error(e.name === 'AbortError' ? 'le serveur de connexion ne répond pas (20 s)' : 'serveur de connexion injoignable (' + e.message + ')'); }
+      finally { clearTimeout(minuteur); }
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.session) {
         errEl.textContent = res.status === 429 ? '⏳ ' + (data.error || 'Trop d\'essais, réessayez plus tard.')
@@ -1017,7 +1025,11 @@
       _sessionApp = data.session;
       const user = data.user;
       // Listes de référence (collaborateurs, chantiers…) : chargées une fois connecté
-      await Promise.all(Object.keys(TABLES).map(k => loadTable(k)));
+      if (btn) btn.textContent = 'Chargement des listes…';
+      await Promise.race([
+        Promise.all(Object.keys(TABLES).map(k => loadTable(k))),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Baserow ne répond pas (chargement des listes > 30 s)')), 30000))
+      ]);
 
       errEl.style.display = 'none';
       connectedUserRowId = user.id;
@@ -1033,7 +1045,8 @@
       }
 
     } catch(e) {
-      errEl.textContent = '❌ Erreur de connexion. Réessayez.';
+      console.error('Connexion', e);
+      errEl.textContent = '❌ Erreur de connexion : ' + (e && e.message ? e.message : 'inconnue') + '. Réessayez.';
       errEl.style.display = 'block';
     } finally {
       if (btn) { btn.textContent = 'Se connecter'; btn.disabled = false; }
@@ -2689,6 +2702,83 @@
     a.download = 'sorties_materiel_guerin_' + dateYMD(new Date()) + '.xlsx';
     a.click(); URL.revokeObjectURL(a.href);
   }
+
+
+  // ── V120 : CHOIX DU CHANTIER (stock, scan, kits) = même liste que la saisie des temps ──
+  // Tout <input data-choix-chantier="idDatalist"> ouvre une liste avec recherche ; les chantiers
+  // proposés sont ceux de la <datalist> indiquée (remplie comme avant par chaque écran).
+  let _choixChantierInput = null;
+  function ouvrirChoixChantier(input) {
+    _choixChantierInput = input;
+    let m = document.getElementById('modal-choix-chantier');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-choix-chantier'; m.className = 'modal-backdrop'; m.style.zIndex = '3000';
+      m.onclick = e => { if (e.target === m) fermerChoixChantier(); };
+      m.innerHTML = `<div class="modal-sheet">
+        <div class="modal-header"><h3>Chantier</h3><button class="modal-close" onclick="fermerChoixChantier()">✕</button></div>
+        <div class="modal-search"><input type="text" id="choix-chantier-recherche" placeholder="Rechercher…" oninput="renderChoixChantier(this.value)" /></div>
+        <div class="modal-options" id="choix-chantier-options"></div>
+        <button class="btn-validate" onclick="fermerChoixChantier()">Fermer</button></div>`;
+      document.body.appendChild(m);
+    }
+    document.getElementById('choix-chantier-recherche').value = '';
+    renderChoixChantier('');
+    m.classList.add('open');
+    setTimeout(() => document.getElementById('choix-chantier-recherche')?.focus(), 300);
+  }
+  function optionsChoixChantier() {
+    const dl = _choixChantierInput && document.getElementById(_choixChantierInput.dataset.choixChantier);
+    const vus = new Set();
+    return dl ? [...dl.querySelectorAll('option')].map(o => o.value).filter(v => v && !vus.has(v) && vus.add(v)) : [];
+  }
+  function renderChoixChantier(q) {
+    const z = document.getElementById('choix-chantier-options'); if (!z) return;
+    const nq = normTexte(q || '');
+    const cur = (_choixChantierInput?.value || '').trim();
+    const l = optionsChoixChantier().filter(v => !nq || normTexte(v).includes(nq));
+    z.innerHTML = '';
+    if (!l.length) { z.innerHTML = '<div style="padding:20px;color:#aaa;text-align:center">Aucun résultat</div>'; return; }
+    l.forEach(v => {
+      const d = document.createElement('div');
+      d.className = 'modal-option' + (v === cur ? ' selected' : '');
+      d.innerHTML = '<span>' + echapperHtmlNote(v) + '</span>' + (v === cur ? '<span class="check">✓</span>' : '');
+      d.onclick = () => choisirChantierListe(v);
+      z.appendChild(d);
+    });
+  }
+  function choisirChantierListe(v) {
+    const inp = _choixChantierInput;
+    fermerChoixChantier();
+    if (!inp) return;
+    inp.value = v;
+    inp.dispatchEvent(new Event('input', { bubbles: true }));
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  // V121 : seuls les chantiers enregistrés (présents dans la liste) sont acceptés, aucune saisie libre
+  function chantierEnregistre(idListe, v) {
+    v = String(v || '').trim(); if (!v) return false;
+    const dl = document.getElementById(idListe);
+    return !!dl && [...dl.querySelectorAll('option')].some(o => o.value === v);
+  }
+  function refusChantierNonEnregistre(input) {
+    alert('⛔ Chantier non reconnu : choisissez un chantier enregistré dans la liste.');
+    if (input) { input.value = ''; ouvrirChoixChantier(input); }
+  }
+  function fermerChoixChantier() {
+    const m = document.getElementById('modal-choix-chantier'); if (m) m.classList.remove('open');
+    _choixChantierInput = null;
+  }
+  ['keydown', 'paste', 'drop'].forEach(t => document.addEventListener(t, e => {
+    if (e.target && e.target.matches && e.target.matches('input[data-choix-chantier]') && !(t === 'keydown' && (e.key === 'Tab' || e.key === 'Enter'))) {
+      e.preventDefault();
+      if (t === 'keydown' && e.key !== 'Escape') ouvrirChoixChantier(e.target);
+    }
+  }, true));
+  document.addEventListener('click', e => {
+    const inp = e.target && e.target.closest && e.target.closest('input[data-choix-chantier]');
+    if (inp) { e.preventDefault(); inp.blur(); ouvrirChoixChantier(inp); }
+  }, true);
 
   // ── RÉPERTOIRE ──
   // ⚠️ Table Baserow « Répertoire » à CRÉER, puis remplacer l'ID ci-dessous. Champs attendus (noms exacts, sans accents) :
@@ -15155,6 +15245,7 @@
     (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé' && c['Nom du chantier']) noms.add(c['Nom du chantier']); });
     (_commandesCache || []).forEach(r => { const n = (r['Chantier'] || [])[0]?.value; if (n) noms.add(n); });
     document.getElementById('scan-chantiers-list').innerHTML = [...noms].sort().map(n => `<option value="${echapperHtmlNote(n).replace(/"/g, '&quot;')}"></option>`).join('');
+    if (ch.value && !noms.has(ch.value)) ch.value = ''; // V121 : chantier mémorisé plus valide
     setMessageScan('⏳ Préparation…', '#999');
     try {
       await chargerStock();
@@ -15392,7 +15483,9 @@
     renderKit();
   }
   function kitChantier(v) {
-    _kit.chantier = (v || '').trim();
+    v = (v || '').trim();
+    if (v && _kit.mode === 'sortie' && !chantierEnregistre('kit-chantiers', v)) { alert('⛔ Chantier non reconnu : choisissez un chantier enregistré dans la liste.'); v = ''; }
+    _kit.chantier = v;
     if (_kit.mode === 'retour') _kit.sel = {}; // en sortie, les composants déjà cochés sont conservés
     preselectionMateriel();
     renderKit();
@@ -15463,7 +15556,7 @@
       (tableData['Chantiers'] || []).forEach(c => c.value && !normTexte(c.value).includes('stock atelier') && noms.add(c.value));
       (_chantiersTousCache || []).forEach(c => { if ((c['Statue']?.value || c['Statue'] || '') !== 'Terminé' && c['Nom du chantier']) noms.add(c['Nom du chantier']); });
       html += `<label style="font-size:11px;font-weight:700;color:#999">Chantier de destination</label>
-        <input list="kit-chantiers" value="${esc(_kit.chantier).replace(/"/g, '&quot;')}" onchange="kitChantier(this.value)" placeholder="Tapez un mot du chantier…" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;font-weight:700;margin:4px 0 10px" />
+        <input data-choix-chantier="kit-chantiers" readonly value="${esc(_kit.chantier).replace(/"/g, '&quot;')}" onchange="kitChantier(this.value)" placeholder="Sélectionner le chantier…" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:14px;font-weight:700;margin:4px 0 10px" />
         <datalist id="kit-chantiers">${[...noms].sort().map(x => `<option value="${esc(x).replace(/"/g, '&quot;')}"></option>`).join('')}</datalist>`;
     } else {
       if (!enCours.length) { el.innerHTML = html + '<div style="background:#f6f6f6;border-radius:10px;padding:14px;text-align:center;color:#666;font-size:12px">📭 Aucun matériel de ce kit n\'est sorti sur un chantier.</div>'; return; }
@@ -16122,6 +16215,7 @@
     if (!_panierSortie.length) return;
     const chantier = document.getElementById('scan-chantier').value.trim();
     if (!chantier) { alert('Choisissez le chantier de destination.'); document.getElementById('scan-chantier').focus(); return; }
+    if (!chantierEnregistre('scan-chantiers-list', chantier)) { refusChantierNonEnregistre(document.getElementById('scan-chantier')); return; }
     const d = new Date(), z = n => String(n).padStart(2, '0');
     const num = `BSM-${String(d.getFullYear()).slice(2)}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`;
     const btn = document.getElementById('scan-bon-sortie');
@@ -16339,6 +16433,7 @@
     if (!_panierSortie.length) return;
     const chantier = document.getElementById('scan-chantier').value.trim();
     if (!chantier) { alert('Choisissez le chantier de destination.'); document.getElementById('scan-chantier').focus(); return; }
+    if (!chantierEnregistre('scan-chantiers-list', chantier)) { refusChantierNonEnregistre(document.getElementById('scan-chantier')); return; }
     const manques = _panierSortie.filter(p => p.quantite > (_stockParArticle[p.articleId] || 0));
     if (manques.length && !confirm(`${manques.length} article(s) dépassent le stock disponible. Valider quand même (stock négatif) ?`)) return;
     const btn = document.getElementById('scan-valider');
@@ -19223,9 +19318,11 @@
     let quantite;
     if (_mvtType === 'Sortie') {
       if (!chantier) { alert('Merci d\'indiquer le chantier de destination.'); return; }
+      if (!chantierEnregistre('mvt-stock-chantiers-list', chantier)) { refusChantierNonEnregistre(document.getElementById('mvt-stock-chantier')); return; }
       if (saisie > actuel && !confirm(`Stock insuffisant (${fmtQte(actuel)} disponible). Enregistrer quand même ? Le stock passera en négatif.`)) return;
       quantite = -saisie;
     } else if (_mvtType === 'Retour') {
+      if (chantier && !chantierEnregistre('mvt-stock-chantiers-list', chantier)) { refusChantierNonEnregistre(document.getElementById('mvt-stock-chantier')); return; }
       quantite = saisie;
     } else if (_mvtType === 'Entrée') {
       quantite = saisie; // valorisée au prix d'achat EBP de l'article (par le Worker)
@@ -28334,7 +28431,7 @@
   </div>
   <div id="scan-bloc-chantier" style="padding:10px 16px 0">
     <label style="font-size:11px;font-weight:700;color:#999">Chantier de destination</label>
-    <input type="text" id="scan-chantier" list="scan-chantiers-list" placeholder="Choisir le chantier…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" />
+    <input type="text" id="scan-chantier" data-choix-chantier="scan-chantiers-list" readonly placeholder="Sélectionner le chantier…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:13px;outline:none;margin:4px 0 8px" />
     <datalist id="scan-chantiers-list"></datalist>
   </div>
   <div style="padding:0 16px">
@@ -28466,7 +28563,7 @@
     <input type="text" inputmode="decimal" id="mvt-stock-qte" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--vert);border-radius:8px;font-size:15px;font-weight:700;outline:none;margin:4px 0 10px" />
     <div id="mvt-stock-chantier-bloc">
       <label style="font-size:11px;font-weight:700;color:#999">Chantier</label>
-      <input type="text" id="mvt-stock-chantier" list="mvt-stock-chantiers-list" placeholder="Chantier de destination / d'origine…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 10px" />
+      <input type="text" id="mvt-stock-chantier" data-choix-chantier="mvt-stock-chantiers-list" readonly placeholder="Sélectionner le chantier…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;outline:none;margin:4px 0 10px" />
       <datalist id="mvt-stock-chantiers-list"></datalist>
     </div>
     <textarea id="mvt-stock-note" placeholder="Note (facultatif)…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:12px;outline:none;resize:vertical;min-height:40px;font-family:inherit;margin-bottom:10px"></textarea>
