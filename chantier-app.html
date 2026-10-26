@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V121';
+  const APP_VERSION = 'V123';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2484,7 +2484,7 @@
     if (!stockTablesConfigurees()) { z.innerHTML = '<div class="feuille-empty">Module stock non configuré.</div>'; return; }
     if (force) _matVeh.cle = '';
     if (!_stockCharge || force) z.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
-    try { await chargerStock(!!force); } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>'; return; }
+    try { await Promise.all([chargerStock(!!force), obtenirIdsChantiersTermines().catch(() => {})]); } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement</div>'; return; }
     remplirFiltresMateriel();
     renderMateriel();
   }
@@ -2577,8 +2577,9 @@
       res.textContent = `${l.length} kit(s) sur ${new Set(l.map(s => s.chantier)).size} chantier(s)`;
       z.innerHTML = l.length ? l.map(s => carte('#e67e22', `
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:var(--gris)">📍 ${escMat(s.chantier)}</div>
+          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:var(--gris)">📍 ${escMat(s.chantier)}${chantierMaterielReconnu(s.chantier) ? '' : ' <span style="font-size:10px;font-weight:700;color:#c0392b;background:#fdecea;border-radius:6px;padding:1px 6px">⚠️ non enregistré</span>'}</div>
             <div style="font-size:12px;color:var(--gris)">🧰 ${escMat(s.kitNom)} <span style="color:#999">· sorti le ${frMat(s.derniere?.date)}${s.derniere?.par ? ' par ' + escMat(s.derniere.par) : ''}</span></div></div>
+          <button onclick="event.stopPropagation();corrigerChantierMateriel('${encodeURIComponent(mouvementsMateriel().filter(m => m.kitCode === s.kitCode && m.chantier === s.chantier).map(m => m.id).join(','))}','${encodeURIComponent(s.chantier)}')" title="Corriger le chantier (toutes les sorties et retours de ce kit sur ce chantier)" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer">✏️</button>
           ${s.kitId ? btn('📥 Retour', `ouvrirKit(${s.kitId},'retour')`, '#2e86c1') : ''}
         </div>
         <div style="margin-top:6px;font-size:12px;color:var(--gris)">${s.comps.map(c => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-top:1px dotted #eee"><span>${escMat(c.article)}</span><b>${fmtQte(c.qte)}</b></div>`).join('')}</div>`)).join('')
@@ -2595,8 +2596,9 @@
           <div style="font-size:12px;font-weight:800;color:var(--gris);white-space:nowrap">${frMat(o.date)}</div>
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:800;color:var(--gris);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ouvert ? '▾' : '▸'} 🧰 ${escMat(o.kitNom)}</div>
-            <div style="font-size:12px;color:var(--gris)">${type === 'Sortie' ? '→' : '←'} 📍 ${escMat(o.chantier || '—')} <span style="color:#999">· 👤 ${escMat(o.par || '—')} · ${o.lignes.length} composant(s)</span></div>
+            <div style="font-size:12px;color:var(--gris)">${type === 'Sortie' ? '→' : '←'} 📍 ${escMat(o.chantier || '—')}${chantierMaterielReconnu(o.chantier) ? '' : ' <span style="font-size:10px;font-weight:700;color:#c0392b;background:#fdecea;border-radius:6px;padding:1px 6px">⚠️ chantier non enregistré</span>'} <span style="color:#999">· 👤 ${escMat(o.par || '—')} · ${o.lignes.length} composant(s)</span></div>
           </div>
+          <button onclick="event.stopPropagation();corrigerChantierMateriel('${encodeURIComponent(o.lignes.map(l => l.id).join(','))}','${encodeURIComponent(o.chantier)}')" title="Corriger le chantier de cette ${type === 'Sortie' ? 'sortie' : 'entrée'}" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:5px 8px;font-size:12px;cursor:pointer">✏️</button>
         </div>
         ${ouvert ? `<div style="margin-top:6px;font-size:12px;color:var(--gris)">${o.lignes.map(l => `<div style="display:flex;justify-content:space-between;padding:2px 0;border-top:1px dotted #eee"><span>${escMat(l.article)}</span><b>${fmtQte(l.qte)}</b></div>`).join('')}</div>` : ''}`, o.cle);
     }).join('') : `<div class="feuille-empty">Aucun${type === 'Sortie' ? 'e sortie' : ' retour'} pour ces filtres.</div>`;
@@ -2673,6 +2675,53 @@
           </div>
         </div></div>`).join('') : '<div class="feuille-empty">Aucune affectation de véhicule pour ces filtres.</div>';
     z.innerHTML = html;
+  }
+
+
+  // ── V122 : CORRIGER LE CHANTIER d'une sortie / d'un retour de kit (saisie manuelle d'avant V121) ──
+  // Les mouvements sont dans la base SQL (D1) : correction faite par l'appli (Worker), ligne par ligne.
+  function nomsChantiersEnregistres(avecTermines) {
+    const noms = new Set();
+    (_chantiersTousCache || []).forEach(c => { if (c['Nom du chantier'] && (avecTermines || (c['Statue']?.value || c['Statue'] || '') !== 'Terminé')) noms.add(String(c['Nom du chantier']).trim()); });
+    (tableData['Chantiers'] || []).forEach(c => c.value && noms.add(String(c.value).trim()));
+    return noms;
+  }
+  function chantierMaterielReconnu(nom) {
+    if (!nom || !(_chantiersTousCache || []).length) return true; // liste pas encore chargée : pas d'alerte
+    return nomsChantiersEnregistres(true).has(String(nom).trim());
+  }
+  async function corrigerChantierMateriel(idsEnc, ancienEnc) {
+    const ids = decodeURIComponent(idsEnc).split(',').map(Number).filter(Boolean);
+    const ancien = decodeURIComponent(ancienEnc);
+    if (!ids.length) return;
+    try { await obtenirIdsChantiersTermines(); } catch (e) {}
+    const dl = document.getElementById('materiel-chantiers-list');
+    dl.innerHTML = [...nomsChantiersEnregistres(false)].sort((a, b) => a.localeCompare(b, 'fr')).map(n => `<option value="${escMat(n)}"></option>`).join('');
+    let inp = document.getElementById('materiel-corr-chantier');
+    if (!inp) {
+      inp = document.createElement('input');
+      inp.id = 'materiel-corr-chantier'; inp.type = 'hidden'; inp.dataset.choixChantier = 'materiel-chantiers-list';
+      document.body.appendChild(inp);
+    }
+    inp.value = '';
+    inp.onchange = async () => {
+      const nouveau = inp.value.trim();
+      if (!nouveau || nouveau === ancien) return;
+      if (!confirm(`Corriger le chantier de ${ids.length} ligne(s) de mouvement :\n\n« ${ancien || '—'} »\n→ « ${nouveau} »`)) return;
+      let ok = 0; const erreurs = [];
+      for (const id of ids) {
+        try {
+          const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MOUVEMENTS_STOCK}/${id}/?user_field_names=true`, {
+            method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Chantier': nouveau })
+          });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          ok++;
+        } catch (e) { erreurs.push(id + ' : ' + e.message); }
+      }
+      alert(erreurs.length ? `⚠️ ${ok} ligne(s) corrigée(s), ${erreurs.length} en erreur :\n${erreurs.slice(0, 5).join('\n')}` : `✅ ${ok} ligne(s) corrigée(s).`);
+      await chargerMaterielPage(true);
+    };
+    ouvrirChoixChantier(inp);
   }
 
   async function exportMateriel(btnEl) {
@@ -24238,6 +24287,48 @@
       setTimeout(() => { cible.style.background = fond; setTimeout(() => { cible.style.transition = trans; }, 450); }, 1800);
     }, 120);
   }
+  // ── V123 : validation groupée des tâches depuis la liste 🚩 ──
+  const _selTachesMJ = new Set();
+  function majBoutonSelMJ() {
+    const b = document.getElementById('mj-btn-valider'); if (!b) return;
+    b.disabled = !_selTachesMJ.size; b.style.opacity = _selTachesMJ.size ? 1 : .45;
+    b.textContent = `✔ Valider la sélection (${_selTachesMJ.size})`;
+  }
+  function selTacheMJ(cb) { if (cb.checked) _selTachesMJ.add(cb.dataset.k); else _selTachesMJ.delete(cb.dataset.k); majBoutonSelMJ(); }
+  function toutSelTachesMJ() {
+    const cbs = [...document.querySelectorAll('#modal-mes-jalons input.mj-sel:not(:disabled)')];
+    const tout = cbs.length && cbs.every(cb => cb.checked);
+    cbs.forEach(cb => { cb.checked = !tout; if (cb.checked) _selTachesMJ.add(cb.dataset.k); else _selTachesMJ.delete(cb.dataset.k); });
+    majBoutonSelMJ();
+  }
+  async function validerSelectionTachesMJ(btn) {
+    if (!_selTachesMJ.size) return;
+    const parChantier = {};
+    [..._selTachesMJ].forEach(k => { const [cid, jid, tid] = k.split('|'); (parChantier[cid] = parChantier[cid] || []).push({ jid, id: decodeURIComponent(tid) }); });
+    const n = _selTachesMJ.size;
+    if (!confirm(`Valider ${n} tâche${n > 1 ? 's' : ''} sur ${Object.keys(parChantier).length} chantier(s) ?`)) return;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Validation…'; }
+    const avant = _jalonsChantierId;
+    let ok = 0; const refus = [], erreurs = [];
+    for (const [cid, l] of Object.entries(parChantier)) {
+      _jalonsChantierId = Number(cid);
+      try {
+        await ecrireJalons(d => {
+          l.forEach(({ jid, id }) => {
+            const x = ((d.taches || {})[jid] || []).find(z => z.id === id);
+            if (!x || x.fait) return;
+            if (!peutCocherTacheJalon(x)) { refus.push(x.txt); return; }
+            x.fait = true; x.faitPar = connectedCollab || ''; x.faitLe = horodatageJalon(); ok++;
+          });
+        });
+      } catch (e) { erreurs.push(e.message); }
+    }
+    _jalonsChantierId = avant;
+    _selTachesMJ.clear();
+    if (refus.length || erreurs.length) alert(`✔ ${ok} tâche(s) validée(s).` + (refus.length ? `\n⛔ ${refus.length} à valider par la personne désignée.` : '') + (erreurs.length ? `\n❌ ${erreurs[0]}` : ''));
+    await rafraichirMesJalonsOuverts();
+    try { if (document.getElementById('modal-jalons')?.style.display === 'flex') renderJalonsChantier(); } catch (e) {}
+  }
   function ouvrirMesJalons() {
     if (!jalonsVisibles()) return;
     let m = document.getElementById('modal-mes-jalons');
@@ -24260,8 +24351,12 @@
     m.innerHTML = `<div style="background:#f5f0e8;border-radius:20px 20px 0 0;width:100%;max-width:560px;max-height:88vh;overflow-y:auto;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:800;color:var(--gris)">🚩 Mes jalons à réaliser</div>
         <button onclick="document.getElementById('modal-mes-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
+      ${(_mesTachesJalons.length + _mesTachesPlusTard.length) ? `<div id="mj-barre-sel" style="position:sticky;top:-16px;z-index:2;background:#f5f0e8;margin:8px -4px 0;padding:6px 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <a href="#" onclick="event.preventDefault();toutSelTachesMJ()" style="font-size:11px;font-weight:700;color:#1F6AA5">☑ Tout cocher / décocher</a>
+        <button id="mj-btn-valider" onclick="validerSelectionTachesMJ(this)" ${_selTachesMJ.size ? '' : 'disabled'} style="margin-left:auto;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;opacity:${_selTachesMJ.size ? 1 : .45}">✔ Valider la sélection (${_selTachesMJ.size})</button>
+      </div>` : ''}
       ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Tâches en retard (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jid, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${jid}', '${encodeURIComponent(t.id)}')" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
-          <div style="font-size:13px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
+          <div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="mj-sel" data-k="${c.id}|${jid}|${encodeURIComponent(t.id)}" ${_selTachesMJ.has(c.id + '|' + jid + '|' + encodeURIComponent(t.id)) ? 'checked' : ''} ${peutCocherTacheJalon(t) ? '' : 'disabled title="À valider par ' + esc(t.pour || '') + '"'} onclick="event.stopPropagation()" onchange="selTacheMJ(this)" style="width:18px;height:18px;flex-shrink:0;margin:1px 0 0;cursor:pointer;accent-color:var(--vert)"><div style="font-size:13px;font-weight:700;color:var(--gris)">${esc(t.txt)}</div></div>
           <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)} · demandée par ${esc(t.par || '')}${t.le ? ' le ' + esc(t.le) : ''}</div>${htmlEcheanceTache(t)}
           ${peutRepousserTacheJalon(t) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};repousserTacheJalon('${jid}','${encodeURIComponent(t.id)}')" style="margin-top:6px;background:#fff;border:1px solid #1F6AA5;color:#1F6AA5;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">⏭ Repousser</button>` : ''}</div>`).join('') : ''}
       ${groupe('🔴 Phases en retard et blocages', _mesJalons)}
@@ -24272,7 +24367,7 @@
           <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · revient le <b>${String(retour).split('-').reverse().join('/')}</b>${x.masque && x.ech ? ' · échéance ' + x.ech.split('-').reverse().join('/') : ''}</div>
           ${x.masque && peutMasquerJalon(x) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};remettreJalon('${x.m.id}')" style="margin-top:6px;background:#fff;border:1px solid #ccc;color:#777;border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;cursor:pointer">↺ Remettre maintenant</button>` : ''}</div>`).join('') : ''}
       ${_mesTachesPlusTard.length ? `<div style="font-size:11px;font-weight:800;color:#999;text-transform:uppercase;margin:12px 0 6px">☑ Mes autres tâches, sans alerte (${_mesTachesPlusTard.length})</div>` + _mesTachesPlusTard.map(({ c, t, jid, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${jid}', '${encodeURIComponent(t.id)}')" style="cursor:pointer;background:#fafafa;border:1px dashed #ccc;border-radius:10px;padding:8px 11px;margin-bottom:6px;opacity:.85">
-          <div style="font-size:12px;font-weight:700;color:var(--gris)">☐ ${esc(t.txt)}</div>
+          <div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="mj-sel" data-k="${c.id}|${jid}|${encodeURIComponent(t.id)}" ${_selTachesMJ.has(c.id + '|' + jid + '|' + encodeURIComponent(t.id)) ? 'checked' : ''} ${peutCocherTacheJalon(t) ? '' : 'disabled title="À valider par ' + esc(t.pour || '') + '"'} onclick="event.stopPropagation()" onchange="selTacheMJ(this)" style="width:18px;height:18px;flex-shrink:0;margin:1px 0 0;cursor:pointer;accent-color:var(--vert)"><div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(t.txt)}</div></div>
           <div style="font-size:11px;color:#999;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')} · 🚩 ${esc(jnom)}${t.ech ? ` · échéance <b>${frDateTache(t.ech)}</b>` : ' · sans échéance'}</div></div>`).join('') : ''}
       ${(_autresRetardsJalons.length + _autresTachesRetard.length) ? `<details data-k="mj-autres" ${_detailsOuverts.has('mj-autres') ? 'open' : ''} ontoggle="memoDetails(this)" style="margin-top:14px">
         <summary style="cursor:pointer;font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase">👀 Pour info : retards chez les autres qui vous concernent (${_autresRetardsJalons.length + _autresTachesRetard.length})</summary>
@@ -28230,6 +28325,7 @@
   </div>
   </div>
   <div id="materiel-liste" style="padding:0 16px 80px"></div>
+  <datalist id="materiel-chantiers-list"></datalist>
 </div>
 
 <div id="page-repertoire" class="page" style="display:none">
