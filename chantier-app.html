@@ -768,7 +768,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V115';
+  const APP_VERSION = 'V116';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -6060,7 +6060,7 @@
         const nomExpediteur = usersMap[String(msg['Expediteur'] || '').trim()] || 'un collaborateur';
         document.getElementById('modal-message-title').textContent = '📢 Message de ' + nomExpediteur;
         document.getElementById('modal-message-body').textContent = lireSondage(msg)
-          ? '📊 Sondage : ' + lireSondage(msg).q + '\n\nRépondez Pour ou Contre (avec une note si vous le souhaitez) dans ✉️ Messages, conversation avec ' + nomExpediteur + '.'
+          ? '📊 Sondage : ' + lireSondage(msg).q + '\n\nRépondez (avec une note si vous le souhaitez) dans ✉️ Messages, conversation avec ' + nomExpediteur + '.'
           : msg['Messages'];
         document.getElementById('modal-message').classList.add('open');
       }
@@ -6152,7 +6152,7 @@
     const modal = document.getElementById('modal-nouveau-message');
     modal.style.display = 'flex';
     document.getElementById('nouveau-msg-texte').value = '';
-    { const cbS = document.getElementById('nouveau-msg-sondage'); if (cbS) { cbS.checked = false; basculerSondageNouveauMessage(cbS); } }
+    { const cbS = document.getElementById('nouveau-msg-sondage'); if (cbS) { cbS.checked = false; initChoixSondage(); basculerSondageNouveauMessage(cbS); } }
     document.getElementById('nouveau-msg-dest-count').textContent = '';
     document.getElementById('nouveau-msg-pj-input').value = '';
     document.getElementById('nouveau-msg-pj-preview').innerHTML = '';
@@ -6235,8 +6235,10 @@
     const destinataires = checked.map(cb => String(cb.value));
     if (document.getElementById('nouveau-msg-sondage')?.checked) {
       if (!texte) { alert('Veuillez saisir la question du sondage'); if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; } return; }
+      const choixSondage = lireChoixSondageSaisis();
+      if (choixSondage.length < 2) { alert('Veuillez proposer au moins 2 choix différents'); if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; } return; }
       try {
-        const ok = await envoyerSondage(destinataires, texte);
+        const ok = await envoyerSondage(destinataires, texte, choixSondage);
         if (ok) { fermerNouveauMessage(); alert(`✅ Sondage envoyé à ${destinataires.length} destinataire${destinataires.length > 1 ? 's' : ''}`); loadHistoriqueMessages(); }
       } catch (e) { alert('Erreur : ' + e.message); }
       finally { if (btn) { btn.disabled = false; btn.textContent = 'Envoyer ✓'; } }
@@ -6308,6 +6310,42 @@
     if (!m || !m[CHAMP_SONDAGE]) return null;
     try { const o = JSON.parse(m[CHAMP_SONDAGE]); return o && o.q ? { q: o.q, choix: o.choix || ['Pour', 'Contre'], votes: o.votes || {} } : null; } catch (e) { return null; }
   }
+  // V116 : choix libres (2 à 10). Pour / Contre gardent vert / rouge ; les autres choix ont une couleur chacun
+  const SONDAGE_COULEURS = ['#2e86c1', '#a5761f', '#8e44ad', '#16a085', '#d35400', '#7f8c8d', '#c2185b', '#2c3e50', '#689f38', '#5d4037'];
+  function couleurChoixSondage(s, c) {
+    if (c === 'Pour') return 'var(--vert)';
+    if (c === 'Contre') return '#c0392b';
+    const i = Math.max(0, s.choix.indexOf(c));
+    return SONDAGE_COULEURS[i % SONDAGE_COULEURS.length];
+  }
+  function libChoixSondage(c) { return c === 'Pour' ? '👍 Pour' : c === 'Contre' ? '👎 Contre' : escSondage(c); }
+  function boutonsVoteSondage(s, id, fn, grand) {
+    return `<div style="display:flex;flex-wrap:wrap;gap:${grand ? 10 : 8}px;margin-top:${grand ? 10 : 6}px">` + s.choix.map((c, i) =>
+      `<button onclick="${fn}(${id},${i},this)" style="flex:1 1 ${s.choix.length > 2 ? '45%' : '40%'};background:${couleurChoixSondage(s, c)};color:#fff;border:none;border-radius:${grand ? 10 : 8}px;padding:${grand ? 13 : 9}px;font-size:${grand ? 15 : 13}px;font-weight:${grand ? 800 : 700};cursor:pointer">${libChoixSondage(c)}</button>`).join('') + '</div>';
+  }
+  // Saisie des choix dans « Nouveau message »
+  function htmlLigneChoixSondage(val) {
+    return `<div class="sondage-choix-ligne" style="display:flex;gap:6px;margin-bottom:5px"><input type="text" maxlength="80" value="${escSondage(val || '')}" placeholder="Choix…" style="flex:1;border:1px solid #ddd;border-radius:7px;padding:7px 9px;font-size:13px"><button type="button" onclick="retirerChoixSondage(this)" title="Retirer ce choix" style="background:none;border:1px solid #ddd;border-radius:7px;color:#c0392b;font-size:13px;cursor:pointer;padding:0 9px">✕</button></div>`;
+  }
+  function initChoixSondage(liste) {
+    const z = document.getElementById('nouveau-msg-choix-liste'); if (!z) return;
+    z.innerHTML = (liste || ['Pour', 'Contre']).map(htmlLigneChoixSondage).join('');
+  }
+  function ajouterChoixSondage() {
+    const z = document.getElementById('nouveau-msg-choix-liste'); if (!z) return;
+    if (z.querySelectorAll('.sondage-choix-ligne').length >= 10) { alert('10 choix maximum'); return; }
+    z.insertAdjacentHTML('beforeend', htmlLigneChoixSondage(''));
+    z.lastElementChild.querySelector('input').focus();
+  }
+  function retirerChoixSondage(btn) {
+    const z = document.getElementById('nouveau-msg-choix-liste');
+    if (z.querySelectorAll('.sondage-choix-ligne').length <= 2) { btn.parentElement.querySelector('input').value = ''; return; }
+    btn.parentElement.remove();
+  }
+  function lireChoixSondageSaisis() {
+    const vus = new Set();
+    return [...document.querySelectorAll('#nouveau-msg-choix-liste input')].map(i => i.value.trim()).filter(v => v && !vus.has(v.toLowerCase()) && vus.add(v.toLowerCase()));
+  }
   function escSondage(s) { return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
   function alerteChampSondageManquant() {
     alert("Les sondages ont besoin d'un champ dans Baserow :\n\nTable « Messages » → ajouter un champ de type « Texte long » nommé exactement : Sondage\n\nPuis réessayez.");
@@ -6316,10 +6354,13 @@
     const ta = document.getElementById('nouveau-msg-texte');
     const lab = document.getElementById('nouveau-msg-label');
     if (lab) lab.textContent = cb.checked ? 'Question du sondage' : 'Message';
-    if (cb.checked && !ta.value.trim()) ta.value = SONDAGE_QUESTION_DEFAUT;
-    if (!cb.checked && ta.value.trim() === SONDAGE_QUESTION_DEFAUT) ta.value = '';
+    const bloc = document.getElementById('nouveau-msg-choix');
+    if (bloc) { bloc.style.display = cb.checked ? 'block' : 'none'; if (cb.checked && !bloc.querySelector('input')) initChoixSondage(); }
+    if (ta.value.trim() === SONDAGE_QUESTION_DEFAUT) ta.value = '';
+    ta.placeholder = cb.checked ? 'Votre question… (ex. : Quelle date pour la réunion ?)' : 'Votre message…';
   }
-  async function envoyerSondage(destinataires, question) {
+  async function envoyerSondage(destinataires, question, choix) {
+    choix = choix && choix.length >= 2 ? choix : ['Pour', 'Contre'];
     const res = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_MESSAGES}/?user_field_names=true`, {
       method: 'POST',
       headers: { 'Authorization': `Token ${BASEROW_TOKEN}`, 'Content-Type': 'application/json' },
@@ -6329,7 +6370,7 @@
         'Destinataire': destinataires.join(','),
         'Expediteur': String(connectedViewId),
         'Date envoi': dateYMD(new Date()),
-        [CHAMP_SONDAGE]: JSON.stringify({ q: question, choix: ['Pour', 'Contre'], votes: {} })
+        [CHAMP_SONDAGE]: JSON.stringify({ q: question, choix, votes: {} })
       })
     });
     if (!res.ok) throw new Error('Envoi refusé (' + res.status + ')');
@@ -6348,24 +6389,22 @@
     const moi = String(connectedViewId).trim();
     const votes = Object.values(s.votes);
     const nb = c => votes.filter(v => v.c === c).length;
+    const decompte = s.choix.map(c => `<span style="white-space:nowrap"><span style="color:${couleurChoixSondage(s, c)}">${libChoixSondage(c)}</span> <b>${nb(c)}</b></span>`).join(' · ');
     const dests = destinatairesListe(m).length;
     let html = `<div onclick="event.stopPropagation()" style="margin-top:8px;background:#fff;border:1.5px solid #c9b48a;border-radius:10px;padding:10px">
       <div style="font-size:13px;font-weight:800;color:var(--gris);margin-bottom:6px">📊 ${escSondage(s.q)}</div>`;
     if (estEnvoye) {
-      html += `<div style="font-size:12px;color:var(--gris)">👍 Pour <b>${nb('Pour')}</b> · 👎 Contre <b>${nb('Contre')}</b> · ⏳ sans réponse <b>${Math.max(0, dests - votes.length)}</b></div>
+      html += `<div style="font-size:12px;color:var(--gris)">${decompte} · ⏳ sans réponse <b>${Math.max(0, dests - votes.length)}</b></div>
         <a href="#" onclick="event.preventDefault();ouvrirResultatsSondage(${m.id})" style="display:inline-block;margin-top:6px;font-size:12px;color:var(--vert);font-weight:700">Voir le détail et les notes →</a>`;
     } else {
       const v = s.votes[moi];
       if (v && !m._modifVote) {
-        html += `<div style="font-size:12px;color:var(--gris)">Votre vote : <b style="color:${v.c === 'Pour' ? 'var(--vert)' : '#c0392b'}">${v.c === 'Pour' ? '👍 Pour' : '👎 Contre'}</b> <span style="color:#aaa">(${escSondage(v.le || '')})</span></div>
+        html += `<div style="font-size:12px;color:var(--gris)">Votre vote : <b style="color:${couleurChoixSondage(s, v.c)}">${libChoixSondage(v.c)}</b> <span style="color:#aaa">(${escSondage(v.le || '')})</span></div>
           ${v.note ? `<div style="font-size:12px;color:#555;margin-top:3px;font-style:italic">« ${escSondage(v.note)} »</div>` : ''}
           <a href="#" onclick="event.preventDefault();modifierVoteSondage(${m.id})" style="display:inline-block;margin-top:6px;font-size:11px;color:#a5761f;font-weight:700">✏️ Modifier mon vote</a>`;
       } else {
         html += `<textarea id="sondage-note-${m.id}" placeholder="Votre note (facultatif)…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:7px;font-size:12px;min-height:44px;resize:vertical">${escSondage(v?.note || '')}</textarea>
-          <div style="display:flex;gap:8px;margin-top:6px">
-            <button onclick="voterSondage(${m.id},'Pour')" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">👍 Pour</button>
-            <button onclick="voterSondage(${m.id},'Contre')" style="flex:1;background:#c0392b;color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer">👎 Contre</button>
-          </div>`;
+          ${boutonsVoteSondage(s, m.id, 'voterSondage', false)}`;
       }
     }
     return html + '</div>';
@@ -6381,6 +6420,8 @@
       const row = await rg.json();
       const s = lireSondage(row);
       if (!s) throw new Error('Sondage introuvable');
+      if (typeof choix === 'number') choix = s.choix[choix];
+      if (!choix) throw new Error('Choix introuvable');
       s.votes[String(connectedViewId).trim()] = { c: choix, note, nom: connectedCollab || '', le: new Date().toLocaleDateString('fr-FR') + ' ' + new Date().toTimeString().slice(0, 5) };
       const payload = { [CHAMP_SONDAGE]: JSON.stringify(s) };
       if (estGroupe(row)) payload['Lu par'] = [...new Set([...luParListe(row), String(connectedViewId).trim()])].join(',');
@@ -6425,17 +6466,20 @@
       if (!liste.length) { z.innerHTML = '<div class="feuille-empty">Aucun sondage. Pour en créer un : ✉️ + Nouveau → cocher « 📊 Sondage ».</div>'; return; }
       z.innerHTML = liste.map(m => {
         const s = lireSondage(m), dests = destinatairesListe(m);
-        const ligne = (id) => { const v = s.votes[id]; return v ? `<div style="padding:6px 0;border-top:1px dotted #eee;font-size:12px"><b>${escSondage(noms[id] || v.nom || 'ID ' + id)}</b> — <b style="color:${v.c === 'Pour' ? 'var(--vert)' : '#c0392b'}">${v.c === 'Pour' ? '👍 Pour' : '👎 Contre'}</b> <span style="color:#aaa;font-size:10px">${escSondage(v.le || '')}</span>${v.note ? `<div style="color:#555;font-style:italic;margin-top:2px">« ${escSondage(v.note)} »</div>` : ''}</div>` : ''; };
+        const ligne = (id) => { const v = s.votes[id]; return v ? `<div style="padding:6px 0;border-top:1px dotted #eee;font-size:12px"><b>${escSondage(noms[id] || v.nom || 'ID ' + id)}</b> — <b style="color:${couleurChoixSondage(s, v.c)}">${libChoixSondage(v.c)}</b> <span style="color:#aaa;font-size:10px">${escSondage(v.le || '')}</span>${v.note ? `<div style="color:#555;font-style:italic;margin-top:2px">« ${escSondage(v.note)} »</div>` : ''}</div>` : ''; };
         const votants = Object.keys(s.votes);
-        const pour = votants.filter(id => s.votes[id].c === 'Pour'), contre = votants.filter(id => s.votes[id].c === 'Contre');
+        // Choix d'origine + éventuels anciens choix encore présents dans les votes
+        const tousChoix = [...s.choix, ...new Set(votants.map(id => s.votes[id].c).filter(c => !s.choix.includes(c)))];
+        const parChoix = tousChoix.map(c => ({ c, ids: votants.filter(id => s.votes[id].c === c) }));
         const sansRep = dests.filter(id => !s.votes[id]);
         const pct = n => votants.length ? Math.round(n / votants.length * 100) : 0;
         return `<div style="background:#faf7f2;border:1px solid #e5ded0;border-radius:12px;padding:12px;margin-bottom:12px">
           <div style="font-size:14px;font-weight:800;color:var(--gris)">${escSondage(s.q)}</div>
           <div style="font-size:11px;color:#999;margin-top:2px">Envoyé le ${escSondage(m['Date envoi'] || '')} par ${escSondage(noms[String(m['Expediteur'] || '').trim()] || '')} · ${dests.length} destinataire(s)</div>
-          <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#eee;margin:10px 0 4px"><div style="width:${pct(pour.length)}%;background:var(--vert)"></div><div style="width:${pct(contre.length)}%;background:#c0392b"></div></div>
-          <div style="font-size:12px;color:var(--gris)">👍 Pour <b>${pour.length}</b> (${pct(pour.length)} %) · 👎 Contre <b>${contre.length}</b> (${pct(contre.length)} %) · ⏳ sans réponse <b>${sansRep.length}</b></div>
-          <div style="margin-top:8px">${[...pour, ...contre].map(ligne).join('')}</div>
+          <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:#eee;margin:10px 0 6px">${parChoix.map(x => `<div style="width:${pct(x.ids.length)}%;background:${couleurChoixSondage(s, x.c)}"></div>`).join('')}</div>
+          ${parChoix.map(x => `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gris);margin:3px 0"><span style="width:10px;height:10px;border-radius:2px;background:${couleurChoixSondage(s, x.c)};flex-shrink:0"></span><span style="flex:1">${libChoixSondage(x.c)}</span><b>${x.ids.length}</b><span style="color:#999;width:40px;text-align:right">${pct(x.ids.length)} %</span></div>`).join('')}
+          <div style="font-size:12px;color:var(--gris);margin-top:3px">⏳ sans réponse <b>${sansRep.length}</b></div>
+          <div style="margin-top:8px">${parChoix.flatMap(x => x.ids).map(ligne).join('')}</div>
           ${sansRep.length ? `<div style="font-size:11px;color:#999;margin-top:6px">⏳ Pas encore répondu : ${sansRep.map(id => escSondage(noms[id] || 'ID ' + id)).join(', ')}</div>` : ''}
         </div>`;
       }).join('') + (idDetail ? `<a href="#" onclick="event.preventDefault();ouvrirSondages()" style="font-size:12px;color:var(--vert);font-weight:700">← Tous les sondages</a>` : '');
@@ -6472,10 +6516,7 @@
       <div style="font-size:12px;font-weight:800;color:#a5761f;text-transform:uppercase;letter-spacing:.5px">📊 Sondage${nomExp ? ' — ' + escSondage(nomExp) : ''}</div>
       <div style="font-size:16px;font-weight:800;color:var(--gris);margin:8px 0 12px;line-height:1.4">${escSondage(s.q)}</div>
       <textarea id="sondage-note-${m.id}" placeholder="Votre note (facultatif)…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:8px;font-size:13px;min-height:60px;resize:vertical"></textarea>
-      <div style="display:flex;gap:10px;margin-top:10px">
-        <button onclick="voterSondageConnexion(${m.id},'Pour',this)" style="flex:1;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:800;cursor:pointer">👍 Pour</button>
-        <button onclick="voterSondageConnexion(${m.id},'Contre',this)" style="flex:1;background:#c0392b;color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:800;cursor:pointer">👎 Contre</button>
-      </div>
+      ${boutonsVoteSondage(s, m.id, 'voterSondageConnexion', true)}
       <div style="font-size:11px;color:#999;margin-top:10px;text-align:center">Votre réponse est nécessaire pour accéder à l'appli. Vous pourrez la modifier ensuite dans ✉️ Messages.</div></div>`;
     modal.style.display = 'flex';
     _sondageConnexionOuvert = true;
@@ -27455,9 +27496,14 @@
       <div id="nouveau-msg-dest-count" style="font-size:11px;color:var(--beige);margin-top:4px;font-weight:600"></div>
     </div>
     <div style="margin-bottom:12px">
-      <label style="display:flex;align-items:center;gap:8px;background:#faf7f2;border:1px solid #e5ded0;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer"><input type="checkbox" id="nouveau-msg-sondage" onchange="basculerSondageNouveauMessage(this)" style="width:16px;height:16px;accent-color:var(--vert)"> 📊 Sondage Pour / Contre <span style="font-weight:400;color:#999">(chacun vote et peut ajouter une note)</span></label>
+      <label style="display:flex;align-items:center;gap:8px;background:#faf7f2;border:1px solid #e5ded0;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer"><input type="checkbox" id="nouveau-msg-sondage" onchange="basculerSondageNouveauMessage(this)" style="width:16px;height:16px;accent-color:var(--vert)"> 📊 Sondage <span style="font-weight:400;color:#999">(choix à proposer, chacun vote et peut ajouter une note)</span></label>
       <label id="nouveau-msg-label" style="font-size:12px;font-weight:700;color:var(--gris);display:block;margin-bottom:6px">Message</label>
       <textarea id="nouveau-msg-texte" placeholder="Votre message…" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;resize:vertical;min-height:100px;outline:none"></textarea>
+      <div id="nouveau-msg-choix" style="display:none;background:#faf7f2;border:1px solid #e5ded0;border-radius:8px;padding:8px 10px;margin-top:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:12px;font-weight:700;color:var(--gris)">Choix proposés</span><a href="#" onclick="event.preventDefault();initChoixSondage(['Pour','Contre'])" style="font-size:11px;color:#a5761f;font-weight:700">↺ Pour / Contre</a></div>
+        <div id="nouveau-msg-choix-liste"></div>
+        <button type="button" onclick="ajouterChoixSondage()" style="background:#fff;border:1px dashed #c9b48a;border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;color:var(--gris);cursor:pointer;width:100%">+ Ajouter un choix</button>
+      </div>
     </div>
     <div style="margin-bottom:16px">
       <div id="nouveau-msg-pj-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
