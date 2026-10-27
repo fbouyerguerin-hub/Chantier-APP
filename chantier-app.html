@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V131';
+  const APP_VERSION = 'V132';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -20081,10 +20081,28 @@
         if (btn) btn.textContent = d.lot ? `⏳ ${d.lot.fin}/${d.lot.total}` : '⏳';
         chemin = d.lot && d.lot.suite ? d.lot.suite : null;
       }
-      alert('✅ Statuts relus dans EBP' + (erreurs ? ` (${erreurs} erreur(s))` : '') + '.');
       await chargerCommandesClientsPage();
+      const avecStatut = _commandesClientsCache.filter(r => extraireValeurChamp(r['Statut'], '')).length;
+      if (avecStatut) { alert('✅ Statuts relus dans EBP' + (erreurs ? ` (${erreurs} erreur(s))` : '') + ` : ${avecStatut} commande(s) avec un statut.`); return; }
+      // V132 : aucun statut trouvé → diagnostic des champs renvoyés par EBP
+      let diag = null; try { diag = await appelSyncWorker('/sync-clients?test=1&updateDate=0', 120000); } catch (e) {}
+      afficherDiagStatutsEbp(diag, erreurs);
     } catch (e) { alert('❌ Relecture EBP : ' + e.message + '\n\n(Worker v9.9 installé ?)'); }
     finally { if (btn) { btn.disabled = false; btn.textContent = lib; } }
+  }
+  function afficherDiagStatutsEbp(diag, erreurs) {
+    let m = document.getElementById('modal-diag-statut');
+    if (!m) { m = document.createElement('div'); m.id = 'modal-diag-statut'; m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;align-items:center;justify-content:center;padding:16px'; m.onclick = e => { if (e.target === m) m.style.display = 'none'; }; document.body.appendChild(m); }
+    const esc = echapperHtmlNote;
+    const version = diag ? '' : '<div style="color:#c0392b;font-weight:700">Le Worker n\'a pas répondu au diagnostic : vérifiez que la version v9.9 est bien déployée.</div>';
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:560px;max-height:85vh;overflow:auto;padding:18px;font-size:12px;color:var(--gris)">
+      <div style="font-size:15px;font-weight:800;margin-bottom:6px">🔎 Statut EBP non trouvé</div>
+      <div style="margin-bottom:8px">La relecture est faite${erreurs ? ` (${erreurs} erreur(s))` : ''}, mais aucun champ de statut reconnu dans les commandes EBP. Faites une capture de cette fenêtre et envoyez-la : elle donne les champs renvoyés par EBP.</div>
+      ${version}
+      ${diag ? `<div style="font-weight:800;margin-top:8px">Champs « statut » détectés</div><pre style="white-space:pre-wrap;background:#f6f4ef;border-radius:8px;padding:8px;font-size:11px">${esc(JSON.stringify(diag.champs_statut_detectes || {}, null, 1))}</pre>
+        <div style="font-weight:800;margin-top:8px">Tous les champs d'une commande EBP</div><div style="background:#f6f4ef;border-radius:8px;padding:8px;font-size:11px;line-height:1.6">${esc((diag.cles_premier_document || []).join(' · '))}</div>` : ''}
+      <button onclick="document.getElementById('modal-diag-statut').style.display='none'" style="margin-top:12px;width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer">Fermer</button></div>`;
+    m.style.display = 'flex';
   }
   function switchCmdCliOnglet(o) {
     _cmdCliOnglet = o;
@@ -28519,7 +28537,7 @@
       <button data-o="terminees" onclick="switchCmdCliOnglet('terminees')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Terminées<span></span></button>
       <button data-o="toutes" onclick="switchCmdCliOnglet('toutes')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Toutes<span></span></button>
     </div>
-    <div style="text-align:right;margin-top:6px"><button onclick="relireStatutsCommandesClients(this)" title="Relire toutes les commandes dans EBP pour mettre à jour leur statut" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">↻ Statuts EBP</button></div>
+    <div style="margin-top:6px"><button onclick="relireStatutsCommandesClients(this)" title="Relire toutes les commandes dans EBP pour mettre à jour leur statut" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">↻ Statuts EBP</button></div>
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   </div>
