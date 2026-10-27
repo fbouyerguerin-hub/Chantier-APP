@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V138';
+  const APP_VERSION = 'V139';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -23244,6 +23244,9 @@
       } else if (etat === 'afaire' && m.auto) { const a = etatAutoJalon(c.id, m.auto, c); if (a) { etat = 'auto'; info = a; } }
       res.push({ m, e, etat, info, resp: m.resp });
     });
+    // V139 : ARC client validé (J3) ⇒ devis signé (J1) franchi automatiquement ; la revue de direction (J2) reste à faire
+    { const j1 = res.find(x => x.m.id === 'J1'), j3 = res.find(x => x.m.id === 'J3');
+      if (j1 && j3 && j1.etat === 'afaire' && (j3.etat === 'ok' || j3.etat === 'auto')) { j1.etat = 'auto'; j1.info = 'ARC client validé : le devis est signé'; } }
     const ech = echeancesChantier(c, d);
     // V85 : les phases d'un même type s'enchaînent : la période du plan de charge (études, fabrication, pose)
     // est divisée par le nombre de phases ; chaque phase reçoit sa tranche (début → échéance).
