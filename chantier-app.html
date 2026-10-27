@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V127';
+  const APP_VERSION = 'V128';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -23325,7 +23325,7 @@
     if (JSON.stringify(liste) === JSON.stringify(avant)) return;
     c._fab = liste;
     if (_champJalonsDisponible === false) return;
-    try { await ecrireJalons(d => { d.fab = liste; }); } catch (e) {}
+    try { await ecrireJalons(d => { d.fab = liste; }, c.id); } catch (e) {}
   }
   // Ajout / retrait manuel d'une phase de fabrication (commande sans chapitres exploitables)
   async function ajouterPhaseFab() {
@@ -24145,8 +24145,9 @@
     alert("Le suivi des jalons a besoin d'un champ dans Baserow :\n\nTable « Chantiers » → ajouter un champ de type « Texte long » nommé exactement : Jalons\n\nPuis rechargez l'appli.");
   }
   // Lecture fraîche de la ligne puis écriture : limite les écrasements si deux personnes valident en même temps
-  async function ecrireJalons(modifier) {
-    const id = _jalonsChantierId;
+  // V128 : chantier explicite possible (traitements de fond) — ne touche jamais au chantier ouvert à l'écran
+  async function ecrireJalons(modifier, idChantier) {
+    const id = idChantier || _jalonsChantierId;
     const url = `https://api.baserow.io/api/database/rows/table/${TABLE_CHANTIERS_ADMIN}/${id}/?user_field_names=true`;
     const rg = await fetch(url, { headers: HEADERS });
     if (!rg.ok) throw new Error('Lecture du chantier impossible (' + rg.status + ')');
@@ -24427,10 +24428,8 @@
     const com = prompt(`Valider ${quoi} sur ${Object.keys(parChantier).length} chantier(s) ?\n\nCommentaire commun (facultatif) :`, '');
     if (com === null) return;
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Validation…'; }
-    const avant = _jalonsChantierId;
     let ok = 0; const refus = [], erreurs = [];
     for (const [cid, l] of Object.entries(parChantier)) {
-      _jalonsChantierId = Number(cid);
       try {
         await ecrireJalons(d => {
           l.forEach(({ jid, id, phase }) => {
@@ -24446,10 +24445,9 @@
             if (!peutCocherTacheJalon(x)) { refus.push(x.txt); return; }
             x.fait = true; x.faitPar = connectedCollab || ''; x.faitLe = horodatageJalon(); ok++;
           });
-        });
+        }, Number(cid));
       } catch (e) { erreurs.push(e.message); }
     }
-    _jalonsChantierId = avant;
     _selTachesMJ.clear();
     if (refus.length || erreurs.length) alert(`✔ ${ok} élément(s) validé(s).` + (refus.length ? `\n⛔ ${refus.length} à valider par la personne désignée.` : '') + (erreurs.length ? `\n❌ ${erreurs[0]}` : ''));
     await rafraichirMesJalonsOuverts();
@@ -24518,19 +24516,17 @@
     if (!silencieux && !confirm('Relire les commandes clients de tous les chantiers en cours et mettre à jour leurs phases ?\n\nLes phases issues de postes non retenus (quantité 0) ou du détail des ouvrages sont retirées. Les phases ajoutées à la main sont conservées.')) return;
     _recalculPhasesEnCours = true;
     const lib = btn ? btn.textContent : '';
-    const avant = _jalonsChantierId;
     let n = 0;
     try {
       await chargerCommandesJalons(true);
       const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estStatutCloture(st) && st !== 'Terminé' && commandesClientsDuChantier(c).length; });
       for (const c of liste) {
         n++; if (btn) btn.textContent = `⏳ ${n}/${liste.length}`;
-        _jalonsChantierId = c.id;
         try { await synchroniserPhasesFab(c); } catch (e) {}
       }
       try { localStorage.setItem('gb_phases_v127', '1'); } catch (e) {}
     } finally {
-      _jalonsChantierId = avant; _recalculPhasesEnCours = false;
+      _recalculPhasesEnCours = false;
       if (btn) btn.textContent = lib;
     }
     renderTableauJalons();
