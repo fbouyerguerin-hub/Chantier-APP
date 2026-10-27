@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V132';
+  const APP_VERSION = 'V135';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -19878,7 +19878,7 @@
     const listeEl = document.getElementById('commandes-clients-liste');
     if (resumeEl) resumeEl.textContent = 'Chargement…';
     try {
-      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/?user_field_names=true&size=200`;
+      const url = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS}/?user_field_names=true&size=200&${MARQUEUR_CLOTURES}`;
       const rows = await fetchToutesLesPages(url);
 
       // Ne garder que les commandes clients rattachées à un chantier "En cours" (les autres,
@@ -19886,15 +19886,13 @@
       // que ceux réellement actifs).
       // Filtre côté client : 'Statue' est un champ à sélection unique, le filtre URL ?filter__Statue__equal=
       // est rejeté par Baserow (400) et fetchToutesLesPages renvoyait alors [] sans erreur → 0 commande affichée.
-      const urlChantiersStatut = `https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200`;
+      // V134 : c'est le STATUT DU CHANTIER (Gestion › Chantiers) qui pilote : chantier Terminé ou Clôturé
+      // = commande terminée (onglet « Terminées ») ; sinon, ou sans chantier rattaché = « En cours »
+      const urlChantiersStatut = `https://api.baserow.io/api/database/rows/table/${TABLES.Chantiers.id}/?user_field_names=true&size=200&${MARQUEUR_CLOTURES}`;
       const tousChantiers = await fetchToutesLesPages(urlChantiersStatut);
-      const idsChantiersTermines = new Set(tousChantiers.filter(c => ((c['Statue']?.value || c['Statue'] || '') === 'Terminé')).map(c => c.id));
-
+      _cmdCliStatutChantier = new Map(tousChantiers.map(c => [c.id, extraireValeurChamp(c['Statue'], '')]));
       _commandesClientsTotalBase = rows.length;
-      _commandesClientsCache = rows
-        // Toutes les commandes EBP, y compris sans chantier rattaché, sauf celles dont le chantier est Terminé
-        .filter(r => { const ch = r['Chantier'] || []; return !(ch.length && ch.every(c => idsChantiersTermines.has(c.id))); })
-        .sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+      _commandesClientsCache = rows.sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
 
       _commandesClientsLignesCache = {};
       if (TABLE_COMMANDES_CLIENTS_LIGNES && TABLE_COMMANDES_CLIENTS_LIGNES !== 'A_COMPLETER') {
@@ -20061,11 +20059,79 @@
   // V130 : statut EBP de la commande client — terminées (soldées, facturées, transférées totalement,
   // clôturées, annulées) masquées par défaut ; onglets En cours / Terminées / Toutes
   let _cmdCliOnglet = 'encours';
+  // ── V135 : statut des chantiers lu dans EBP (Worker v10.1) ──
+  // Aperçu d'abord : liste des chantiers terminés dans EBP mais pas dans l'appli ; puis application.
+  // Règle automatique, ou choisie ici (champ EBP + valeurs « terminé »), mémorisée sur cet appareil.
+  let _statEbp = null;
+  function regleStatutEbp() { try { return JSON.parse(localStorage.getItem('gb_regle_statut_ebp') || 'null'); } catch (e) { return null; } }
+  async function controlerStatutsChantiersEbp(btn, regle) {
+    if (!estProfilPrix()) return;
+    regle = regle || regleStatutEbp();
+    const lib = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Lecture EBP…'; }
+    try {
+      const q = regle && regle.champ && regle.valeurs ? `?champ=${encodeURIComponent(regle.champ)}&valeurs=${encodeURIComponent(regle.valeurs)}` : '';
+      _statEbp = { d: await appelSyncWorker('/sync-chantiers-statut' + q, 180000), regle };
+      afficherStatutsChantiersEbp();
+    } catch (e) { alert('❌ Lecture EBP : ' + e.message + '\n\n(Worker v10.1 déployé ?)'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = lib; } }
+  }
+  function afficherStatutsChantiersEbp() {
+    const esc = echapperHtmlNote, d = _statEbp.d;
+    let m = document.getElementById('modal-statut-ebp');
+    if (!m) { m = document.createElement('div'); m.id = 'modal-statut-ebp'; m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;align-items:center;justify-content:center;padding:16px'; m.onclick = e => { if (e.target === m) m.style.display = 'none'; }; document.body.appendChild(m); }
+    const ch = d.changements || [];
+    const champs = Object.keys(d.distribution || {});
+    const r = _statEbp.regle || {};
+    m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:600px;max-height:88vh;overflow:auto;padding:18px;font-size:12px;color:var(--gris)">
+      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:800">🏗 Statut des chantiers dans EBP</div><button onclick="document.getElementById('modal-statut-ebp').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
+      <div style="margin:6px 0 10px;color:#666">${d.chantiers_ebp} chantier(s) lus dans EBP (table ${esc(d.table_ebp || '?')}) · ${d.termines_ebp} terminé(s) selon la règle ${d.regle === 'automatique' ? 'automatique' : `« ${esc(d.regle.champ)} = ${esc(d.regle.valeurs.join(', '))} »`}.</div>
+      ${ch.length ? `<div style="font-weight:800;margin-bottom:4px">${ch.length} chantier(s) à passer « Terminé » dans l'appli :</div>
+        <div style="max-height:220px;overflow:auto;border:1px solid #eee;border-radius:8px">${ch.map(x => `<div style="padding:5px 8px;border-bottom:1px dotted #eee"><b>${esc(x.nom)}</b> <span style="color:#999">· actuellement ${esc(x.statut_actuel)}</span></div>`).join('')}</div>
+        <button onclick="appliquerStatutsChantiersEbp(this)" style="margin-top:10px;width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer">✔ Passer ces ${ch.length} chantier(s) en Terminé</button>`
+        : `<div style="background:#f6f4ef;border-radius:8px;padding:10px">Aucun chantier à passer en Terminé avec cette règle.</div>`}
+      <details ${ch.length ? '' : 'open'} style="margin-top:12px"><summary style="cursor:pointer;font-weight:800;list-style:none">▸ Règle : quel champ EBP indique un chantier terminé ?</summary>
+        ${champs.length ? `<div style="margin:6px 0;color:#666">Choisissez le champ, puis cochez les valeurs qui veulent dire « terminé » :</div>
+        ${champs.map(k => `<div style="border:1px solid #eee;border-radius:8px;padding:6px 8px;margin-bottom:6px"><label style="font-weight:800"><input type="radio" name="stat-ebp-champ" value="${esc(k)}" ${r.champ === k ? 'checked' : ''}> ${esc(k)}</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">${Object.entries(d.distribution[k]).map(([v, n]) => `<label style="font-size:11px"><input type="checkbox" class="stat-ebp-val" data-champ="${esc(k)}" value="${esc(v)}" ${r.champ === k && String(r.valeurs || '').split(',').includes(v) ? 'checked' : ''}> ${esc(v)} <span style="color:#999">(${n})</span></label>`).join('')}</div></div>`).join('')}
+        <div style="display:flex;gap:8px"><button onclick="appliquerRegleStatutEbp(false)" style="flex:1;background:#fff;border:1px solid #ddd;border-radius:8px;padding:8px;font-weight:700;cursor:pointer">↺ Règle automatique</button>
+          <button onclick="appliquerRegleStatutEbp(true)" style="flex:2;background:#1F6AA5;color:#fff;border:none;border-radius:8px;padding:8px;font-weight:700;cursor:pointer">Recalculer avec cette règle</button></div>`
+        : `<div style="color:#a35a00;margin-top:6px">Aucun champ de statut trouvé dans la table EBP des chantiers.</div>`}
+      </details></div>`;
+    m.style.display = 'flex';
+  }
+  function appliquerRegleStatutEbp(perso) {
+    let regle = null;
+    if (perso) {
+      const champ = document.querySelector('input[name="stat-ebp-champ"]:checked')?.value;
+      const vals = [...document.querySelectorAll('.stat-ebp-val:checked')].filter(x => x.dataset.champ === champ).map(x => x.value);
+      if (!champ || !vals.length) { alert('Choisissez un champ et au moins une valeur « terminé ».'); return; }
+      regle = { champ, valeurs: vals.join(',') };
+    }
+    try { if (regle) localStorage.setItem('gb_regle_statut_ebp', JSON.stringify(regle)); else localStorage.removeItem('gb_regle_statut_ebp'); } catch (e) {}
+    document.getElementById('modal-statut-ebp').style.display = 'none';
+    controlerStatutsChantiersEbp(null, regle || { champ: '', valeurs: '' });
+  }
+  async function appliquerStatutsChantiersEbp(btn) {
+    const ch = (_statEbp?.d?.changements) || [];
+    if (!ch.length || !confirm(`Passer ${ch.length} chantier(s) au statut « Terminé » ?\n\nLeurs commandes passeront dans l'onglet « Terminées » et leurs jalons sortiront du 🚩.`)) return;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; }
+    const r = _statEbp.regle || {};
+    const q = r.champ && r.valeurs ? `&champ=${encodeURIComponent(r.champ)}&valeurs=${encodeURIComponent(r.valeurs)}` : '';
+    try {
+      const d = await appelSyncWorker('/sync-chantiers-statut?appliquer=1' + q, 180000);
+      alert(`✅ ${d.appliques} chantier(s) passé(s) en Terminé.` + ((d.erreurs || []).length ? `\n❌ ${d.erreurs.length} erreur(s) : ${d.erreurs[0]}` : ''));
+      document.getElementById('modal-statut-ebp').style.display = 'none';
+      try { invaliderChantiersClotures(); _idsChantiersTerminesCache = null; } catch (e) {}
+      if (currentNav === 'commandes-clients') chargerCommandesClientsPage();
+      else if (typeof loadGestion === 'function' && currentNav === 'gestion') loadGestion();
+    } catch (e) { alert('❌ ' + e.message); if (btn) { btn.disabled = false; btn.textContent = 'Réessayer'; } }
+  }
+
+  let _cmdCliStatutChantier = new Map();
   function estCommandeClientTerminee(r) {
-    const st = normTexte(extraireValeurChamp(r['Statut'], '') || '');
-    if (!st) return false;
-    if (/partiel/.test(st)) return false;
-    return /sold|termin|clotur|annul|factur|transfer|livre/.test(st) && !/non (transfer|factur|livre)|a factur|en cours/.test(st);
+    const ch = r['Chantier'] || [];
+    return ch.length > 0 && ch.every(c => estChantierFini(_cmdCliStatutChantier.get(c.id) || ''));
   }
   // V131 : relecture complète des commandes clients EBP (statuts), par lots, avec le Worker v9.9
   async function relireStatutsCommandesClients(btn) {
@@ -20128,19 +20194,12 @@
     });
     { const o = document.getElementById('cmdcli-onglets');
       if (o) o.querySelectorAll('button').forEach(b => { const n = b.dataset.o === 'encours' ? _commandesClientsCache.length - nbTerm : b.dataset.o === 'terminees' ? nbTerm : _commandesClientsCache.length; b.querySelector('span').textContent = ' (' + n + ')'; }); }
-    if (resumeEl) {
-      const masquees = _commandesClientsTotalBase - _commandesClientsCache.length;
-      const avecStatut = _commandesClientsCache.filter(r => extraireValeurChamp(r['Statut'], '')).length;
-      const statuts = {}; _commandesClientsCache.forEach(r => { const s = extraireValeurChamp(r['Statut'], '') || '(sans statut)'; statuts[s] = (statuts[s] || 0) + 1; });
-      resumeEl.innerHTML = echapperHtmlNote(resultats.length + ' commande(s) client' + (masquees > 0 ? ` — ${masquees} autre(s) en base (chantier Terminé ou clôturé)` : ''))
-        + (avecStatut ? `<details style="margin-top:3px"><summary style="cursor:pointer;font-size:11px;color:#999;list-style:none">▸ Statuts EBP</summary><div style="font-size:11px;color:#777;padding:3px 0">${Object.entries(statuts).sort((a, b) => b[1] - a[1]).map(([k, n]) => echapperHtmlNote(k) + ' : ' + n).join(' · ')}</div></details>`
-          : `<div style="font-size:11px;color:#a35a00;margin-top:3px">⚠️ Aucun statut EBP sur les commandes : installez le Worker v9.9 puis lancez « ↻ Statuts EBP ».</div>`);
-    }
+    if (resumeEl) resumeEl.textContent = resultats.length + ' commande(s) client' + (_cmdCliOnglet === 'encours' ? ` — ${nbTerm} autre(s) sur chantier Terminé ou Clôturé (onglet Terminées)` : '');
     listeEl.innerHTML = resultats.length ? resultats.map(r => {
       const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
       const montant = (r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '')
         ? Number(r['Montant HT']).toFixed(2) + ' € HT' : '';
-      const statut = extraireValeurChamp(r['Statut'], '');
+      const statut = (r['Chantier'] || []).map(c => _cmdCliStatutChantier.get(c.id) || '').filter(Boolean)[0] || ''; // V134 : statut du chantier
       const lignes = _commandesClientsLignesCache[r.id] || [];
       const nbArt = lignes.reduce((n, l) => n + (String(l['Description'] || '').includes('\n') ? String(l['Description']).split('\n').filter(Boolean).length : 1), 0);
       const ouvert = _commandesClientsDetailOuvert.has(r.id);
@@ -27295,7 +27354,8 @@
   <div class="filtre-fige">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 16px 12px">
       <div style="font-size:13px;font-weight:700;color:var(--gris)">Chantiers</div>
-      <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button>
+      <div style="display:flex;gap:6px;align-items:center"><button id="btn-statut-ebp-gestion" onclick="controlerStatutsChantiersEbp(this)" title="Lire dans EBP les chantiers terminés et les passer « Terminé » dans l'appli" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🏗 Statuts chantiers EBP</button>
+      <button onclick="ouvrirFormChantier(null)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">+ Nouveau</button></div>
     </div>
     <div style="margin:0 16px 10px">
       <input type="text" id="search-chantiers-gestion" placeholder="🔍 Rechercher un chantier ou un chargé d'affaires…" oninput="filtrerChantiersGestion(this.value)" style="width:100%;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px;color:var(--gris);outline:none;box-sizing:border-box" />
@@ -28537,7 +28597,8 @@
       <button data-o="terminees" onclick="switchCmdCliOnglet('terminees')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Terminées<span></span></button>
       <button data-o="toutes" onclick="switchCmdCliOnglet('toutes')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Toutes<span></span></button>
     </div>
-    <div style="margin-top:6px"><button onclick="relireStatutsCommandesClients(this)" title="Relire toutes les commandes dans EBP pour mettre à jour leur statut" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">↻ Statuts EBP</button></div>
+    <div style="margin-top:6px"><button onclick="controlerStatutsChantiersEbp(this)" title="Lire dans EBP les chantiers terminés et les passer « Terminé » dans l'appli" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">🏗 Statuts chantiers EBP</button></div>
+
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   </div>
