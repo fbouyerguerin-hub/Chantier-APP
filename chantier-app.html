@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V136';
+  const APP_VERSION = 'V138';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1399,6 +1399,12 @@
   const STATUT_CLOTURE = 'Clôturé';
   const MARQUEUR_CLOTURES = '_clotures=1';
   // V129 : chantier terminé ou clôturé (exclu des jalons, du 🚩 et des recalculs)
+  // V137 : chantier terminé dans EBP (liste lue par « 🏗 Statuts chantiers EBP ») = réellement terminé pour les jalons
+  function estChantierTermineEbp(c) {
+    try { if (!_terminesEbp || !_terminesEbp.set.size) return false; } catch (e) { return false; }
+    const m = String(c?.['Nom du chantier'] || '').match(/\bCHA?\s*0*(\d{2,})/i);
+    return !!(m && _terminesEbp.set.has(m[1]));
+  }
   function estChantierFini(statut) { const s = String(statut?.value ?? statut ?? ''); return /^\s*(termin|cl[oô]tur)/i.test(s); }
   function estStatutCloture(statut) { return /^\s*cl[oô]tur/i.test(String(statut?.value ?? statut ?? '')); }
   let _cloturesIds = new Set(), _cloturesDate = 0, _cloturesPromesse = null;
@@ -20071,7 +20077,7 @@
     const lib = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Lecture EBP…'; }
     try {
-      const q = regle && regle.champ && regle.valeurs ? `?champ=${encodeURIComponent(regle.champ)}&valeurs=${encodeURIComponent(regle.valeurs)}` : '';
+      const q = regle && regle.champ && regle.valeurs ? `?champ=${encodeURIComponent(regle.champ)}&valeurs=${encodeURIComponent(regle.valeurs)}` : (regle ? '?champ=&valeurs=' : '');
       _statEbp = { d: await appelSyncWorker('/sync-chantiers-statut' + q, 180000), regle };
       memoriserTerminesEbp(_statEbp.d);
       afficherStatutsChantiersEbp();
@@ -20083,16 +20089,19 @@
     const esc = echapperHtmlNote, d = _statEbp.d;
     let m = document.getElementById('modal-statut-ebp');
     if (!m) { m = document.createElement('div'); m.id = 'modal-statut-ebp'; m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;align-items:center;justify-content:center;padding:16px'; m.onclick = e => { if (e.target === m) m.style.display = 'none'; }; document.body.appendChild(m); }
-    const ch = d.changements || [];
+    const ch = d.changements || [], ro = d.reouvertures || [];
     const champs = Object.keys(d.distribution || {});
     const r = _statEbp.regle || {};
     m.innerHTML = `<div style="background:#fff;border-radius:14px;width:100%;max-width:600px;max-height:88vh;overflow:auto;padding:18px;font-size:12px;color:var(--gris)">
       <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:800">🏗 Statut des chantiers dans EBP</div><button onclick="document.getElementById('modal-statut-ebp').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
       <div style="margin:6px 0 10px;color:#666">${d.chantiers_ebp} chantier(s) lus dans EBP (table ${esc(d.table_ebp || '?')}) · ${d.termines_ebp} terminé(s) selon la règle ${d.regle === 'automatique' ? 'automatique' : `« ${esc(d.regle.champ)} = ${esc(d.regle.valeurs.join(', '))} »`}.</div>
       ${ch.length ? `<div style="font-weight:800;margin-bottom:4px">${ch.length} chantier(s) à passer « Terminé » dans l'appli :</div>
-        <div style="max-height:220px;overflow:auto;border:1px solid #eee;border-radius:8px">${ch.map(x => `<div style="padding:5px 8px;border-bottom:1px dotted #eee"><b>${esc(x.nom)}</b> <span style="color:#999">· actuellement ${esc(x.statut_actuel)}</span></div>`).join('')}</div>
-        <button onclick="appliquerStatutsChantiersEbp(this)" style="margin-top:10px;width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer">✔ Passer ces ${ch.length} chantier(s) en Terminé</button>`
-        : `<div style="background:#f6f4ef;border-radius:8px;padding:10px">Aucun chantier à passer en Terminé avec cette règle.</div>`}
+        <div style="max-height:200px;overflow:auto;border:1px solid #eee;border-radius:8px">${ch.map(x => `<div style="padding:5px 8px;border-bottom:1px dotted #eee"><b>${esc(x.nom)}</b> <span style="color:#999">· actuellement ${esc(x.statut_actuel)}</span></div>`).join('')}</div>` : ''}
+      ${ro.length ? `<div style="font-weight:800;margin:8px 0 4px;color:#1F6AA5">${ro.length} chantier(s) rouvert(s) dans EBP, à repasser « En cours » :</div>
+        <div style="max-height:160px;overflow:auto;border:1px solid #cfe0f0;border-radius:8px">${ro.map(x => `<div style="padding:5px 8px;border-bottom:1px dotted #eee"><b>${esc(x.nom)}</b></div>`).join('')}</div>` : ''}
+      ${ch.length || ro.length ? `<button onclick="appliquerStatutsChantiersEbp(this)" style="margin-top:10px;width:100%;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:800;cursor:pointer">✔ Appliquer (${[ch.length ? ch.length + ' en Terminé' : '', ro.length ? ro.length + ' rouvert(s)' : ''].filter(Boolean).join(', ')})</button>`
+        : `<div style="background:#f6f4ef;border-radius:8px;padding:10px">Rien à changer : les statuts de l'appli sont à jour avec EBP.</div>`}
+      <div style="font-size:10px;color:#999;margin-top:6px">Automatique toutes les 6 h une fois la règle validée. Un chantier rouvert dans EBP n'est rouvert dans l'appli que s'il avait été fermé à cause d'EBP (un chantier terminé à la main reste terminé).</div>
       <details ${ch.length ? '' : 'open'} style="margin-top:12px"><summary style="cursor:pointer;font-weight:800;list-style:none">▸ Règle : quel champ EBP indique un chantier terminé ?</summary>
         ${champs.length ? `<div style="margin:6px 0;color:#666">Choisissez le champ, puis cochez les valeurs qui veulent dire « terminé » :</div>
         ${champs.map(k => `<div style="border:1px solid #eee;border-radius:8px;padding:6px 8px;margin-bottom:6px"><label style="font-weight:800"><input type="radio" name="stat-ebp-champ" value="${esc(k)}" ${r.champ === k ? 'checked' : ''}> ${esc(k)}</label>
@@ -20116,14 +20125,14 @@
     controlerStatutsChantiersEbp(null, regle || { champ: '', valeurs: '' });
   }
   async function appliquerStatutsChantiersEbp(btn) {
-    const ch = (_statEbp?.d?.changements) || [];
-    if (!ch.length || !confirm(`Passer ${ch.length} chantier(s) au statut « Terminé » ?\n\nLeurs commandes passeront dans l'onglet « Terminées » et leurs jalons sortiront du 🚩.`)) return;
+    const ch = (_statEbp?.d?.changements) || [], ro = (_statEbp?.d?.reouvertures) || [];
+    if ((!ch.length && !ro.length) || !confirm((ch.length ? `Passer ${ch.length} chantier(s) au statut « Terminé » (commandes en « Terminées », jalons hors du 🚩).\n` : '') + (ro.length ? `Repasser ${ro.length} chantier(s) rouvert(s) dans EBP en « En cours ».\n` : '') + '\nConfirmer ?')) return;
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Enregistrement…'; }
     const r = _statEbp.regle || {};
     const q = r.champ && r.valeurs ? `&champ=${encodeURIComponent(r.champ)}&valeurs=${encodeURIComponent(r.valeurs)}` : '';
     try {
       const d = await appelSyncWorker('/sync-chantiers-statut?appliquer=1' + q, 180000);
-      alert(`✅ ${d.appliques} chantier(s) passé(s) en Terminé.` + ((d.erreurs || []).length ? `\n❌ ${d.erreurs.length} erreur(s) : ${d.erreurs[0]}` : ''));
+      alert(`✅ ${d.appliques} chantier(s) passé(s) en Terminé${d.rouverts ? `, ${d.rouverts} rouvert(s)` : ''}.` + ((d.erreurs || []).length ? `\n❌ ${d.erreurs.length} erreur(s) : ${d.erreurs[0]}` : ''));
       document.getElementById('modal-statut-ebp').style.display = 'none';
       try { invaliderChantiersClotures(); _idsChantiersTerminesCache = null; } catch (e) {}
       if (currentNav === 'commandes-clients') chargerCommandesClientsPage();
@@ -24473,10 +24482,11 @@
         _mesJalonsLecture = Date.now();
         memoriserCaChantiers(chantiersGestionCache); detecterChampJalons(chantiersGestionCache);
       }
+      try { await rafraichirTerminesEbpSiBesoin(); } catch (e) {}
       const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [], infos = [], autresRetards = [], autresTaches = [];
       chantiersGestionCache.forEach(c => {
         const st = c['Statue']?.value || c['Statue'] || '';
-        if (estChantierFini(st)) return;
+        if (estChantierFini(st) || estChantierTermineEbp(c)) return;
         const et = etatsJalons(c);
         const estCAduChantier = estMoi([caDuChantierRow(c)?.nom || '']);
         // V94 : le 🚩 n'alerte QUE sur les phases dont l'échéance est dépassée. Les autres jalons / phases
@@ -24723,7 +24733,7 @@
     let n = 0;
     try {
       await chargerCommandesJalons(true);
-      const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(st) && commandesClientsDuChantier(c).length; });
+      const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(st) && !estChantierTermineEbp(c) && commandesClientsDuChantier(c).length; });
       for (const c of liste) {
         n++; if (btn) btn.textContent = `⏳ ${n}/${liste.length}`;
         try { await synchroniserPhasesFab(c); } catch (e) {}
@@ -24764,7 +24774,7 @@
     const filtre = document.getElementById('jalons-filtre')?.value || '';
     const moi = normTexte(connectedCollab || '');
     const lignes = (chantiersGestionCache || [])
-      .filter(c => { const s = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(s); })
+      .filter(c => { const s = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(s) && !estChantierTermineEbp(c); })
       .map(c => ({ c, r: resumeJalons(c), ca: caDuChantierRow(c)?.nom || '' }))
       .filter(x => !q || normTexte((x.c['Nom du chantier'] || '') + ' ' + x.ca).includes(q))
       .filter(x => filtre !== 'bloque' || x.r.bloques.length)
