@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V128';
+  const APP_VERSION = 'V131';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1398,6 +1398,8 @@
   // les rouvrir.
   const STATUT_CLOTURE = 'Clôturé';
   const MARQUEUR_CLOTURES = '_clotures=1';
+  // V129 : chantier terminé ou clôturé (exclu des jalons, du 🚩 et des recalculs)
+  function estChantierFini(statut) { const s = String(statut?.value ?? statut ?? ''); return /^\s*(termin|cl[oô]tur)/i.test(s); }
   function estStatutCloture(statut) { return /^\s*cl[oô]tur/i.test(String(statut?.value ?? statut ?? '')); }
   let _cloturesIds = new Set(), _cloturesDate = 0, _cloturesPromesse = null;
   function invaliderChantiersClotures() { _cloturesDate = 0; }
@@ -20056,6 +20058,39 @@
     renderCommandesClientsListe();
   }
 
+  // V130 : statut EBP de la commande client — terminées (soldées, facturées, transférées totalement,
+  // clôturées, annulées) masquées par défaut ; onglets En cours / Terminées / Toutes
+  let _cmdCliOnglet = 'encours';
+  function estCommandeClientTerminee(r) {
+    const st = normTexte(extraireValeurChamp(r['Statut'], '') || '');
+    if (!st) return false;
+    if (/partiel/.test(st)) return false;
+    return /sold|termin|clotur|annul|factur|transfer|livre/.test(st) && !/non (transfer|factur|livre)|a factur|en cours/.test(st);
+  }
+  // V131 : relecture complète des commandes clients EBP (statuts), par lots, avec le Worker v9.9
+  async function relireStatutsCommandesClients(btn) {
+    if (!confirm('Relire toutes les commandes clients dans EBP (depuis le 01/01/2025) pour mettre à jour leur statut ?\n\nCela peut prendre quelques minutes.')) return;
+    const lib = btn ? btn.textContent : '';
+    if (btn) btn.disabled = true;
+    let chemin = '/sync-clients?full=1&updateDate=0&nb=15&debut=0', n = 0, erreurs = 0;
+    try {
+      while (chemin && n < 400) {
+        n++;
+        const d = await appelSyncWorker(chemin + (chemin.includes('updateDate') ? '' : '&updateDate=0'), 180000);
+        erreurs += (d.erreurs || []).length;
+        if (btn) btn.textContent = d.lot ? `⏳ ${d.lot.fin}/${d.lot.total}` : '⏳';
+        chemin = d.lot && d.lot.suite ? d.lot.suite : null;
+      }
+      alert('✅ Statuts relus dans EBP' + (erreurs ? ` (${erreurs} erreur(s))` : '') + '.');
+      await chargerCommandesClientsPage();
+    } catch (e) { alert('❌ Relecture EBP : ' + e.message + '\n\n(Worker v9.9 installé ?)'); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = lib; } }
+  }
+  function switchCmdCliOnglet(o) {
+    _cmdCliOnglet = o;
+    document.querySelectorAll('#cmdcli-onglets button').forEach(b => { const a = b.dataset.o === o; b.style.background = a ? 'var(--vert)' : 'none'; b.style.color = a ? '#fff' : 'var(--gris-moyen)'; });
+    renderCommandesClientsListe();
+  }
   function renderCommandesClientsListe() {
     const listeEl = document.getElementById('commandes-clients-liste');
     const resumeEl = document.getElementById('commandes-clients-resume');
@@ -20066,11 +20101,22 @@
     const texteLigne = r => normRechCmd(Object.entries(r).filter(([k]) => k !== 'id' && k !== 'order')
       .map(([, v]) => Array.isArray(v) ? v.map(x => (x && typeof x === 'object') ? (x.value ?? x.name ?? '') : x).join(' ')
         : (v && typeof v === 'object') ? (v.value ?? '') : v).join(' '));
-    const resultats = _commandesClientsCache.filter(r => { const t = texteLigne(r); return mots.every(m => t.includes(m)); });
+    const nbTerm = _commandesClientsCache.filter(estCommandeClientTerminee).length;
+    const resultats = _commandesClientsCache.filter(r => {
+      const fin = estCommandeClientTerminee(r);
+      if (_cmdCliOnglet === 'encours' && fin) return false;
+      if (_cmdCliOnglet === 'terminees' && !fin) return false;
+      const t = texteLigne(r); return mots.every(m => t.includes(m));
+    });
+    { const o = document.getElementById('cmdcli-onglets');
+      if (o) o.querySelectorAll('button').forEach(b => { const n = b.dataset.o === 'encours' ? _commandesClientsCache.length - nbTerm : b.dataset.o === 'terminees' ? nbTerm : _commandesClientsCache.length; b.querySelector('span').textContent = ' (' + n + ')'; }); }
     if (resumeEl) {
       const masquees = _commandesClientsTotalBase - _commandesClientsCache.length;
-      resumeEl.textContent = resultats.length + ' commande(s) client' + (masquees > 0
-        ? ` — ${masquees} masquée(s) sur ${_commandesClientsTotalBase} en base (chantier Terminé)` : '');
+      const avecStatut = _commandesClientsCache.filter(r => extraireValeurChamp(r['Statut'], '')).length;
+      const statuts = {}; _commandesClientsCache.forEach(r => { const s = extraireValeurChamp(r['Statut'], '') || '(sans statut)'; statuts[s] = (statuts[s] || 0) + 1; });
+      resumeEl.innerHTML = echapperHtmlNote(resultats.length + ' commande(s) client' + (masquees > 0 ? ` — ${masquees} autre(s) en base (chantier Terminé ou clôturé)` : ''))
+        + (avecStatut ? `<details style="margin-top:3px"><summary style="cursor:pointer;font-size:11px;color:#999;list-style:none">▸ Statuts EBP</summary><div style="font-size:11px;color:#777;padding:3px 0">${Object.entries(statuts).sort((a, b) => b[1] - a[1]).map(([k, n]) => echapperHtmlNote(k) + ' : ' + n).join(' · ')}</div></details>`
+          : `<div style="font-size:11px;color:#a35a00;margin-top:3px">⚠️ Aucun statut EBP sur les commandes : installez le Worker v9.9 puis lancez « ↻ Statuts EBP ».</div>`);
     }
     listeEl.innerHTML = resultats.length ? resultats.map(r => {
       const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
@@ -24313,7 +24359,7 @@
         try {
           const frais = await fetchToutesLesPages('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200');
           const parId = new Map((frais || []).map(r => [r.id, r]));
-          chantiersGestionCache.forEach(c => { const f = parId.get(c.id); if (f && Object.prototype.hasOwnProperty.call(f, CHAMP_JALONS)) c[CHAMP_JALONS] = f[CHAMP_JALONS]; });
+          chantiersGestionCache.forEach(c => { const f = parId.get(c.id); if (!f) { c['Statue'] = STATUT_CLOTURE; return; } if (Object.prototype.hasOwnProperty.call(f, CHAMP_JALONS)) c[CHAMP_JALONS] = f[CHAMP_JALONS]; if ('Statue' in f) c['Statue'] = f['Statue']; });
           _mesJalonsLecture = Date.now();
         } catch (e) {}
       }
@@ -24325,7 +24371,7 @@
       const liste = [], taches = [], tachesPlusTard = [], phasesPlusTard = [], infos = [], autresRetards = [], autresTaches = [];
       chantiersGestionCache.forEach(c => {
         const st = c['Statue']?.value || c['Statue'] || '';
-        if (estStatutCloture(st) || st === 'Terminé') return;
+        if (estChantierFini(st)) return;
         const et = etatsJalons(c);
         const estCAduChantier = estMoi([caDuChantierRow(c)?.nom || '']);
         // V94 : le 🚩 n'alerte QUE sur les phases dont l'échéance est dépassée. Les autres jalons / phases
@@ -24409,6 +24455,39 @@
     b.textContent = `✔ Valider la sélection (${_selTachesMJ.size})`;
   }
   function selTacheMJ(cb) { if (cb.checked) _selTachesMJ.add(cb.dataset.k); else _selTachesMJ.delete(cb.dataset.k); majBoutonSelMJ(); }
+  function selChantierMJ(cb) {
+    document.querySelectorAll(`#modal-mes-jalons input.mj-sel[data-k^="P|${cb.dataset.ch}|"]:not(:disabled)`).forEach(x => {
+      x.checked = cb.checked; if (cb.checked) _selTachesMJ.add(x.dataset.k); else _selTachesMJ.delete(x.dataset.k);
+    });
+    majBoutonSelMJ();
+  }
+  async function plusTardSelectionMJ(btn) {
+    const phases = [..._selTachesMJ].filter(k => k.startsWith('P|')).map(k => { const [, cid, jid] = k.split('|'); return { cid: Number(cid), jid }; });
+    if (!phases.length) { alert('Sélectionnez des phases (le « Plus tard » ne concerne pas les tâches : utilisez « Repousser » sur la tâche).'); return; }
+    const def = ajouterJours(dateYMD(new Date()), 7).split('-').reverse().join('/');
+    const rep = prompt(`⏰ Mettre de côté ${phases.length} phase(s) jusqu'au (JJ/MM/AAAA) :\n\nL'échéance et le Gantt ne changent pas.`, def);
+    if (rep === null) return;
+    const mm = String(rep).trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+    if (!mm) { alert('Date invalide.'); return; }
+    const nv = `${mm[3].length === 2 ? '20' + mm[3] : mm[3]}-${mm[2].padStart(2, '0')}-${mm[1].padStart(2, '0')}`;
+    if (nv <= dateYMD(new Date())) { alert('Choisissez une date à partir de demain.'); return; }
+    const motif = (prompt('Motif (facultatif) :', '') || '').trim().slice(0, 200);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳…'; }
+    const parCh = {}; phases.forEach(p => (parCh[p.cid] = parCh[p.cid] || []).push(p.jid));
+    let ok = 0; const erreurs = [];
+    for (const [cid, jids] of Object.entries(parCh)) {
+      const c = (chantiersGestionCache || []).find(x => x.id === Number(cid)); if (!c) continue;
+      const et = etatsJalons(c);
+      const permis = jids.filter(j => { const x = et.find(y => y.m.id === j); return x && peutMasquerJalon(x); });
+      if (!permis.length) continue;
+      try {
+        await ecrireJalons(d => { d.masque = d.masque || {}; permis.forEach(j => { d.masque[j] = { jusqu: nv, par: connectedCollab || '', le: horodatageJalon(), motif }; ok++; }); }, Number(cid));
+      } catch (e) { erreurs.push(e.message); }
+    }
+    phases.forEach(p => _selTachesMJ.delete('P|' + p.cid + '|' + p.jid));
+    if (erreurs.length) alert(`⏰ ${ok} phase(s) mise(s) de côté.\n❌ ${erreurs[0]}`);
+    await rafraichirMesJalonsOuverts();
+  }
   function toutSelTachesMJ() {
     const cbs = [...document.querySelectorAll('#modal-mes-jalons input.mj-sel:not(:disabled)')];
     const tout = cbs.length && cbs.every(cb => cb.checked);
@@ -24434,6 +24513,9 @@
         await ecrireJalons(d => {
           l.forEach(({ jid, id, phase }) => {
             if (phase) {
+              const cc = (chantiersGestionCache || []).find(z => z.id === Number(cid));
+              if (cc) { const et = etatsJalons(cc), ix = et.findIndex(y => y.m.id === jid), xx = et[ix];
+                if (!xx || !(peutValiderJalons() || estMoi(xx.personnes)) || (!xx.m.fab && xx.etat !== 'bloque' && !jalonDisponible(et, ix))) { refus.push(jid); return; } }
               const e = (d.j || {})[jid];
               if (e && (e.st === 'ok' || e.st === 'na')) return;
               d.j = d.j || {};
@@ -24449,7 +24531,7 @@
       } catch (e) { erreurs.push(e.message); }
     }
     _selTachesMJ.clear();
-    if (refus.length || erreurs.length) alert(`✔ ${ok} élément(s) validé(s).` + (refus.length ? `\n⛔ ${refus.length} à valider par la personne désignée.` : '') + (erreurs.length ? `\n❌ ${erreurs[0]}` : ''));
+    if (refus.length || erreurs.length) alert(`✔ ${ok} élément(s) validé(s).` + (refus.length ? `\n⛔ ${refus.length} non validé(s) : réservé(s) à la personne désignée ou étapes précédentes non franchies.` : '') + (erreurs.length ? `\n❌ ${erreurs[0]}` : ''));
     await rafraichirMesJalonsOuverts();
     try { if (document.getElementById('modal-jalons')?.style.display === 'flex') renderJalonsChantier(); } catch (e) {}
   }
@@ -24464,11 +24546,27 @@
       document.body.appendChild(m);
     }
     const esc = echapperHtmlNote;
-    const groupe = (titre, l) => !l.length ? '' : `<div style="font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase;margin:12px 0 6px">${titre} (${l.length})</div>` + l.map(({ c, x }) =>
-      `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${x.m.id}')" style="cursor:pointer;background:#fff;border:1.5px solid ${x.etat === 'bloque' ? '#c0392b' : x.temps?.niveau === 'retard' ? '#e8a39b' : '#ddd5c5'};border-radius:10px;padding:9px 11px;margin-bottom:6px">
-        <div style="display:flex;gap:8px;align-items:flex-start">${(peutValiderJalons() || estMoi(x.personnes)) && (x.m.fab || x.etat === 'bloque' || jalonDisponible(etatsJalons(c), etatsJalons(c).findIndex(y => y.m.id === x.m.id))) ? `<input type="checkbox" class="mj-sel" data-k="P|${c.id}|${x.m.id}" ${_selTachesMJ.has('P|' + c.id + '|' + x.m.id) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="selTacheMJ(this)" title="Sélectionner pour valider" style="width:18px;height:18px;flex-shrink:0;margin:1px 0 0;cursor:pointer;accent-color:var(--vert)">` : ''}<div style="font-size:13px;font-weight:700;color:var(--gris)">${x.etat === 'bloque' ? '⛔ ' : ''}${x.m.fab ? ({ etude: '📐', pose: '🏗', fab: '🏭' })[x.m.kind] || '🏭' : esc(x.m.id) + ' ·'} ${esc(x.m.nom)}</div></div>
-        <div style="font-size:11px;color:#777;margin-top:2px">🏗 ${esc(c['Nom du chantier'] || '')}${x.ech ? ' · ' + htmlEcheance(x) : ''}</div>
-        ${peutMasquerJalon(x) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};repousserPhaseJalon('${x.m.id}')" style="margin-top:6px;background:#fff;border:1px solid #1F6AA5;color:#1F6AA5;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">⏰ Plus tard</button>` : ''}</div>`).join('');
+    // V129 : phases regroupées par chantier (repliables), case « tout le chantier »
+    const groupe = (titre, l) => {
+      if (!l.length) return '';
+      const parCh = new Map();
+      l.forEach(y => { if (!parCh.has(y.c.id)) parCh.set(y.c.id, []); parCh.get(y.c.id).push(y); });
+      const plusieurs = parCh.size > 1;
+      return `<div style="font-size:11px;font-weight:800;color:var(--gris-moyen);text-transform:uppercase;margin:12px 0 6px">${titre} (${l.length}${plusieurs ? ` · ${parCh.size} chantiers` : ''})</div>` + [...parCh.values()].map(gr => {
+        const c = gr[0].c, k = 'mjc|' + c.id;
+        const cartes = gr.map(({ x }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${x.m.id}')" style="cursor:pointer;background:#fff;border:1.5px solid ${x.etat === 'bloque' ? '#c0392b' : x.temps?.niveau === 'retard' ? '#e8a39b' : '#ddd5c5'};border-radius:10px;padding:9px 11px;margin-bottom:6px">
+          <div style="display:flex;gap:8px;align-items:flex-start">${peutMasquerJalon(x) ? `<input type="checkbox" class="mj-sel" data-k="P|${c.id}|${x.m.id}" ${_selTachesMJ.has('P|' + c.id + '|' + x.m.id) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="selTacheMJ(this)" title="Sélectionner" style="width:18px;height:18px;flex-shrink:0;margin:1px 0 0;cursor:pointer;accent-color:var(--vert)">` : ''}<div style="font-size:13px;font-weight:700;color:var(--gris)">${x.etat === 'bloque' ? '⛔ ' : ''}${x.m.fab ? ({ etude: '📐', pose: '🏗', fab: '🏭' })[x.m.kind] || '🏭' : esc(x.m.id) + ' ·'} ${esc(x.m.nom)}</div></div>
+          <div style="font-size:11px;color:#777;margin-top:2px">${x.ech ? htmlEcheance(x) : ''}</div>
+          ${peutMasquerJalon(x) ? `<button onclick="event.stopPropagation();_jalonsChantierId=${c.id};repousserPhaseJalon('${x.m.id}')" style="margin-top:6px;background:#fff;border:1px solid #1F6AA5;color:#1F6AA5;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">⏰ Plus tard</button>` : ''}</div>`).join('');
+        const nbSel = gr.filter(({ x }) => peutMasquerJalon(x)).length;
+        return `<details data-k="${k}" ${!plusieurs || _detailsOuverts.has(k) ? 'open' : ''} ontoggle="memoDetails(this)" style="background:#fbf8f2;border:1px solid #e5ded0;border-radius:10px;padding:6px 8px;margin-bottom:6px">
+          <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px">
+            ${nbSel ? `<input type="checkbox" class="mj-sel-ch" data-ch="${c.id}" onclick="event.stopPropagation()" onchange="selChantierMJ(this)" title="Tout le chantier" style="width:18px;height:18px;flex-shrink:0;cursor:pointer;accent-color:var(--vert)">` : ''}
+            <span style="flex:1;min-width:0;font-size:12px;font-weight:800;color:var(--gris)">🏗 ${esc(c['Nom du chantier'] || '')}</span>
+            <span style="font-size:11px;font-weight:800;color:#c0392b;background:#fdecea;border-radius:8px;padding:1px 7px">${gr.length}</span>
+          </summary><div style="margin-top:6px">${cartes}</div></details>`;
+      }).join('');
+    };
     const ret = _mesJalons.filter(y => y.x.temps?.niveau === 'retard' || y.x.etat === 'bloque');
     const sem = _mesJalons.filter(y => !ret.includes(y) && y.x.temps?.niveau === 'bientot');
     const plus = _mesJalons.filter(y => !ret.includes(y) && !sem.includes(y));
@@ -24477,7 +24575,8 @@
         <button onclick="document.getElementById('modal-mes-jalons').style.display='none'" style="background:none;border:none;font-size:20px;color:#999;cursor:pointer">✕</button></div>
       ${(_mesTachesJalons.length + _mesTachesPlusTard.length + _mesJalons.length) ? `<div id="mj-barre-sel" style="position:sticky;top:-16px;z-index:2;background:#f5f0e8;margin:8px -4px 0;padding:6px 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <a href="#" onclick="event.preventDefault();toutSelTachesMJ()" style="font-size:11px;font-weight:700;color:#1F6AA5">☑ Tout cocher / décocher</a>
-        <button id="mj-btn-valider" onclick="validerSelectionTachesMJ(this)" ${_selTachesMJ.size ? '' : 'disabled'} style="margin-left:auto;background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;opacity:${_selTachesMJ.size ? 1 : .45}">✔ Valider la sélection (${_selTachesMJ.size})</button>
+        <button onclick="plusTardSelectionMJ(this)" title="Mettre de côté les phases cochées jusqu'à une date" style="margin-left:auto;background:#fff;color:#1F6AA5;border:1.5px solid #1F6AA5;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:800;cursor:pointer">⏰ Plus tard</button>
+        <button id="mj-btn-valider" onclick="validerSelectionTachesMJ(this)" ${_selTachesMJ.size ? '' : 'disabled'} style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;opacity:${_selTachesMJ.size ? 1 : .45}">✔ Valider la sélection (${_selTachesMJ.size})</button>
       </div>` : ''}
       ${_mesTachesJalons.length ? `<div style="font-size:11px;font-weight:800;color:#1F6AA5;text-transform:uppercase;margin:12px 0 6px">☑ Tâches en retard (${_mesTachesJalons.length})</div>` + _mesTachesJalons.map(({ c, t, jid, jnom }) => `<div onclick="document.getElementById('modal-mes-jalons').style.display='none';ouvrirJalonsFocus(${c.id}, '${jid}', '${encodeURIComponent(t.id)}')" style="cursor:pointer;background:#fff;border:1.5px solid #9ab8d6;border-radius:10px;padding:9px 11px;margin-bottom:6px">
           <div style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" class="mj-sel" data-k="T|${c.id}|${jid}|${encodeURIComponent(t.id)}" ${_selTachesMJ.has('T|' + c.id + '|' + jid + '|' + encodeURIComponent(t.id)) ? 'checked' : ''} ${peutCocherTacheJalon(t) ? '' : 'disabled title="À valider par ' + esc(t.pour || '') + '"'} onclick="event.stopPropagation()" onchange="selTacheMJ(this)" style="width:18px;height:18px;flex-shrink:0;margin:1px 0 0;cursor:pointer;accent-color:var(--vert)"><div style="font-size:13px;font-weight:700;color:var(--gris)">${esc(t.txt)}</div></div>
@@ -24519,7 +24618,7 @@
     let n = 0;
     try {
       await chargerCommandesJalons(true);
-      const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estStatutCloture(st) && st !== 'Terminé' && commandesClientsDuChantier(c).length; });
+      const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(st) && commandesClientsDuChantier(c).length; });
       for (const c of liste) {
         n++; if (btn) btn.textContent = `⏳ ${n}/${liste.length}`;
         try { await synchroniserPhasesFab(c); } catch (e) {}
@@ -24560,7 +24659,7 @@
     const filtre = document.getElementById('jalons-filtre')?.value || '';
     const moi = normTexte(connectedCollab || '');
     const lignes = (chantiersGestionCache || [])
-      .filter(c => { const s = c['Statue']?.value || c['Statue'] || ''; return !estStatutCloture(s) && s !== 'Terminé'; })
+      .filter(c => { const s = c['Statue']?.value || c['Statue'] || ''; return !estChantierFini(s); })
       .map(c => ({ c, r: resumeJalons(c), ca: caDuChantierRow(c)?.nom || '' }))
       .filter(x => !q || normTexte((x.c['Nom du chantier'] || '') + ' ' + x.ca).includes(q))
       .filter(x => filtre !== 'bloque' || x.r.bloques.length)
@@ -28413,6 +28512,14 @@
   <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
     <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+  </div>
+  <div style="padding:0 16px 8px">
+    <div id="cmdcli-onglets" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;gap:2px">
+      <button data-o="encours" onclick="switchCmdCliOnglet('encours')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">En cours<span></span></button>
+      <button data-o="terminees" onclick="switchCmdCliOnglet('terminees')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Terminées<span></span></button>
+      <button data-o="toutes" onclick="switchCmdCliOnglet('toutes')" style="flex:1;padding:7px 4px;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--gris-moyen)">Toutes<span></span></button>
+    </div>
+    <div style="text-align:right;margin-top:6px"><button onclick="relireStatutsCommandesClients(this)" title="Relire toutes les commandes dans EBP pour mettre à jour leur statut" style="background:#fff;border:1px solid #ddd5c5;border-radius:8px;padding:5px 10px;font-size:11px;font-weight:700;color:var(--gris);cursor:pointer">↻ Statuts EBP</button></div>
   </div>
   <div id="commandes-clients-resume" style="padding:0 16px 8px;font-size:12px;color:var(--gris-moyen)"></div>
   </div>
