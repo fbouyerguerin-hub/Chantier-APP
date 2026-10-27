@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V125';
+  const APP_VERSION = 'V127';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2421,6 +2421,7 @@
       if (!jalonsVisibles()) { switchPage('saisie'); return; }
       showPage('page-jalons');
       { const bg = document.getElementById('btn-gabarit-jalons'); if (bg) bg.style.display = peutValiderJalons() ? '' : 'none'; }
+      { const br = document.getElementById('btn-recalc-phases'); if (br) br.style.display = peutValiderJalons() ? '' : 'none'; }
       chargerTableauJalons();
     } else if (nav === 'materiel') {
       if (!peutVoirMateriel()) { switchPage('saisie'); return; }
@@ -19906,20 +19907,77 @@
         });
       }
       renderCommandesClientsListe();
+      // V126 : catalogue (repérage des ouvrages EBP) puis réaffichage
+      if (!_catLocal) chargerCatalogueLocal().then(() => renderCommandesClientsListe()).catch(() => {});
     } catch(e) {
       if (resumeEl) resumeEl.textContent = '';
       if (listeEl) listeEl.innerHTML = '<div style="color:#c0392b;font-size:12px;text-align:center;padding:10px">Erreur de chargement des commandes clients.</div>';
     }
   }
 
-  // V114 : présentation de la commande client proche de l'édition EBP : chapitres, Réf. / Désignation /
-  // Qté / U / PU HT / Montant HT, sous-totaux de chapitre, Total HT, TVA et TTC (indicatifs). Les lignes
-  // masquées dans EBP (coût de revient) ne sont pas imprimées, comme sur le document EBP.
+  // V114 / V127 : présentation de la commande client proche de l'édition EBP (lignes retenues seulement)
+  // ── V127 : lecture d'une commande client EBP « comme imprimée » ──
+  // Rôles : titre, total, ligne, ouvrage, composant (détail d'ouvrage : temps prévu, matériel), commentaire, saut.
+  // Quantité 0 = non retenu par le client ; un chapitre sans rien de retenu est non retenu (titre et sous-total).
+  // Sert à l'affichage de la commande ET à la création des phases de jalons.
+  function classerLignesCommandeClient(lignes) {
+    const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
+    const typeL = l => normTexte(l['Type ligne']?.value ?? l['Type ligne'] ?? '');
+    const estTotalTxt = t => /^(sous[- ]?total|total|tva|remise|acompte|net a payer|report)/i.test(normTexte(t));
+    const estTitre = l => { try { return estLigneTitreCommande(l); } catch (e) { return false; } };
+    const estSautPage = l => /saut/.test(typeL(l)) || /^saut de page$/i.test(normTexte(l['Description'] || ''));
+    const ouvrageCat = l => { const r = normRef(l['Reference'] || ''); if (!r || !_catLocal || !_catLocal.items) return false; const x = _catLocal.items.find(y => normRef(y.code) === r); return !!(x && x.ouvrage); };
+    const estComposantType = l => /element|elmt|compos|detail|sous-?ligne/.test(typeL(l)) || !!(l['Ligne parent'] || l['Parent'] || (Number(l['Niveau']) || 0) > 0);
+    const estOuvrage = l => (/ouvrage|nomenclature/.test(typeL(l)) && !estComposantType(l)) || ouvrageCat(l)
+      || (!!String(l['Reference'] || '').trim() && /:\s*$/.test(String(l['Description'] || '').trim())); // « - Soit la porte : »
+    const numTitre = d => (String(d).trim().match(/^(\d+(?:\.\d+)*)/) || [])[1] || '';
+    const cleTitre = d => normTexte(d).replace(/[^a-z0-9]+/g, '');
+    const items = [];
+    let titre = null, ouvrage = null;
+    [...lignes].sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0)).filter(l => l['Masque'] !== true).forEach(l => {
+      const desc = String(l['Description'] || '').trim(), ref = String(l['Reference'] || '').trim();
+      const q = num(l['Quantite']), m = num(l['Montant HT']);
+      const it = { l, desc, ref, q, m, titre };
+      if (estSautPage(l)) { it.role = 'saut'; }
+      else if (estTitre(l)) { it.role = 'titre'; it.num = numTitre(desc); it.cle = cleTitre(desc); it.titre = null; titre = it; ouvrage = null; it.parent = null; }
+      else if (estTotalTxt(desc)) { it.role = 'total'; it.sousTotal = /^sous[- ]?total/i.test(normTexte(desc)); ouvrage = null; }
+      else if (estComposantType(l) || (ouvrage && !estOuvrage(l))) { it.role = 'composant'; it.ouvrage = ouvrage; if (ouvrage) ouvrage.comps.push(it); }
+      else if (!ref && !q && !m) { it.role = 'commentaire'; ouvrage = null; }
+      else { it.role = estOuvrage(l) ? 'ouvrage' : 'ligne'; it.comps = []; ouvrage = it.role === 'ouvrage' ? it : null; it.retenu = !!q; }
+      items.push(it);
+    });
+    // Hiérarchie des titres (numérotation 3) > 3.1 > 3.1.2)
+    const titres = items.filter(x => x.role === 'titre');
+    titres.forEach((t, i) => { t.enfants = []; for (let j = i + 1; j < titres.length; j++) { if (t.num && titres[j].num.startsWith(t.num + '.')) t.enfants.push(titres[j]); else break; } });
+    titres.forEach(t => {
+      const sous = items.filter(x => x.titre === t);
+      const ret = sous.filter(x => (x.role === 'ligne' || x.role === 'ouvrage') && x.retenu).length;
+      const non = sous.filter(x => (x.role === 'ligne' || x.role === 'ouvrage') && !x.retenu).length;
+      const com = sous.filter(x => x.role === 'commentaire').length;
+      t.propre = ret > 0 || (non === 0 && com > 0);
+    });
+    titres.forEach(t => { t.retenu = t.propre || t.enfants.some(e => e.propre); });
+    const somme = t => items.filter(x => (x.titre === t || t.enfants.includes(x.titre)) && (x.role === 'ligne' || x.role === 'ouvrage') && x.retenu).reduce((s, x) => s + (x.m || 0), 0);
+    items.forEach((x, i) => {
+      if (x.role === 'composant') x.retenu = !!(x.ouvrage && x.ouvrage.retenu);
+      else if (x.role === 'commentaire') x.retenu = !x.titre || x.titre.retenu;
+      else if (x.role === 'saut') x.retenu = false;
+      else if (x.role === 'total') {
+        if (!x.sousTotal) { x.retenu = true; return; }
+        const lib = cleTitre(x.desc.replace(/^\s*sous[- ]?total\s*:?\s*/i, ''));
+        const avant = titres.filter(t => items.indexOf(t) < i);
+        const t = (lib && [...avant].reverse().find(t => t.cle && (t.cle.startsWith(lib.slice(0, 18)) || lib.startsWith(t.cle.slice(0, 18))))) || x.titre;
+        x.cible = t; x.retenu = t ? t.retenu : true; x.valeur = t ? somme(t) : x.m;
+      }
+    });
+    return items;
+  }
+
   function renderLignesCommandeClient(lignes, opts = {}) {
     if (!lignes || !lignes.length) return '<div style="color:#aaa;font-size:11px;padding:6px 4px">Aucune ligne de détail sur cette commande.</div>';
     const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
     const num = v => (v === undefined || v === null || v === '') ? null : Number(String(v).replace(',', '.'));
-    const eur = n => n === null || isNaN(n) ? '' : n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+    const eur = n => n === null || n === undefined || isNaN(n) ? '' : n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
     const qteTxt = q => q === null || isNaN(q) || q === 0 ? '' : q.toLocaleString('fr-FR', { maximumFractionDigits: 3 });
     const th = (t, al) => `<th style="text-align:${al || 'left'};padding:5px 6px;font-size:10px;color:#fff;background:#4a5240;font-weight:700;white-space:nowrap">${t}</th>`;
     // Ancien format regroupé (une ligne par commande, articles séparés par des retours à la ligne)
@@ -19927,53 +19985,69 @@
       const tot = lignes.reduce((s, l) => s + (num(l['Montant HT']) || 0), 0);
       return `<table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:12px"><tr>${th('Désignation')}</tr>
         ${lignes.map(l => String(l['Description'] || '').split('\n').filter(Boolean).map(t => `<tr><td style="padding:4px 6px;border-bottom:1px solid #eee">${esc(t)}</td></tr>`).join('')).join('')}</table>
-        <div style="display:flex;justify-content:flex-end;margin-top:8px"><div style="min-width:220px;border:1.5px solid #4a5240;border-radius:6px;padding:6px 10px;font-size:12px;display:flex;justify-content:space-between;font-weight:800"><span>Total HT</span><span>${eur(opts.montantHT ?? tot)}</span></div></div>`;
+        <div style="display:flex;justify-content:flex-end;margin-top:8px"><div style="min-width:220px;border:1.5px solid #4a5240;border-radius:6px;padding:6px 10px;font-size:12px;display:flex;justify-content:space-between;font-weight:800"><span>Total HT</span><span>${eur(tot)}</span></div></div>`;
     }
-    const tri = [...lignes].sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
-    const imprimees = tri.filter(l => l['Masque'] !== true);
-    const nbMasquees = tri.length - imprimees.length;
-    const estTotal = t => /^(sous[- ]?total|total|tva|remise|acompte|net a payer|report)/i.test(normTexte(t));
-    const estTitre = l => { try { return estLigneTitreCommande(l); } catch (e) { return false; } };
+    const nbMasquees = lignes.filter(l => l['Masque'] === true).length;
+    const items = classerLignesCommandeClient(lignes);
+    const td = (v, st) => `<td style="padding:4px 6px;border-bottom:1px solid #eee;vertical-align:top;${st || ''}">${v}</td>`;
+    const ligneArticle = (x, attenue) => `<tr${attenue ? ' style="color:#999"' : ''}>
+        ${td(esc(x.ref), 'font-size:10px;color:#888;white-space:nowrap')}
+        ${td(esc(x.desc), 'font-size:11px;white-space:pre-line;' + (x.role === 'commentaire' ? 'color:#666;font-style:italic' : ''))}
+        ${td(qteTxt(x.q), 'font-size:11px;text-align:right;white-space:nowrap')}
+        ${td(x.q ? esc(x.l['Unite'] || '') : '', 'font-size:10px;color:#666;white-space:nowrap')}
+        ${td(x.q && x.m ? eur(x.m / x.q) : '', 'font-size:11px;text-align:right;white-space:nowrap')}
+        ${td(x.m ? eur(x.m) : '', 'font-size:11px;text-align:right;white-space:nowrap;font-weight:700')}</tr>`;
+    // Détail du chiffrage d'un ouvrage (temps prévu, matériel) : menu déroulant
+    const detailChiffrage = (x, attenue) => !(x.comps || []).length ? '' : `<tr><td></td><td colspan="5" style="padding:0 6px 4px;border-bottom:1px solid #eee">
+        <details onclick="event.stopPropagation()"><summary style="cursor:pointer;font-size:10px;color:#8b6340;font-weight:700;list-style:none">▸ Détail du chiffrage (${x.comps.length})</summary>
+        <table style="width:100%;border-collapse:collapse;margin:3px 0 2px;background:#faf7f2;font-size:10px;${attenue ? 'color:#999' : 'color:#666'}">
+          ${x.comps.map(k => `<tr><td style="padding:2px 6px;white-space:nowrap;color:#999">${esc(k.ref)}</td><td style="padding:2px 6px">${esc(k.desc)}</td><td style="padding:2px 6px;text-align:right;white-space:nowrap">${qteTxt(k.q)} ${k.q ? esc(k.l['Unite'] || '') : ''}</td><td style="padding:2px 6px;text-align:right;white-space:nowrap">${k.q && k.m ? eur(k.m / k.q) : ''}</td><td style="padding:2px 6px;text-align:right;white-space:nowrap">${k.m ? eur(k.m) : ''}</td></tr>`).join('')}
+        </table></details></td></tr>`;
     let html = '', totalHT = 0, sousTotal = 0, chapitre = null, nbPrixChap = 0, aSousTotalEBP = false;
     const fermerChapitre = () => {
       if (chapitre && nbPrixChap > 1 && !aSousTotalEBP) html += `<tr><td></td><td colspan="4" style="padding:4px 6px;text-align:right;font-size:11px;font-weight:700;color:#4a5240;border-bottom:1px solid #ddd">Sous-total ${esc(chapitre).slice(0, 60)}</td><td style="padding:4px 6px;text-align:right;font-size:11px;font-weight:800;color:#4a5240;border-bottom:1px solid #ddd;white-space:nowrap">${eur(sousTotal)}</td></tr>`;
       sousTotal = 0; nbPrixChap = 0; aSousTotalEBP = false;
     };
-    imprimees.forEach(l => {
-      const desc = String(l['Description'] || '').trim();
-      const ref = String(l['Reference'] || '').trim();
-      const q = num(l['Quantite']), m = num(l['Montant HT']);
-      if (estTitre(l)) {
-        fermerChapitre(); chapitre = desc;
-        html += `<tr><td colspan="6" style="padding:7px 6px 5px;font-size:12px;font-weight:800;color:var(--gris);background:#f1ede4;border-bottom:1px solid #ddd5c5;white-space:pre-line">${esc(desc)}</td></tr>`;
+    items.forEach(x => {
+      if (!x.retenu || x.role === 'composant') return;
+      if (x.role === 'titre') {
+        fermerChapitre(); chapitre = x.desc;
+        html += `<tr><td colspan="6" style="padding:7px 6px 5px;font-size:12px;font-weight:800;color:var(--gris);background:#f1ede4;border-bottom:1px solid #ddd5c5;white-space:pre-line">${esc(x.desc)}</td></tr>`;
         return;
       }
-      if (estTotal(desc)) {
-        if (/^sous[- ]?total/i.test(normTexte(desc))) aSousTotalEBP = true;
-        html += `<tr><td></td><td colspan="4" style="padding:4px 6px;text-align:right;font-size:11px;font-weight:700;color:#4a5240">${esc(desc)}</td><td style="padding:4px 6px;text-align:right;font-size:11px;font-weight:800;color:#4a5240;white-space:nowrap">${m ? eur(m) : ''}</td></tr>`;
+      if (x.role === 'total') {
+        if (x.sousTotal) aSousTotalEBP = true;
+        html += `<tr><td></td><td colspan="4" style="padding:4px 6px;text-align:right;font-size:11px;font-weight:700;color:#4a5240">${esc(x.desc)}</td><td style="padding:4px 6px;text-align:right;font-size:11px;font-weight:800;color:#4a5240;white-space:nowrap">${eur(x.sousTotal ? x.valeur : x.m)}</td></tr>`;
         return;
       }
-      if (m !== null && !isNaN(m) && m !== 0) { totalHT += m; sousTotal += m; nbPrixChap++; }
-      const pu = q && m ? m / q : null;
-      const commentaire = !ref && !q && !m;
-      html += `<tr>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:10px;color:#888;white-space:nowrap;vertical-align:top">${esc(ref)}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:11px;white-space:pre-line;${commentaire ? 'color:#666;font-style:italic' : ''}">${esc(desc)}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:11px;text-align:right;white-space:nowrap;vertical-align:top">${qteTxt(q)}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:10px;color:#666;white-space:nowrap;vertical-align:top">${q ? esc(l['Unite'] || '') : ''}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:11px;text-align:right;white-space:nowrap;vertical-align:top">${pu !== null ? eur(pu) : ''}</td>
-        <td style="padding:4px 6px;border-bottom:1px solid #eee;font-size:11px;text-align:right;white-space:nowrap;font-weight:700;vertical-align:top">${m ? eur(m) : ''}</td></tr>`;
+      if (x.m && !isNaN(x.m)) { totalHT += x.m; sousTotal += x.m; nbPrixChap++; }
+      html += ligneArticle(x) + detailChiffrage(x);
     });
     fermerChapitre();
-    const ht = (opts.montantHT !== undefined && opts.montantHT !== null && !isNaN(opts.montantHT)) ? Number(opts.montantHT) : totalHT;
-    const ecart = Math.abs(ht - totalHT) > 0.5;
+    // Postes non retenus (quantité 0) : repliés, pour voir ce qui était prévu
+    const nonRetenus = items.filter(x => (x.role === 'ligne' || x.role === 'ouvrage') && !x.retenu);
+    let htmlNon = '';
+    if (nonRetenus.length) {
+      let tPrec = undefined;
+      nonRetenus.forEach(x => {
+        if (x.titre !== tPrec) { tPrec = x.titre; if (x.titre) htmlNon += `<tr><td colspan="6" style="padding:5px 6px 3px;font-size:11px;font-weight:800;color:#999;background:#f6f4ef">${esc(x.titre.desc)}</td></tr>`; }
+        htmlNon += ligneArticle(x, true) + detailChiffrage(x, true);
+      });
+      htmlNon = `<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#999;list-style:none">▸ Postes non retenus par le client (${nonRetenus.length}) — quantité 0, non comptés</summary>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:4px;min-width:520px">${htmlNon}</table></div></details>`;
+    }
+    // Total HT = lignes retenues (le montant EBP n'est cité qu'en cas d'écart)
+    const htEbp = (opts.montantHT !== undefined && opts.montantHT !== null && !isNaN(opts.montantHT)) ? Number(opts.montantHT) : null;
+    const ht = totalHT;
+    const ecart = htEbp !== null && Math.abs(htEbp - totalHT) > 0.5;
     const tva = ht * 0.2;
     const ligneTot = (lib, v, fort) => `<div style="display:flex;justify-content:space-between;gap:20px;padding:4px 10px;font-size:12px;${fort ? 'font-weight:800;background:#4a5240;color:#fff' : 'border-bottom:1px solid #eee'}"><span>${lib}</span><span style="white-space:nowrap">${eur(v)}</span></div>`;
     return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;margin-top:6px;min-width:520px">
         <tr>${th('Réf.')}${th('Désignation')}${th('Qté', 'right')}${th('U')}${th('PU HT', 'right')}${th('Montant HT', 'right')}</tr>${html}</table></div>
       <div style="display:flex;justify-content:flex-end;margin-top:10px"><div style="min-width:240px;border:1.5px solid #4a5240;border-radius:6px;overflow:hidden">
         ${ligneTot('Total HT', ht)}${ligneTot('TVA 20 %', tva)}${ligneTot('Total TTC', ht + tva, true)}</div></div>
-      <div style="font-size:10px;color:#999;margin-top:4px;text-align:right">TVA et TTC calculés à 20 % (indicatif).${ecart ? ` Total des lignes : ${eur(totalHT)} (écart avec le montant de la commande EBP).` : ''}${nbMasquees ? ` ${nbMasquees} ligne(s) masquée(s) dans EBP non affichée(s).` : ''}</div>`;
+      <div style="font-size:10px;color:#999;margin-top:4px;text-align:right">TVA et TTC calculés à 20 % (indicatif).${ecart ? ` Montant de la commande dans EBP : ${eur(htEbp)}.` : ''}${nbMasquees ? ` ${nbMasquees} ligne(s) masquée(s) dans EBP non affichée(s).` : ''}</div>
+      ${htmlNon}`;
   }
 
   function toggleDetailCommandeClient(id) {
@@ -23187,6 +23261,7 @@
     const diag = { commandes: cmds.map(r => r['Numero commande'] || ('#' + r.id)), lignes: 0, regroupees: 0, apercu: [] };
     _diagPhases[c.id] = diag;
     if (!cmds.length) return;
+    try { await chargerCatalogueLocal(); } catch (e) {} // repérage des ouvrages EBP
     const titres = [], vus = new Set();
     // V68 : « detail » = tout le texte de la section (lignes de la commande sous le titre)
     const ajouterTitre = (nomBrut, pose, detail) => {
@@ -23210,7 +23285,9 @@
       lignes.sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
       if (diag.apercu.length < 25) diag.apercu.push(...lignes.slice(0, 25 - diag.apercu.length).map(l => ({ ref: l['Reference'] || '', desc: String(l['Description'] || '').split('\n')[0].slice(0, 70), qte: l['Quantite'], mt: l['Montant HT'] })));
       // V69 : on suit la commande IMPRIMÉE — les lignes masquées (coût de revient) sont ignorées
-      const detaillees = lignes.filter(l => !String(l['Description'] || '').includes('\n') && l['Masque'] !== true);
+      // V127 : seulement ce qui est retenu par le client (quantité ≠ 0) et sans le détail des ouvrages (temps prévu, matériel)
+      const detaillees = classerLignesCommandeClient(lignes.filter(l => !String(l['Description'] || '').includes('\n')))
+        .filter(x => x.retenu && x.role !== 'composant' && x.role !== 'saut').map(x => x.l);
       diag.masquees = (diag.masquees || 0) + lignes.filter(l => l['Masque'] === true).length;
       if (detaillees.length > 1) {
         // V61 : si le devis est structuré en sections numérotées (« 1 ) … », « 1/3 ) … »), une phase =
@@ -24433,6 +24510,33 @@
   }
 
   // ── Onglet Gestion › 🚩 Jalons : matrice chantiers × jalons ──
+  // V127 : recalcul des phases de tous les chantiers en cours (retire les phases issues de postes non retenus
+  // ou du détail des ouvrages). Lancé une fois automatiquement pour un gestionnaire, et par le bouton ⟳ Phases.
+  let _recalculPhasesEnCours = false;
+  async function recalculerPhasesTousChantiers(btn, silencieux) {
+    if (_recalculPhasesEnCours || !peutValiderJalons()) return;
+    if (!silencieux && !confirm('Relire les commandes clients de tous les chantiers en cours et mettre à jour leurs phases ?\n\nLes phases issues de postes non retenus (quantité 0) ou du détail des ouvrages sont retirées. Les phases ajoutées à la main sont conservées.')) return;
+    _recalculPhasesEnCours = true;
+    const lib = btn ? btn.textContent : '';
+    const avant = _jalonsChantierId;
+    let n = 0;
+    try {
+      await chargerCommandesJalons(true);
+      const liste = (chantiersGestionCache || []).filter(c => { const st = c['Statue']?.value || c['Statue'] || ''; return !estStatutCloture(st) && st !== 'Terminé' && commandesClientsDuChantier(c).length; });
+      for (const c of liste) {
+        n++; if (btn) btn.textContent = `⏳ ${n}/${liste.length}`;
+        _jalonsChantierId = c.id;
+        try { await synchroniserPhasesFab(c); } catch (e) {}
+      }
+      try { localStorage.setItem('gb_phases_v127', '1'); } catch (e) {}
+    } finally {
+      _jalonsChantierId = avant; _recalculPhasesEnCours = false;
+      if (btn) btn.textContent = lib;
+    }
+    renderTableauJalons();
+    try { await rafraichirMesJalonsOuverts(); } catch (e) {}
+    if (!silencieux) alert(`✅ Phases mises à jour sur ${n} chantier(s).`);
+  }
   async function chargerTableauJalons() {
     const el = document.getElementById('jalons-tableau');
     el.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
@@ -24442,6 +24546,9 @@
       memoriserCaChantiers(chantiersGestionCache);
       detecterChampJalons(chantiersGestionCache);
       renderTableauJalons();
+      // V127 : une fois, recalcul automatique des phases (postes non retenus et détail des ouvrages retirés)
+      let fait = false; try { fait = localStorage.getItem('gb_phases_v127') === '1'; } catch (e) {}
+      if (!fait && peutValiderJalons()) recalculerPhasesTousChantiers(document.getElementById('btn-recalc-phases'), true);
     } catch (e) { el.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement : ' + echapperHtmlNote(e.message) + '</div>'; }
   }
   function renderTableauJalons() {
@@ -28331,6 +28438,7 @@
           <option value="">Tous</option><option value="retard">🔴 Avec un retard</option><option value="bloque">⛔ Avec un blocage</option><option value="moi">👤 Où c'est à moi</option>
         </select>
         <button onclick="ouvrirTitulairesJalons()" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer" id="btn-gabarit-jalons">⚙️ Gabarit des responsables</button>
+        <button onclick="recalculerPhasesTousChantiers(this)" id="btn-recalc-phases" title="Relire les commandes clients et mettre à jour les phases de tous les chantiers" style="padding:7px 10px;border:1px solid #ddd;border-radius:8px;font-size:12px;background:#fff;cursor:pointer">⟳ Phases</button>
       </div>
     </div>
   </div>
