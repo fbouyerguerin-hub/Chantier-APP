@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V135';
+  const APP_VERSION = 'V136';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -19907,6 +19907,7 @@
         });
       }
       renderCommandesClientsListe();
+      rafraichirTerminesEbpSiBesoin().then(ok => { if (ok) renderCommandesClientsListe(); });
       // V126 : catalogue (repérage des ouvrages EBP) puis réaffichage
       if (!_catLocal) chargerCatalogueLocal().then(() => renderCommandesClientsListe()).catch(() => {});
     } catch(e) {
@@ -20072,7 +20073,9 @@
     try {
       const q = regle && regle.champ && regle.valeurs ? `?champ=${encodeURIComponent(regle.champ)}&valeurs=${encodeURIComponent(regle.valeurs)}` : '';
       _statEbp = { d: await appelSyncWorker('/sync-chantiers-statut' + q, 180000), regle };
+      memoriserTerminesEbp(_statEbp.d);
       afficherStatutsChantiersEbp();
+      if (currentNav === 'commandes-clients') renderCommandesClientsListe();
     } catch (e) { alert('❌ Lecture EBP : ' + e.message + '\n\n(Worker v10.1 déployé ?)'); }
     finally { if (btn) { btn.disabled = false; btn.textContent = lib; } }
   }
@@ -20128,10 +20131,31 @@
     } catch (e) { alert('❌ ' + e.message); if (btn) { btn.disabled = false; btn.textContent = 'Réessayer'; } }
   }
 
+  // V136 : chantiers terminés dans EBP (n° CH), mémorisés : servent aussi aux commandes dont le chantier
+  // n'existe pas dans l'appli (anciens chantiers EBP)
+  let _terminesEbp = (() => { try { const o = JSON.parse(localStorage.getItem('gb_termines_ebp') || 'null'); return o && Array.isArray(o.n) ? { set: new Set(o.n.map(String)), t: o.t || 0 } : { set: new Set(), t: 0 }; } catch (e) { return { set: new Set(), t: 0 }; } })();
+  function memoriserTerminesEbp(d) {
+    if (!d || !Array.isArray(d.termines_numeros)) return;
+    _terminesEbp = { set: new Set(d.termines_numeros.map(String)), t: Date.now() };
+    try { localStorage.setItem('gb_termines_ebp', JSON.stringify({ n: d.termines_numeros, t: _terminesEbp.t })); } catch (e) {}
+  }
+  async function rafraichirTerminesEbpSiBesoin() {
+    if (!estProfilPrix() || Date.now() - _terminesEbp.t < 12 * 3600000) return false;
+    const r = regleStatutEbp();
+    const q = r && r.champ && r.valeurs ? `?champ=${encodeURIComponent(r.champ)}&valeurs=${encodeURIComponent(r.valeurs)}` : '';
+    try { memoriserTerminesEbp(await appelSyncWorker('/sync-chantiers-statut' + q, 120000)); return true; } catch (e) { return false; }
+  }
+  function numeroChantierCommande(r) {
+    const txt = [r['Numero chantier'], r['Designation'], r['Reference complete'], ...(r['Chantier'] || []).map(c => c.value)].map(v => extraireValeurChamp(v, '') || '').join(' ');
+    const m = txt.match(/\bCHA?\s*0*(\d{2,})/i);
+    return m ? m[1] : null;
+  }
   let _cmdCliStatutChantier = new Map();
   function estCommandeClientTerminee(r) {
     const ch = r['Chantier'] || [];
-    return ch.length > 0 && ch.every(c => estChantierFini(_cmdCliStatutChantier.get(c.id) || ''));
+    if (ch.length && ch.every(c => estChantierFini(_cmdCliStatutChantier.get(c.id) || ''))) return true;
+    const n = numeroChantierCommande(r);   // chantier terminé dans EBP (même s'il n'est pas, ou pas encore, Terminé dans l'appli)
+    return !!(n && _terminesEbp.set.has(n));
   }
   // V131 : relecture complète des commandes clients EBP (statuts), par lots, avec le Worker v9.9
   async function relireStatutsCommandesClients(btn) {
@@ -20194,7 +20218,11 @@
     });
     { const o = document.getElementById('cmdcli-onglets');
       if (o) o.querySelectorAll('button').forEach(b => { const n = b.dataset.o === 'encours' ? _commandesClientsCache.length - nbTerm : b.dataset.o === 'terminees' ? nbTerm : _commandesClientsCache.length; b.querySelector('span').textContent = ' (' + n + ')'; }); }
-    if (resumeEl) resumeEl.textContent = resultats.length + ' commande(s) client' + (_cmdCliOnglet === 'encours' ? ` — ${nbTerm} autre(s) sur chantier Terminé ou Clôturé (onglet Terminées)` : '');
+    if (resumeEl) {
+      const sansNum = resultats.filter(r => !numeroChantierCommande(r) && !(r['Chantier'] || []).length).length;
+      resumeEl.textContent = resultats.length + ' commande(s) client' + (_cmdCliOnglet === 'encours' ? ` — ${nbTerm} autre(s) sur chantier terminé (onglet Terminées)` : '')
+        + (sansNum ? ` · ${sansNum} sans n° de chantier (restent en cours)` : '') + (_terminesEbp.t ? '' : ' · statuts EBP pas encore lus : « 🏗 Statuts chantiers EBP »');
+    }
     listeEl.innerHTML = resultats.length ? resultats.map(r => {
       const dateLabel = r['Date commande'] ? new Date(r['Date commande'] + 'T12:00:00').toLocaleDateString('fr-FR') : '—';
       const montant = (r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '')
