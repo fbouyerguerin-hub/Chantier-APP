@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V2';
+  const APP_VERSION = 'V4';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -22518,11 +22518,112 @@
     }
   }
 
+  // ── V3 : CHIFFRE D'AFFAIRES PRÉVISIONNEL (Gestion, Administrateur / Gestionnaire) ──
+  // Pour chaque affaire du plan de charge : montant HT des commandes clients EBP du chantier
+  // (à défaut « Prix de vente HT » du chantier), réparti À PARTS ÉGALES sur les mois couverts par la pose.
+  let _caPrev = null, _caPrevAnnee = new Date().getFullYear(), _caPrevOuverts = new Set(), _caPrevMoisSel = null;
+  async function chargerCaPrevisionnel(force) {
+    const z = document.getElementById('caprev-contenu'); if (!z) return;
+    if (_caPrev && !force) { renderCaPrevisionnel(); return; }
+    z.innerHTML = '<div class="feuille-loading">⏳ Chargement…</div>';
+    try {
+      const B = t => `https://api.baserow.io/api/database/rows/table/${t}/?user_field_names=true&size=200`;
+      const [affaires, collabs, cmdCli, chantiers] = await Promise.all([
+        fetchToutesLesPages(B(TABLE_PLAN_CHARGE)), fetchToutesLesPages(B(TABLE_COLLABS_ADMIN)),
+        fetchToutesLesPages(B(TABLE_COMMANDES_CLIENTS)), fetchToutesLesPages(B(TABLE_CHANTIERS_ADMIN))
+      ]);
+      const chParId = new Map(chantiers.map(c => [c.id, c]));
+      const numCh = s => { const m = String(s || '').match(/\bCHA?\s*0*(\d{2,})/i); return m ? m[1] : null; };
+      // Montant des commandes clients par chantier (lien, sinon n° CH)
+      const parChantier = new Map(), parNumero = new Map();
+      cmdCli.forEach(r => {
+        const mt = Number(r['Montant HT']) || 0; if (!mt) return;
+        const liens = r['Chantier'] || [];
+        if (liens.length) liens.forEach(l => parChantier.set(l.id, (parChantier.get(l.id) || 0) + mt / liens.length));
+        else { const n = numeroChantierCommande(r); if (n) parNumero.set(n, (parNumero.get(n) || 0) + mt); }
+      });
+      const lignes = [], nonPlanifies = [];
+      affaires.forEach(a => {
+        const lien = (a['Chantier'] || [])[0]; if (!lien) return;
+        const ch = chParId.get(lien.id);
+        if (ch && (estChantierFini(ch['Statue']) || estChantierTermineEbp(ch))) return;
+        const n = numCh(lien.value);
+        let montant = parChantier.get(lien.id) || (n ? parNumero.get(n) : 0) || 0, source = 'Commande client';
+        if (!montant && ch && Number(ch[CHAMP_PRIX_VENTE]) > 0) { montant = Number(ch[CHAMP_PRIX_VENTE]); source = 'Prix de vente du chantier'; }
+        const per = (() => { try { return calculerPeriodesAffaire(a, collabs); } catch (e) { return null; } })();
+        const pose = per && per['Pose'];
+        if (!pose || !pose.debut) { nonPlanifies.push({ nom: lien.value, montant, source, raison: 'pas de date de pose' }); return; }
+        if (!montant) { nonPlanifies.push({ nom: lien.value, montant: 0, source: '', raison: 'aucun montant (commande client ou prix de vente)' }); return; }
+        const mois = []; let m = pose.debut.slice(0, 7); const fin = (pose.fin || pose.debut).slice(0, 7);
+        while (m <= fin && mois.length < 60) { mois.push(m); const [y, mm] = m.split('-').map(Number); m = mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, '0')}`; }
+        lignes.push({ nom: lien.value, chantierId: lien.id, montant, source, debut: pose.debut, fin: pose.fin || pose.debut, mois, parMois: montant / mois.length });
+      });
+      _caPrev = { lignes, nonPlanifies, t: Date.now() };
+      renderCaPrevisionnel();
+    } catch (e) { z.innerHTML = '<div class="feuille-empty">❌ Erreur de chargement : ' + echapperHtmlNote(e.message) + '</div>'; }
+  }
+  function changerAnneeCaPrev(d) { _caPrevAnnee += d; renderCaPrevisionnel(); }
+  function toggleMoisCaPrev(m) { if (_caPrevOuverts.has(m)) _caPrevOuverts.delete(m); else _caPrevOuverts.add(m); renderCaPrevisionnel(); }
+  function renderCaPrevisionnel() {
+    const z = document.getElementById('caprev-contenu'); if (!z || !_caPrev) return;
+    const esc = echapperHtmlNote, eur = n => (n || 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 }) + ' €';
+    const lab = document.getElementById('caprev-annee'); if (lab) lab.textContent = _caPrevAnnee;
+    const noms = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    const moisAnnee = noms.map((_, i) => `${_caPrevAnnee}-${String(i + 1).padStart(2, '0')}`);
+    const parMois = moisAnnee.map(m => ({ m, l: _caPrev.lignes.filter(x => x.mois.includes(m)) })).map(o => ({ ...o, total: o.l.reduce((s, x) => s + x.parMois, 0) }));
+    const totalAn = parMois.reduce((s, o) => s + o.total, 0), max = Math.max(1, ...parMois.map(o => o.total));
+    const moisCourant = dateYMD(new Date()).slice(0, 7);
+    z.innerHTML = `<div style="background:#fff;border:1.5px solid #ddd5c5;border-radius:12px;padding:10px 12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-size:10px;color:var(--gris-moyen);text-transform:uppercase;font-weight:700">CA prévisionnel ${_caPrevAnnee}</div><div style="font-size:20px;font-weight:800;color:var(--vert)">${eur(totalAn)}</div></div>
+        <div style="font-size:11px;color:#888;text-align:right">${new Set(parMois.flatMap(o => o.l.map(x => x.nom))).size} affaire(s)<br>moyenne ${eur(totalAn / 12)} / mois</div></div>
+      ${(() => {
+        // V4 : histogramme vertical ; un clic sur une barre affiche le détail du mois
+        const k = v => v >= 1000 ? Math.round(v / 1000) + ' k€' : v ? Math.round(v) + ' €' : '';
+        let sel = _caPrevMoisSel && _caPrevMoisSel.startsWith(_caPrevAnnee + '-') ? _caPrevMoisSel
+          : (parMois.find(o => o.m === moisCourant) ? moisCourant : (parMois.find(o => o.total) || parMois[0]).m);
+        _caPrevMoisSel = sel;
+        const o = parMois.find(x => x.m === sel);
+        const barres = parMois.map((x, i) => `<div onclick="_caPrevMoisSel='${x.m}';renderCaPrevisionnel()" title="${noms[i]} : ${eur(x.total)}" style="flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;cursor:pointer">
+            <div style="font-size:9px;font-weight:800;color:${x.m === sel ? 'var(--vert)' : '#888'};white-space:nowrap;margin-bottom:2px">${k(x.total)}</div>
+            <div style="width:72%;height:${x.total / max * 100}%;min-height:${x.total ? 3 : 0}px;background:${x.m === sel ? 'var(--vert)' : x.m === moisCourant ? 'var(--beige)' : '#8fb38a'};border-radius:4px 4px 0 0"></div>
+          </div>`).join('');
+        const etiquettes = parMois.map((x, i) => `<div onclick="_caPrevMoisSel='${x.m}';renderCaPrevisionnel()" style="flex:1;min-width:0;text-align:center;font-size:10px;font-weight:${x.m === sel ? 800 : 600};color:${x.m === sel ? 'var(--vert)' : 'var(--gris-moyen)'};cursor:pointer">${['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'][i]}</div>`).join('');
+        return `<div style="background:#fff;border:1.5px solid #ddd5c5;border-radius:12px;padding:10px 8px 6px">
+            <div style="display:flex;gap:3px;align-items:flex-end;height:190px;border-bottom:1.5px solid #ddd5c5;padding-bottom:1px">${barres}</div>
+            <div style="display:flex;gap:3px;margin-top:4px">${etiquettes}</div></div>
+          <div style="background:#fff;border:1px solid #e5ded0;border-radius:10px;padding:8px 10px;margin-top:8px">
+            <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:800;color:var(--gris)"><span>${noms[Number(sel.slice(5)) - 1]} ${_caPrevAnnee}</span><span>${eur(o.total)}</span></div>
+            ${o.l.length ? `<div style="margin-top:6px;font-size:11px;color:var(--gris)">${[...o.l].sort((a, b) => b.parMois - a.parMois).map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px dotted #eee">
+              <span>${esc(x.nom)} <span style="color:#999">· pose ${x.debut.split('-').reverse().join('/')} → ${x.fin.split('-').reverse().join('/')} · ${eur(x.montant)} ÷ ${x.mois.length} mois${x.source !== 'Commande client' ? ' · ' + esc(x.source) : ''}</span></span>
+              <b style="white-space:nowrap">${eur(x.parMois)}</b></div>`).join('')}</div>` : '<div style="font-size:11px;color:#999;margin-top:4px">Aucune pose prévue ce mois.</div>'}
+          </div>`;
+      })()}
+      ${_caPrev.nonPlanifies.length ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:11px;font-weight:800;color:#a35a00;list-style:none">▸ ${_caPrev.nonPlanifies.length} affaire(s) non comptée(s)</summary>
+        <div style="font-size:11px;color:#666;margin-top:4px">${_caPrev.nonPlanifies.map(x => `<div style="padding:3px 0;border-top:1px dotted #eee">${esc(x.nom)} <span style="color:#999">— ${esc(x.raison)}${x.montant ? ' · ' + eur(x.montant) : ''}</span></div>`).join('')}</div></details>` : ''}
+      <div style="font-size:10px;color:#999;margin-top:8px">Montant HT des commandes clients EBP du chantier (à défaut son prix de vente), divisé par le nombre de mois couverts par la pose dans le plan de charge. Chantiers terminés exclus.</div>`;
+  }
+  async function exportCaPrevisionnel() {
+    if (!_caPrev || typeof ExcelJS === 'undefined') return;
+    const wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('CA prévisionnel ' + _caPrevAnnee);
+    const moisAnnee = Array.from({ length: 12 }, (_, i) => `${_caPrevAnnee}-${String(i + 1).padStart(2, '0')}`);
+    ws.addRow(['Affaire', 'Montant HT', 'Source', 'Début pose', 'Fin pose', 'Nb mois', ...moisAnnee.map(m => m.split('-').reverse().join('/')), 'Total ' + _caPrevAnnee]).font = { bold: true };
+    _caPrev.lignes.filter(x => x.mois.some(m => moisAnnee.includes(m))).forEach(x => {
+      const v = moisAnnee.map(m => x.mois.includes(m) ? Math.round(x.parMois * 100) / 100 : null);
+      ws.addRow([x.nom, x.montant, x.source, x.debut.split('-').reverse().join('/'), x.fin.split('-').reverse().join('/'), x.mois.length, ...v, v.reduce((s, n) => s + (n || 0), 0)]);
+    });
+    const n = ws.rowCount;
+    const tot = ws.addRow(['TOTAL', null, null, null, null, null, ...moisAnnee.map((_, i) => ({ formula: `SUM(${ws.getColumn(7 + i).letter}2:${ws.getColumn(7 + i).letter}${n})` })), { formula: `SUM(${ws.getColumn(19).letter}2:${ws.getColumn(19).letter}${n})` }]);
+    tot.font = { bold: true };
+    ws.columns.forEach((c, i) => { c.width = i === 0 ? 40 : i === 2 ? 22 : 13; if (i === 1 || i >= 6) c.numFmt = '#,##0 "€"'; });
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf])); a.download = `CA_previsionnel_${_caPrevAnnee}.xlsx`; a.click(); URL.revokeObjectURL(a.href);
+  }
+
   // ── GESTION ADMIN ──
   const TABLE_CONGES_ADMIN = '1022869';
 
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','caprev','export'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -27389,7 +27490,7 @@
   // Override switchGestionTab pour charger les données
   const _origSwitchGestionTab = switchGestionTab;
   function switchGestionTab(tab) {
-    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','export','tv'].forEach(t => {
+    ['utilisateurs','chantiers','conges-admin','conges-groupe','planning-admin','rentabilite','caprev','export','tv'].forEach(t => {
       document.getElementById('gestion-' + t).style.display = t === tab ? 'block' : 'none';
       const btn = document.getElementById('tab-g-' + t);
       if (btn) btn.classList.toggle('active', t === tab);
@@ -27400,6 +27501,7 @@
     if (tab === 'planning-admin') loadPlanningAdmin();
     if (tab === 'chantiers') loadChantiersGestion();
     if (tab === 'rentabilite') { if (!_rentaDonnees) chargerRentabilite(_rentaPeriode); else renderRentabilite(); }
+    if (tab === 'caprev') chargerCaPrevisionnel(false);
     if (tab === 'tv') chargerGestionTV();
     if (tab === 'export') {
       try { afficherBasculesD1(); } catch (e) {}
@@ -27576,6 +27678,7 @@
     <button class="tab-btn" id="tab-g-conges-groupe" onclick="switchGestionTab('conges-groupe')" style="font-size:11px">👥 Saisie groupée</button>
     <button class="tab-btn" id="tab-g-planning-admin" onclick="switchGestionTab('planning-admin')" style="font-size:11px">📅 Planning</button>
     <button class="tab-btn" id="tab-g-rentabilite" onclick="switchGestionTab('rentabilite')" style="font-size:11px">💶 Renta</button>
+    <button class="tab-btn" id="tab-g-caprev" onclick="switchGestionTab('caprev')" style="font-size:11px">📈 CA prév.</button>
     <button class="tab-btn" id="tab-g-export" onclick="switchGestionTab('export')" style="font-size:11px">📥 Export</button>
     <button class="tab-btn" id="tab-g-tv" onclick="switchGestionTab('tv')" style="font-size:11px">📺 TV</button>
   </div>
@@ -27691,6 +27794,17 @@
   </div>
 
   <!-- EXPORT -->
+  <div id="gestion-caprev" style="display:none">
+    <div class="filtre-fige"><div style="display:flex;align-items:center;gap:8px;margin:0 16px 10px">
+      <div style="font-size:13px;font-weight:800;color:var(--gris);flex:1">📈 CA prévisionnel</div>
+      <button class="semaine-nav-btn" onclick="changerAnneeCaPrev(-1)">‹</button>
+      <div id="caprev-annee" style="font-size:14px;font-weight:800;color:var(--gris);min-width:44px;text-align:center"></div>
+      <button class="semaine-nav-btn" onclick="changerAnneeCaPrev(1)">›</button>
+      <button onclick="chargerCaPrevisionnel(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:5px 9px;cursor:pointer">🔄</button>
+      <button onclick="exportCaPrevisionnel()" style="background:var(--beige);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer">📥 Excel</button>
+    </div></div>
+    <div id="caprev-contenu" style="padding:0 16px 80px"></div>
+  </div>
   <div id="gestion-rentabilite" style="display:none">
   <div class="filtre-fige">
     <!-- V115 : bandeau compact (comme le plan de charge) : titre + vues + menus sur une ligne, filtres sur une ligne -->
