@@ -383,6 +383,8 @@
     <!-- Scan d'étiquette accessible depuis tous les écrans -->
     <button id="header-refresh-btn" class="header-btn" onclick="actualiserDepuisBaserow()" title="Actualiser les données" aria-label="Actualiser"
       style="display:none;margin-left:auto;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🔄</button>
+    <button id="header-recherche-btn" class="header-btn" onclick="ouvrirRechercheGlobale()" title="Rechercher dans l'appli" aria-label="Rechercher"
+      style="display:none;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🔍</button>
     <button id="header-jalons-btn" class="header-btn" onclick="ouvrirMesJalons()" title="Mes jalons" aria-label="Mes jalons"
       style="display:none;position:relative;margin-right:8px;background:rgba(255,255,255,.15);border:2px solid rgba(255,255,255,.35);border-radius:12px;width:46px;height:46px;font-size:20px;line-height:1;cursor:pointer;color:#fff;flex-shrink:0">🚩</button>
     <button id="header-scan-btn" class="header-btn" onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande, ligne ou article)" aria-label="Scanner"
@@ -769,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V141';
+  const APP_VERSION = 'V1';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1115,6 +1117,7 @@
     if (sectionBulles) sectionBulles.style.display = (connectedDroit === 'Gestionnaire' || connectedDroit === 'Administrateur') ? 'block' : 'none';
     const navCommandes = document.getElementById('nav-commandes');
     if (navCommandes) navCommandes.style.display = 'flex'; // Visible pour tous : réception atelier/chantier
+    { const br = document.getElementById('header-recherche-btn'); if (br) br.style.display = 'block'; } // V142
     const btnScanHeader = document.getElementById('header-scan-btn');
     if (btnScanHeader) btnScanHeader.style.display = 'block';
     const btnRefreshHeader = document.getElementById('header-refresh-btn');
@@ -2873,6 +2876,160 @@
     const inp = e.target && e.target.closest && e.target.closest('input[data-choix-chantier]');
     if (inp) { e.preventDefault(); inp.blur(); ouvrirChoixChantier(inp); }
   }, true);
+
+  // ── V142 : RECHERCHE GLOBALE (loupe du bandeau) ──
+  // Chantiers, commandes fournisseurs, articles du catalogue / stock, contacts du répertoire, collaborateurs
+  // et (Administrateur / Gestionnaire) commandes clients. Un clic ouvre directement l'élément.
+  let _rg = { charge: false, enCours: null, chantiers: [], cmds: [], contacts: [], collabs: [], cmdCli: [] };
+  async function chargerRechercheGlobale() {
+    if (_rg.charge) return;
+    if (_rg.enCours) return _rg.enCours;
+    _rg.enCours = (async () => {
+      const B = t => `https://api.baserow.io/api/database/rows/table/${t}/?user_field_names=true&size=200`;
+      const s = p => p.then(v => v, () => []);
+      const [ch, cmds, contacts, collabs, cmdCli] = await Promise.all([
+        s(obtenirIdsChantiersTermines().then(() => _chantiersTousCache || [])),
+        (_commandesCache || []).length ? Promise.resolve(_commandesCache) : s(fetchToutesLesPages(B(TABLE_COMMANDES_FOURNISSEURS))),
+        (typeof repertoireAccesComplet === 'function' && repertoireAccesComplet() && TABLE_REPERTOIRE && TABLE_REPERTOIRE !== 'A_COMPLETER')
+          ? ((_repertoireCache || []).length ? Promise.resolve(_repertoireCache) : s(fetchToutesLesPages(B(TABLE_REPERTOIRE)))) : Promise.resolve([]),
+        s(fetchToutesLesPages(B(TABLE_COLLABS_ADMIN))),
+        estProfilPrix() ? ((_commandesClientsCache || []).length ? Promise.resolve(_commandesClientsCache) : s(fetchToutesLesPages(B(TABLE_COMMANDES_CLIENTS)))) : Promise.resolve([]),
+        s(chargerCatalogueLocal()),
+        stockTablesConfigurees() && !_stockCharge ? s(chargerStock()) : Promise.resolve()
+      ]);
+      Object.assign(_rg, { chantiers: ch, cmds, contacts, collabs, cmdCli, charge: true, t: Date.now() });
+    })();
+    try { await _rg.enCours; } finally { _rg.enCours = null; }
+  }
+  function ouvrirRechercheGlobale() {
+    let m = document.getElementById('modal-recherche-globale');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'modal-recherche-globale';
+      m.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2400;align-items:flex-start;justify-content:center;padding:12px';
+      m.onclick = e => { if (e.target === m) fermerRechercheGlobale(true); };
+      m.innerHTML = `<div style="background:#f5f0e8;border-radius:16px;width:100%;max-width:620px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;margin-top:4vh">
+        <div style="display:flex;gap:8px;align-items:center;padding:12px;background:#fff;border-bottom:1px solid #eee">
+          <input type="search" id="rg-q" placeholder="🔍 Chantier, commande, article, contact, collaborateur…" oninput="programmerRechercheGlobale()" autocomplete="off" style="flex:1;min-width:0;border:1.5px solid var(--vert);border-radius:10px;padding:11px 12px;font-size:15px">
+          <button onclick="fermerRechercheGlobale(true)" style="background:none;border:none;font-size:22px;color:#999;cursor:pointer">✕</button>
+        </div>
+        <div id="rg-res" style="overflow-y:auto;padding:8px 12px 16px"></div></div>`;
+      document.body.appendChild(m);
+    }
+    m.style.display = 'flex';
+    { const b = document.getElementById('rg-retour'); if (b) b.style.display = 'none'; }
+    if (_rg.charge && Date.now() - (_rg.t || 0) > 300000) _rg.charge = false; // données relues toutes les 5 min
+    const inp = document.getElementById('rg-q');
+    setTimeout(() => inp.focus(), 50);
+    if (!_rg.charge) document.getElementById('rg-res').innerHTML = '<div class="feuille-loading">⏳ Préparation de la recherche…</div>';
+    chargerRechercheGlobale().then(() => renderRechercheGlobale());
+  }
+  function fermerRechercheGlobale(sansRetour) {
+    const m = document.getElementById('modal-recherche-globale'); if (m) m.style.display = 'none';
+    // V144 : après l'ouverture d'un résultat, un bouton permet de revenir à la recherche (même texte, mêmes menus)
+    let b = document.getElementById('rg-retour');
+    if (sansRetour || !(document.getElementById('rg-q')?.value || '').trim()) { if (b) b.style.display = 'none'; clearInterval(_rgSuivi); return; }
+    // V1 : si le résultat s'ouvre dans une fenêtre, la recherche revient d'elle-même quand on la ferme
+    const avant = fenetresOuvertesRG();
+    clearInterval(_rgSuivi);
+    setTimeout(() => {
+      const nouvelles = fenetresOuvertesRG().filter(x => !avant.includes(x));
+      if (!nouvelles.length) { afficherBoutonRetourRG(); return; }  // page (onglet) : bouton de retour
+      const debut = Date.now();
+      _rgSuivi = setInterval(() => {
+        if (Date.now() - debut > 3600000) { clearInterval(_rgSuivi); return; }
+        if (document.getElementById('modal-recherche-globale')?.style.display === 'flex') { clearInterval(_rgSuivi); return; }
+        if (!nouvelles.some(x => fenetreVisibleRG(x))) { clearInterval(_rgSuivi); ouvrirRechercheGlobale(); }
+      }, 300);
+    }, 700);
+  }
+  let _rgSuivi = null;
+  function fenetreVisibleRG(el) { if (!el || !el.isConnected) return false; const cs = getComputedStyle(el); return cs.display !== 'none' && cs.visibility !== 'hidden'; }
+  function fenetresOuvertesRG() {
+    return [...document.querySelectorAll('[id^="modal"], .modal-backdrop')].filter(el => el.id !== 'modal-recherche-globale' && fenetreVisibleRG(el)
+      && ['fixed'].includes(getComputedStyle(el).position));
+  }
+  function afficherBoutonRetourRG() {
+    let b = document.getElementById('rg-retour');
+    if (!b) {
+      b = document.createElement('div'); b.id = 'rg-retour';
+      b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:84px;z-index:2300;display:none;align-items:center;gap:2px;background:#2c2c2c;border-radius:22px;box-shadow:0 4px 14px rgba(0,0,0,.35)';
+      b.innerHTML = `<button onclick="ouvrirRechercheGlobale()" style="background:none;border:none;color:#fff;font-size:13px;font-weight:800;padding:10px 6px 10px 16px;cursor:pointer;white-space:nowrap">🔍 Retour à la recherche</button><button onclick="document.getElementById('rg-retour').style.display='none'" title="Fermer" style="background:none;border:none;color:#aaa;font-size:15px;padding:10px 14px 10px 6px;cursor:pointer">✕</button>`;
+      document.body.appendChild(b);
+    }
+    b.style.display = 'flex';
+  }
+  let _rgTimer = null;
+  const _rgOuverts = new Map();
+  function programmerRechercheGlobale() { clearTimeout(_rgTimer); _rgTimer = setTimeout(renderRechercheGlobale, 150); }
+  function renderRechercheGlobale() {
+    const z = document.getElementById('rg-res'); if (!z) return;
+    const q = normTexte(document.getElementById('rg-q')?.value || '');
+    if (!_rg.charge) return;
+    if (q.length < 2) { z.innerHTML = '<div style="font-size:12px;color:#999;padding:10px 4px">Tapez au moins 2 caractères. Plusieurs mots possibles (ex. « martin bardage », « CF0000 », « CH1219 »).</div>'; return; }
+    const mots = q.split(' ').filter(Boolean);
+    const ok = (...champs) => { const t = normTexte(champs.map(v => extraireValeurChamp(v, '') || (Array.isArray(v) ? v.map(x => x?.value ?? x).join(' ') : '')).join(' ')); return mots.every(m => t.includes(m)); };
+    const esc = echapperHtmlNote, MAX = 25;
+    const item = (ico, titre, sous, fn) => `<div onclick="${fn}" style="cursor:pointer;background:#fff;border:1px solid #e5ded0;border-radius:10px;padding:8px 10px;margin-bottom:5px">
+        <div style="font-size:13px;font-weight:700;color:var(--gris)">${ico} ${esc(titre)}</div>${sous ? `<div style="font-size:11px;color:#888;margin-top:1px">${esc(sous)}</div>` : ''}</div>`;
+    // V144 : chaque type de résultat dans un menu déroulant (ouvert s'il est seul ou petit ; choix mémorisé)
+    const groupe = (titre, l, rendu) => {
+      if (!l.length) return '';
+      const k = 'rg|' + titre, ouvert = _rgOuverts.has(k) ? _rgOuverts.get(k) : null;
+      return `<details data-k="${esc(k)}" ${ouvert === true || (ouvert === null && l.length <= 3) ? 'open' : ''} ontoggle="_rgOuverts.set(this.dataset.k, this.open)" style="background:#fbf8f2;border:1px solid #e5ded0;border-radius:10px;padding:6px 8px;margin-top:8px">
+        <summary style="cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;color:var(--gris)"><span>▸ ${titre}</span><span style="font-size:11px;color:#fff;background:var(--vert);border-radius:9px;padding:1px 8px">${l.length}</span></summary>
+        <div style="margin-top:6px">${l.slice(0, MAX).map(rendu).join('')}${l.length > MAX ? `<div style="font-size:11px;color:#999;padding:2px 4px">… ${l.length - MAX} autre(s) : précisez la recherche.</div>` : ''}</div></details>`;
+    };
+    const statut = c => extraireValeurChamp(c['Statue'], '');
+    const ch = _rg.chantiers.filter(c => ok(c['Nom du chantier'], c['Client'], c['Ville'], c["Chargé d'affaires"], c['Statue']));
+    const cmds = _rg.cmds.filter(r => ok(r['Numero commande'], r['Fournisseur'], r['Chantier'], r['Designation'], r['Numero devis'], r['Statut']));
+    const cat = (() => { try { return rechercherCatalogueLocal(q, 40); } catch (e) { return []; } })();
+    const stockSeul = (_articlesCache || []).filter(a => !a['Code EBP'] && ok(a['Designation'], a['Reference fournisseur'], a['Fournisseur']));
+    const contacts = _rg.contacts.filter(r => ok(r['Nom'], r['Societe'], r['Fonction'], r['Ville'], r['Telephone'], r['Courriel']));
+    const collabs = _rg.collabs.filter(c => ok(c['Nom Complet'], c['Poste / Métier']));
+    const cmdCli = _rg.cmdCli.filter(r => ok(r['Numero commande'], r['Client'], r['Chantier'], r['Designation'], r['Numero chantier']));
+    const parId = new Map((_articlesCache || []).filter(a => a['Code EBP']).map(a => [normRef(a['Code EBP']), a]));
+    const html = [
+      groupe('🏗 Chantiers', ch, c => item('🏗', c['Nom du chantier'] || '', [statut(c), extraireValeurChamp(c['Client'], '')].filter(Boolean).join(' · '),
+        jalonsVisibles() ? `fermerRechercheGlobale();ouvrirJalonsChantier(${c.id})` : `fermerRechercheGlobale();switchPage('planning')`)),
+      groupe('📦 Commandes fournisseurs', cmds, r => item('📦', `${r['Numero commande'] || ''} — ${r['Fournisseur'] || ''}`, [(r['Chantier'] || []).map(x => x.value).join(', '), extraireValeurChamp(r['Statut'], '')].filter(Boolean).join(' · '),
+        `fermerRechercheGlobale();ouvrirCommandeRecherche(${r.id})`)),
+      estProfilPrix() ? groupe('🧾 Commandes clients', cmdCli, r => item('🧾', `${r['Numero commande'] || ''} — ${extraireValeurChamp(r['Client'], '')}`, (r['Chantier'] || []).map(x => x.value).join(', ') || extraireValeurChamp(r['Numero chantier'], ''),
+        `fermerRechercheGlobale();ouvrirCommandeClientRecherche('${encodeURIComponent(r['Numero commande'] || '')}')`)) : '',
+      groupe('🔩 Articles', [...cat, ...stockSeul.map(a => ({ _stock: a }))], x => x._stock
+        ? item('🔩', x._stock['Designation'] || '', 'Stock atelier (hors EBP)', `fermerRechercheGlobale();ouvrirFicheArticleModal(${x._stock.id}, '')`)
+        : item(x.ouvrage ? '🧩' : '🔩', x.designation || x.code, ['EBP ' + x.code, x.fournisseur].filter(Boolean).join(' · '),
+          `fermerRechercheGlobale();ouvrirFicheArticleModal(${parId.get(normRef(x.code))?.id || 'null'}, '${String(x.code).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')`)),
+      groupe('📇 Contacts', contacts, r => item('📇', r['Societe'] || r['Nom'] || '', [r['Nom'] !== r['Societe'] ? r['Nom'] : '', r['Fonction'], r['Telephone']].filter(Boolean).join(' · '),
+        `fermerRechercheGlobale();ouvrirRepertoireRecherche('externes', '${encodeURIComponent(r['Societe'] || r['Nom'] || '')}')`)),
+      groupe('👷 Collaborateurs', collabs, c => item('👷', c['Nom Complet'] || '', extraireValeurChamp(c['Poste / Métier'], ''),
+        `fermerRechercheGlobale();ouvrirRepertoireRecherche('guerin', '${encodeURIComponent(c['Nom Complet'] || '')}')`))
+    ].join('');
+    z.innerHTML = html || '<div style="font-size:12px;color:#999;padding:10px 4px">Aucun résultat.</div>';
+    const ds = z.querySelectorAll('details'); if (ds.length === 1) ds[0].open = true;
+  }
+  // V143 : consultation seule (sans ouvrir le scan) : la commande dans la liste des commandes de son chantier
+  function ouvrirCommandeRecherche(id) {
+    const r = (_rg.cmds || []).find(x => x.id === id) || (_commandesCache || []).find(x => x.id === id);
+    if (!r) return;
+    const ch = (r['Chantier'] || [])[0];
+    if (ch) { ouvrirCommandesChantier(ch.id, ch.value, r.id); return; }
+    // sans chantier : onglet Commandes, filtré sur le numéro
+    switchPage('commandes');
+    const i = document.getElementById('commandes-recherche-globale');
+    if (i) { i.value = r['Numero commande'] || ''; try { rechercherCommandesGlobal(i.value); } catch (e) {} }
+  }
+  function ouvrirCommandeClientRecherche(numEnc) {
+    _cmdCliOnglet = 'toutes';
+    switchPage('commandes-clients');
+    const i = document.getElementById('commandes-clients-recherche'); if (i) i.value = decodeURIComponent(numEnc);
+    try { switchCmdCliOnglet('toutes'); } catch (e) {}
+  }
+  function ouvrirRepertoireRecherche(onglet, qEnc) {
+    const i = document.getElementById('repertoire-recherche'); if (i) i.value = decodeURIComponent(qEnc);
+    switchPage('repertoire');
+    try { switchRepertoireOnglet(onglet); } catch (e) {}
+  }
 
   // ── RÉPERTOIRE ──
   // ⚠️ Table Baserow « Répertoire » à CRÉER, puis remplacer l'ID ci-dessous. Champs attendus (noms exacts, sans accents) :
