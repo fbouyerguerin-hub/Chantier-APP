@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V1';
+  const APP_VERSION = 'V2';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -13698,7 +13698,7 @@
       const d = x => x ? new Date(String(x).slice(0, 10) + 'T12:00:00') : null;
       const propre = (s, max = 80) => (String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, max).replace(/[ .]+$/, '')) || 'sans_nom';
       const dossierCmd = c => { const ch = v(c['Chantier']); return propre([v(c['Numero commande']) || 'ID' + c.id, v(c['Fournisseur']), ch ? ch.split(' ')[0] : ''].filter(Boolean).join(' - ')); };
-      const CHAMPS = [['PDF', 'Commande'], ['PDF sans prix', 'Commande sans prix'], ['Accusé de réception', 'AR'], ['Documents', 'Document'], ['Documents prives', 'Document privé']];
+      const CHAMPS = [['PDF', 'Commande'], ['PDF sans prix', 'Commande sans prix'], ['Accusé de réception', 'AR'], ['Documents', 'Document'], ['Documents prives', 'Document privé'], [CHAMP_PJ_FACTURE, 'Facture']]; // V2 : factures fournisseurs
 
       const racine = `Commandes_${mois}`;
       const zip = new JSZip();
@@ -14101,6 +14101,13 @@
   // « Date facture » est renseignée ; son Statut reste celui de la logistique (réceptionnée,
   // envoyée sur chantier…), donc le départ chantier reste possible après facturation.
   // Ancien fonctionnement (Statut « Facturée ») encore reconnu, et converti automatiquement.
+  // V2 : pièces jointes de la facture fournisseur (champ Fichier « Facture fournisseur », table Commandes fournisseurs ;
+  // réservé Administrateur / Gestionnaire comme les prix — filtré aussi par le Worker v10.5)
+  const CHAMP_PJ_FACTURE = 'Facture fournisseur';
+  function liensPJFacture(r) {
+    const l = Array.isArray(r[CHAMP_PJ_FACTURE]) ? r[CHAMP_PJ_FACTURE] : [];
+    return l.map(f => `<a href="${f.url}" target="_blank" onclick="event.stopPropagation()" style="color:#1F6AA5;font-weight:700;text-decoration:underline">📎 ${echapperHtmlNote(f.visible_name || f.name || 'facture')}</a>`).join(' ');
+  }
   function estStatutFactureeAncien(r) { return normaliserTexteStatut(extraireValeurChamp(r['Statut'], '')) === normaliserTexteStatut('Facturée'); }
   function estCommandeFacturee(r) { return estStatutFactureeAncien(r) || !!r['Date facture']; }
   function statutAvantFacturation(r) {
@@ -14130,6 +14137,7 @@
         ${df ? `<span>du ${df}</span>` : ''}
         ${mt > 0 ? `<span><b>${mt.toFixed(2)} € HT</b>${ecart ? ` <span style="color:${ecart > 0 ? '#c0392b' : '#2e7d32'};font-weight:700">(écart ${ecart > 0 ? '+' : ''}${ecart.toFixed(2)} €)</span>` : ' <span style="color:#2e7d32">✓ conforme</span>'}</span>` : ''}
         ${r['Facture par'] ? `<span style="color:#888">· ${esc(r['Facture par'])}</span>` : ''}
+        ${liensPJFacture(r)}
         <span style="flex:1"></span>
         <button onclick="ouvrirFacturationCommande(${r.id})" title="Modifier" style="background:#fff;border:1px solid #cfd6df;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">✏️</button>
         <button onclick="annulerFacturationCommande(${r.id})" style="background:#fff;border:1px solid #e5b8b8;color:#c0392b;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer">↩️ Annuler</button>
@@ -14168,7 +14176,12 @@
       <input id="fact-date" type="date" style="${champ};margin-bottom:10px" value="${String(r['Date facture'] || dateYMD(new Date())).slice(0, 10)}" />
       <label style="font-size:11px;font-weight:700;color:#999">Montant facturé HT (€)</label>
       <input id="fact-montant" type="number" step="0.01" inputmode="decimal" style="${champ}" value="${Number(r['Montant facture HT']) > 0 ? Number(r['Montant facture HT']) : (montantCmd || '')}" oninput="majEcartFacturation(${montantCmd})" />
-      <div id="fact-ecart" style="font-size:12px;margin:6px 0 14px;min-height:16px"></div>
+      <div id="fact-ecart" style="font-size:12px;margin:6px 0 10px;min-height:16px"></div>
+      <label style="font-size:11px;font-weight:700;color:#999">Pièce(s) jointe(s) : facture PDF ou photo</label>
+      <div id="fact-pj-existantes" style="margin:4px 0">${(Array.isArray(r[CHAMP_PJ_FACTURE]) ? r[CHAMP_PJ_FACTURE] : []).map((f, i) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0"><input type="checkbox" class="fact-pj-garder" data-i="${i}" checked> <a href="${f.url}" target="_blank" style="color:#1F6AA5">📎 ${esc(f.visible_name || f.name)}</a></label>`).join('')}</div>
+      <label style="display:flex;align-items:center;gap:8px;background:var(--beige-clair);border:1.5px dashed #ddd5c5;border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:var(--gris-moyen);margin-bottom:12px">📎 Ajouter la facture
+        <input type="file" id="fact-pj" multiple accept="application/pdf,image/*" style="display:none" onchange="document.getElementById('fact-pj-noms').textContent = [...this.files].map(f => f.name).join(', ')"></label>
+      <div id="fact-pj-noms" style="font-size:11px;color:var(--vert);font-weight:700;margin:-8px 0 12px"></div>
       <div style="display:flex;gap:8px">
         <button onclick="document.getElementById('modal-facturation').remove()" style="flex:1;background:#f0f0f0;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:700;cursor:pointer">Annuler</button>
         <button id="fact-valider" onclick="validerFacturationCommande(${id})" style="flex:2;background:var(--vert);color:#fff;border:none;border-radius:10px;padding:11px;font-size:13px;font-weight:800;cursor:pointer">🧾 Enregistrer la facture</button>
@@ -14201,6 +14214,26 @@
       for (const [k, v] of Object.entries(details)) {
         const rr = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [k]: v }) });
         if (!rr.ok) manquants.push(k);
+      }
+      // 3. Pièces jointes de la facture (V2) : celles gardées + les nouvelles
+      {
+        const actuelles = Array.isArray(r[CHAMP_PJ_FACTURE]) ? r[CHAMP_PJ_FACTURE] : [];
+        const garder = [...document.querySelectorAll('.fact-pj-garder')].filter(x => x.checked).map(x => actuelles[Number(x.dataset.i)]).filter(Boolean)
+          .map(f => ({ name: f.name, visible_name: f.visible_name }));
+        const nouveaux = [];
+        const fichiers = [...(document.getElementById('fact-pj')?.files || [])];
+        for (const f of fichiers) {
+          btn.textContent = `⏳ Envoi de ${f.name}…`;
+          const nom = `Facture ${r['Numero commande'] || ''} ${f.name}`.replace(/\s+/g, ' ').trim();
+          const fd = new FormData(); fd.append('file', new File([f], nom, { type: f.type || 'application/pdf' }));
+          const up = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+          if (!up.ok) throw new Error('envoi de « ' + f.name + ' » refusé (' + up.status + ')');
+          nouveaux.push({ name: (await up.json()).name, visible_name: nom });
+        }
+        if (nouveaux.length || garder.length !== actuelles.length) {
+          const rr = await fetch(url, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ [CHAMP_PJ_FACTURE]: [...garder, ...nouveaux] }) });
+          if (!rr.ok) manquants.push(CHAMP_PJ_FACTURE + ' (champ « Fichier »)');
+        }
       }
       // Ancienne facturation par statut : on rend son statut logistique à la commande
       if (estStatutFactureeAncien(r)) {
