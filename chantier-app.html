@@ -769,7 +769,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V140';
+  const APP_VERSION = 'V141';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -12503,7 +12503,7 @@
     html += '</tr></thead><tbody>';
 
     COLLABORATEURS_ADMIN.forEach(collab => {
-      html += '<tr><td class="col-collab-cell"><div class="collab-initiales">' + collab.initiales + '</div><div class="collab-name">' + collab.nom.split(' ')[0] + '<br><strong>' + collab.nom.split(' ').slice(1).join(' ') + '</strong></div></td>';
+      html += '<tr data-collab="' + echapperHtmlNote(normTexte(collab.nom)) + '"><td class="col-collab-cell"><div class="collab-initiales">' + collab.initiales + '</div><div class="collab-name">' + collab.nom.split(' ')[0] + '<br><strong>' + collab.nom.split(' ').slice(1).join(' ') + '</strong></div></td>';
       jours.forEach(j => {
         const dateStr = dateYMD(j);
         const ferie = nomJourFerie(dateStr);
@@ -12536,9 +12536,21 @@
     });
     html += '</tbody>';
     document.getElementById('planning-admin-grid').innerHTML = html;
+    filtrerPlanningAdmin();
     updateSemaineAdminLabel();
   }
 
+  // V141 : recherche par collaborateur (plusieurs noms possibles, séparés par des virgules)
+  function filtrerPlanningAdmin() {
+    const q = normTexte(document.getElementById('planning-admin-recherche')?.value || '');
+    const mots = q.split(',').map(x => x.trim()).filter(Boolean);
+    let n = 0;
+    document.querySelectorAll('#planning-admin-grid tbody tr[data-collab]').forEach(tr => {
+      const ok = !mots.length || mots.some(m => m.split(' ').filter(Boolean).every(w => tr.dataset.collab.includes(w)));
+      tr.style.display = ok ? '' : 'none'; if (ok) n++;
+    });
+    const r = document.getElementById('planning-admin-recherche-nb'); if (r) r.textContent = mots.length ? n + ' collaborateur(s)' : '';
+  }
   function getLundiAdmin(date) {
     const d = new Date(date);
     const day = d.getDay();
@@ -27648,6 +27660,10 @@
       <button onclick="exportExcelAdmin()" style="background:var(--beige);color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px">📥 Excel</button>
     </div>
   </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:0 16px 10px">
+      <input type="text" id="planning-admin-recherche" placeholder="🔍 Rechercher un collaborateur (plusieurs : séparez par des virgules)…" oninput="filtrerPlanningAdmin()" style="flex:1;min-width:0;background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:9px 12px;font-size:13px">
+      <span id="planning-admin-recherche-nb" style="font-size:11px;color:var(--gris-moyen);white-space:nowrap"></span>
+    </div>
     <div id="planning-admin-loading" style="display:none;text-align:center;padding:20px;color:#aaa">⏳ Chargement…</div>
     <div class="planning-admin-wrap">
       <table class="planning-admin-table" id="planning-admin-grid"></table>
