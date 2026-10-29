@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V7';
+  const APP_VERSION = 'V10';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -14976,6 +14976,45 @@
     return null;
   }
 
+  // V8 : proposition APPROCHÉE par le libellé (onglet Dispo), quand ni le code ni la désignation exacte ne
+  // correspondent : ex. « VITRAGE 4/16/4 FE » ↔ article « Vitrage isolant 4/16/4 ». Mots-clés = mots de 4 lettres
+  // et plus + « dimensions » (ex. 4/16/4, 63/100, 2.150). Toutes les dimensions de la commande doivent se
+  // retrouver dans l'article, et au moins un mot ; le meilleur score (puis le plus gros stock dispo) l'emporte.
+  const MOTS_VIDES_STOCK = new Set(['pour', 'avec', 'sans', 'dans', 'type', 'mise', 'place', 'fourniture', 'pose', 'compris', 'unite', 'piece', 'pieces', 'lot']);
+  function motsClesLibelle(txt) {
+    const t = normTexte(txt).replace(/[(),;:"«»]/g, ' ');
+    const dims = [], mots = [];
+    t.split(/\s+/).filter(Boolean).forEach(w => {
+      if (/\d/.test(w)) { const d = w.replace(/,/g, '.').replace(/^[^0-9]+|[^0-9a-z]+$/g, ''); if (d && (/[\/x.*]/.test(d) || d.length >= 2)) dims.push(d); }
+      else if (w.length >= 4 && !MOTS_VIDES_STOCK.has(w)) mots.push(w.replace(/s$/, ''));
+    });
+    return { dims: [...new Set(dims)], mots: [...new Set(mots)] };
+  }
+  function trouverArticleProchePourLigne(l, dispoDe) {
+    if (ligneCodeGenerique(l)) return null;
+    const k = motsClesLibelle(l['Description'] || '');
+    if (!k.mots.length || (!k.dims.length && k.mots.length < 2)) return null;
+    // V9 : une ligne de prestation (pose, main d'œuvre…) ou un long texte descriptif n'est pas un article
+    if (k.mots.length > 8 || /\b(pose|main d.?oeuvre|prestation|location|transport|montage|sous.?traitance)\b/.test(normTexte(l['Description'] || ''))) return null;
+    let best = null;
+    for (const a of (_articlesCache || [])) {
+      if (a['Actif'] === false || estCodeGenerique(a['Code EBP']) || (typeof estKit === 'function' && estKit(a))) continue;
+      const dispo = dispoDe(a); if (dispo <= 0) continue;
+      const ka = motsClesLibelle([a['Designation'], a['Reference fournisseur']].join(' '));
+      const da = new Set(ka.dims), ma = new Set(ka.mots);
+      if (!k.dims.every(d => da.has(d))) continue;
+      // V9 : mot identique (ou pluriel / préfixe d'au moins 6 lettres) — « anti » ne suffit plus à rapprocher
+      const proche = (m, x) => m === x || (Math.min(m.length, x.length) >= 6 && (x.startsWith(m) || m.startsWith(x)));
+      const communs = k.mots.filter(m => [...ma].some(x => proche(m, x)));
+      if (!communs.length || (!k.dims.length && communs.length < 2)) continue;
+      // sans dimension : au moins la moitié des mots-clés de l'ARTICLE doivent se retrouver dans la ligne
+      const couvertsArticle = [...ma].filter(x => k.mots.some(m => proche(m, x))).length;
+      if (!k.dims.length && ma.size && couvertsArticle / ma.size < 0.5) continue; // sans dimension commune, exigence plus forte
+      const score = k.dims.length * 3 + communs.length * 2 - Math.abs(ma.size - k.mots.length) * 0.1;
+      if (!best || score > best.score || (score === best.score && dispo > best.dispo)) best = { a, score, dispo };
+    }
+    return best ? best.a : null;
+  }
   function recalculerStock() {
     _stockParArticle = {};
     _mouvementsCache.forEach(m => {
@@ -19208,10 +19247,10 @@
 
     for (const r of commandes) {
       const chantier = (r['Chantier'] || [])[0]?.value || '';
-      if (mots.length) {
-        const t = normTexte([r['Fournisseur'], r['Numero commande'], chantier, r['Numero devis'], ...(_commandesLignesCache[r.id] || []).map(l => l['Description'])].join(' '));
-        if (!mots.every(m => t.includes(m))) continue;
-      }
+      // V10 : la recherche porte sur l'entête de la commande OU, ligne par ligne, sur le libellé de la ligne
+      // et celui de l'ARTICLE EN STOCK proposé (ex. « vitrage 4/16/4 »)
+      const enteteOk = !mots.length || mots.every(m => normTexte([r['Fournisseur'], r['Numero commande'], chantier, r['Numero devis']].join(' ')).includes(m));
+      const ligneOk = (l, a) => enteteOk || mots.every(m => normTexte([l['Description'], a ? a['Designation'] : '', a ? a['Code EBP'] : '', a ? a['Reference fournisseur'] : ''].join(' ')).includes(m));
       const statut = statutCommandeDispo(r);
       const ouverte = ['En attente AR', 'En attente réception'].includes(statut);
       const apresAR = statut === 'En attente réception';
@@ -19221,7 +19260,12 @@
         const qCmd = Number(l['Quantite']) || 0;
         const unite = uniteApresQte(l['Unite']);
         const etat = etatPriseLigne(l, prises);
-        const a = trouverArticlePourLigne(l);
+        let a = trouverArticlePourLigne(l), approx = false;
+        if (!a && !etat && ouverte) {   // V8 : sinon, article au libellé proche ayant du stock disponible
+          a = trouverArticleProchePourLigne(l, x => Math.round(((_stockParArticle[x.id] || 0) - (reserves[x.id] || 0)) * 1000) / 1000);
+          approx = !!a;
+        }
+        if (!ligneOk(l, a)) continue;
         if (etat) {
           if (etat.aReduire) nbAReduire++;
           if (etat.aSortir) nbASortir++;
@@ -19263,7 +19307,7 @@
         const idIn = `dispo-qte-${l.id}`;
         lignesHtml.push(`<div style="padding:8px 0;border-top:1px dotted #e3ddd0">
           <div style="font-size:12px;font-weight:700;color:var(--gris)">${esc(l['Description'] || '')}</div>
-          ${htmlArticleDispo(a, l)}
+          ${htmlArticleDispo(a, l)}${approx ? ' <span title="Proposé d\'après le libellé (mots et dimensions communs) : vérifiez que c\'est bien le même article" style="font-size:10px;font-weight:800;color:#8a5a00;background:#fff3d6;border:1px solid #f0d9a8;border-radius:6px;padding:1px 6px">≈ libellé proche, à vérifier</span>' : ''}
           <div style="font-size:11px;color:#555;margin-top:2px">Commandé : <b>${fmtQte(qCmd)} ${esc(unite)}</b> · En stock : <b onclick="ouvrirOrigineStock(${a.id})" title="${re ? 'Voir la commande du retour chantier' : 'Voir la fiche de l\'article'}" style="color:var(--vert);cursor:pointer;text-decoration:underline">${fmtQte(dispo)} ${esc(uniteApresQte(a['Unite'] || l['Unite']))}</b>${re ? ` <span style="background:#fde8c3;color:#7c5200;border-radius:6px;padding:0 5px;font-weight:700">dont ${fmtQte(re.qte)} revenu(s) de chantier</span>` : ''}${libelleEmplacement(a) ? ` · 📍 ${esc(libelleEmplacement(a))}` : ''}</div>
           <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
             <input id="${idIn}" type="number" min="0" step="any" value="${propose}" style="width:90px;padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px" />
@@ -19297,7 +19341,22 @@
     ].filter(Boolean).join(' · ');
     const tab = document.getElementById('tab-commandes-dispo');
     if (tab) tab.textContent = `🔁 Dispo. stock${nbDispo + nbAReduire ? ` (${nbDispo + nbAReduire})` : ''}`;
-    listeEl.innerHTML = blocs.join('') || '<div style="color:#aaa;font-size:12px;text-align:center;padding:14px">Aucun article des commandes en cours n\'est disponible au stock atelier.</div>';
+    // V10 : avec une recherche, les ARTICLES EN STOCK correspondants (même sans commande en cours)
+    let htmlStock = '';
+    if (mots.length) {
+      const trouves = (_articlesCache || []).filter(a => a['Actif'] !== false && !(typeof estKit === 'function' && estKit(a)))
+        .map(a => ({ a, dispo: Math.round(((_stockParArticle[a.id] || 0) - (reserves[a.id] || 0)) * 1000) / 1000 }))
+        .filter(x => x.dispo > 0 && mots.every(m => normTexte([x.a['Designation'], x.a['Code EBP'], x.a['Reference fournisseur'], x.a['Fournisseur']].join(' ')).includes(m)))
+        .sort((p, q) => String(p.a['Designation'] || '').localeCompare(String(q.a['Designation'] || ''), 'fr'));
+      htmlStock = `<div style="background:#f0f7ee;border:1px solid #c5d9c3;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:800;color:#2f5d27;margin-bottom:4px">📦 En stock atelier pour « ${esc(recherche)} » : ${trouves.length} article(s)</div>
+        ${trouves.length ? trouves.slice(0, 40).map(x => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;border-top:1px dotted #c5d9c3;font-size:12px">
+            <span><b onclick="ouvrirFicheArticleModal(${x.a.id})" style="cursor:pointer;text-decoration:underline;color:var(--gris)">${esc(x.a['Designation'] || '')}</b>${x.a['Code EBP'] ? ` <span style="font-family:monospace;color:#888;font-size:10px">${esc(x.a['Code EBP'])}</span>` : ''}${libelleEmplacement(x.a) ? ` <span style="color:#888;font-size:11px">· 📍 ${esc(libelleEmplacement(x.a))}</span>` : ''}</span>
+            <b style="white-space:nowrap;color:#2f5d27">${fmtQte(x.dispo)} ${esc(uniteApresQte(x.a['Unite'] || ''))}</b></div>`).join('')
+          : '<div style="font-size:11px;color:#888">Aucun article en stock ne contient ces mots.</div>'}
+      </div>`;
+    }
+    listeEl.innerHTML = htmlStock + (blocs.join('') || `<div style="color:#aaa;font-size:12px;text-align:center;padding:14px">${mots.length ? 'Aucune ligne de commande en cours ne correspond à ces articles.' : 'Aucun article des commandes en cours n\'est disponible au stock atelier.'}</div>`);
   }
 
   async function prendreEnStock(commandeId, ligneId, articleId, inputId) {
