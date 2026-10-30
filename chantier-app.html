@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V13';
+  const APP_VERSION = 'V14';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2513,9 +2513,9 @@
       h += `<div style="display:flex;gap:4px;flex-wrap:wrap;padding:0 12px 8px">${det.revisions.map(r => `<button onclick="event.stopPropagation();afficherRevisionNomenclature(${carteId}, ${r.id})" style="border:1px solid ${r.id === vid ? '#5e35b1' : '#ddd'};background:${r.id === vid ? '#ede7f6' : '#fff'};color:${r.id === vid ? '#5e35b1' : 'var(--gris)'};border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">rév. ${r.revision}${r.statut === 'ACTIVE' ? ' · en cours' : ''} · ${dateNomProd(r.diffuse_le).slice(0, 10)}</button>`).join('')}</div>`;
       if (n.statut !== 'ACTIVE') h += '<div style="margin:0 12px 8px;background:#fff3e0;color:#a2560f;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700">⚠️ Révision remplacée : ne pas fabriquer d\'après cette version.</div>';
     }
-    h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px">
+    h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
       <thead><tr style="background:#f6f6f6;color:#777;text-align:left">
-        <th style="padding:6px">Code</th><th style="padding:6px">Désignation</th><th style="padding:6px;text-align:right">Qté</th>
+        <th style="padding:6px">Repère</th><th style="padding:6px">Code article</th><th style="padding:6px">Désignation</th><th style="padding:6px;text-align:right">Qté</th>
         <th style="padding:6px">Finition</th><th style="padding:6px;text-align:right">Long. / ép.</th><th style="padding:6px;text-align:right">Masse</th>
         <th style="padding:6px;text-align:right">Stock</th><th style="padding:6px">Contrôle</th></tr></thead><tbody>`;
     for (const l of lignes) {
@@ -2525,10 +2525,11 @@
       const dims = [l.longueur_mm ? 'L ' + nbNomProd(l.longueur_mm, 1) : '', l.epaisseur_mm ? 'ép. ' + nbNomProd(l.epaisseur_mm, 1) : ''].filter(Boolean).join(' · ');
       const codeHtml = l.code
         ? ((l.stock_ids || []).length ? `<span onclick="event.stopPropagation();ouvrirFicheArticleModal(${l.stock_ids[0]}, '${esc(l.code).replace(/'/g, "\\'")}')" style="text-decoration:underline;cursor:pointer">${esc(l.code)}</span>` : esc(l.code))
-        : '<span style="color:#c0392b">—</span>';
+        : (l.repere ? '' : '<span style="color:#c0392b">—</span>');
       h += `<tr style="border-top:1px solid #f0f0f0;${l.controle ? 'background:#fffaf0' : ''}">
+        <td style="padding:6px;font-family:monospace;font-weight:800;white-space:nowrap;color:#5e35b1">${esc(l.repere || '')}</td>
         <td style="padding:6px;font-family:monospace;font-weight:700;white-space:nowrap">${codeHtml}${l.statut_ref === 'PROVISOIRE' ? ' <span title="Code interne, pas encore dans EBP" style="color:#5e35b1">🆕</span>' : ''}</td>
-        <td style="padding:6px">${esc(l.designation_ref || l.designation || '')}${l.designation_ref && l.designation && l.designation !== l.designation_ref ? `<div style="font-size:10px;color:#999">${esc(l.designation)}</div>` : ''}</td>
+        <td style="padding:6px">${esc(l.designation_ref || l.type_libelle || l.designation || '')}${(l.designation_ref || l.type_libelle) && l.designation && l.designation !== (l.designation_ref || l.type_libelle) ? `<div style="font-size:10px;color:#999">${esc(l.designation)}</div>` : ''}</td>
         <td style="padding:6px;text-align:right;font-weight:800">${l.quantite !== null ? nbNomProd(l.quantite, 3) : esc(l.quantite_brute || '?')}</td>
         <td style="padding:6px">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td>
         <td style="padding:6px;text-align:right;white-space:nowrap">${dims}</td>
@@ -2548,7 +2549,7 @@
       if (!q) return true;
       if (`${n.chantier_nom || ''} ${n.assemblage || ''} ${n.diffuse_par || ''}`.toLowerCase().includes(q)) return true;
       const det = _nomProdDetails[_nomProdRev[n.id] || n.id];
-      return !!(det && det.lignes && det.lignes.some(l => `${l.code || ''} ${l.designation || ''} ${l.designation_ref || ''}`.toLowerCase().includes(q)));
+      return !!(det && det.lignes && det.lignes.some(l => `${l.repere || ''} ${l.code || ''} ${l.designation || ''} ${l.designation_ref || ''} ${l.type_libelle || ''}`.toLowerCase().includes(q)));
     };
     const liste = _nomProdListe.filter(correspond);
     if (!_nomProdListe.length) { zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">Aucune nomenclature diffusée pour l\'instant.<br><span style="font-size:11px">Elles arrivent depuis Inventor (règle « Diffuser_Nomenclature »).</span></div>'; return; }
@@ -2566,7 +2567,7 @@
               <div style="font-size:14px;font-weight:800;color:var(--gris)">📐 ${esc(n.assemblage)}</div>
               <span style="flex:0 0 auto;background:${n.statut === 'ACTIVE' ? '#e8f0e7' : '#f4f4f4'};color:${n.statut === 'ACTIVE' ? 'var(--vert)' : '#999'};border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">rév. ${n.revision}${n.statut === 'ACTIVE' ? '' : ' · remplacée'}</span>
             </div>
-            <div style="font-size:11px;color:#888;margin-top:3px">Diffusée le ${dateNomProd(n.diffuse_le)}${n.diffuse_par ? ' par ' + esc(n.diffuse_par) : ''} · ${n.nb_lignes || 0} ligne(s)${Number(n.masse_totale) ? ' · ' + nbNomProd(n.masse_totale, 1) + ' kg' + (Number(n.masse_galva) ? ' (galva ' + nbNomProd(n.masse_galva, 1) + ' kg)' : '') : ''}</div>
+            <div style="font-size:11px;color:#888;margin-top:3px">Diffusée le ${dateNomProd(n.diffuse_le)}${n.diffuse_par ? ' par ' + esc(n.diffuse_par) : ''} · ${n.nb_lignes || 0} ligne(s)${Number(n.nb_reperes) ? ' dont ' + n.nb_reperes + ' repère(s)' : ''}${Number(n.masse_totale) ? ' · ' + nbNomProd(n.masse_totale, 1) + ' kg' + (Number(n.masse_galva) ? ' (galva ' + nbNomProd(n.masse_galva, 1) + ' kg)' : '') : ''}</div>
             ${aCtrl ? `<div style="margin-top:5px;display:inline-block;background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">⚠️ ${aCtrl} ligne(s) à contrôler${Number(n.nb_sans_code) ? ' · ' + n.nb_sans_code + ' sans code' : ''}${Number(n.nb_inconnus) ? ' · ' + n.nb_inconnus + ' code(s) inconnu(s)' : ''}</div>` : ''}
           </div>
           ${ouvert ? renderDetailNomenclature(n.id) : ''}
@@ -29349,7 +29350,7 @@
     <button onclick="chargerNomenclaturesPage(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer">🔄</button>
   </div>
   <div style="padding:6px 16px 6px;display:flex;gap:6px;flex-wrap:wrap">
-    <input type="text" id="nomprod-recherche" placeholder="🔍 Chantier, assemblage, code ou désignation…" oninput="renderNomenclatures()" style="flex:1 1 60%;min-width:0;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:8px 10px;font-size:13px">
+    <input type="text" id="nomprod-recherche" placeholder="🔍 Chantier, assemblage, repère, code ou désignation…" oninput="renderNomenclatures()" style="flex:1 1 60%;min-width:0;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:8px 10px;font-size:13px">
     <select id="nomprod-statut" onchange="chargerNomenclaturesPage(true)" style="flex:1 1 30%;min-width:0;padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff">
       <option value="ACTIVE">Révisions en cours</option>
       <option value="TOUTES">Tout l'historique</option>
