@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V15';
+  const APP_VERSION = 'V16';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2501,6 +2501,88 @@
     if (!(l.stock_ids || []).length || !_stockCharge) return null;
     return l.stock_ids.reduce((t, id) => t + (Number(_stockParArticle[id]) || 0), 0);
   }
+  // ── V16 : LISTE DE DÉBIT (par profilé) depuis une nomenclature de production ──
+  let _nomProdVue = {}, _nomProdBarre = 12000;
+  const KERF_DEBIT = 3; // trait de scie (mm)
+  function basculerVueNomenclature(carteId, vue) { _nomProdVue[carteId] = vue; renderNomenclatures(); }
+  function changerBarreDebit(v) { _nomProdBarre = Number(v) || 12000; renderNomenclatures(); }
+  function calculDebit(lignes, barre) {
+    const barres = new Map(), toles = new Map(), sans = [];
+    for (const l of lignes) {
+      const qte = Math.max(0, Math.round(Number(l.quantite) || 0));
+      const L = Number(l.longueur_mm) || 0;
+      const prof = String(l.profil || '').trim();
+      if (!prof || !L || !qte) { sans.push(l); continue; }
+      const estTole = /^TOLE/i.test(prof) || Number(l.largeur_mm) > 0;
+      const g = (estTole ? toles : barres);
+      if (!g.has(prof)) g.set(prof, { profil: prof, lignes: [], qte: 0, ml: 0, m2: 0, masse: 0 });
+      const x = g.get(prof);
+      x.lignes.push(l); x.qte += qte;
+      x.masse += (Number(l.masse_kg) || 0) * qte;
+      if (estTole) x.m2 += (L * (Number(l.largeur_mm) || 0) / 1e6) * qte;
+      else x.ml += L * qte / 1000;
+    }
+    // Barres commerciales : rangement « plus grandes pièces d'abord » (FFD), trait de scie compris
+    for (const x of barres.values()) {
+      const morceaux = [];
+      x.lignes.forEach(l => { for (let i = 0; i < Math.min(2000, Math.round(Number(l.quantite) || 0)); i++) morceaux.push(Number(l.longueur_mm)); });
+      morceaux.sort((a, b) => b - a);
+      const reste = []; x.horsBarre = 0;
+      for (const m of morceaux) {
+        if (m > barre) { x.horsBarre++; continue; }
+        const i = reste.findIndex(r => r >= m);
+        if (i >= 0) reste[i] -= m + KERF_DEBIT; else reste.push(barre - m - KERF_DEBIT);
+      }
+      x.nbBarres = reste.length;
+      x.chute = reste.reduce((t, r) => t + Math.max(0, r), 0) / 1000;
+      x.lignes.sort((a, b) => (Number(b.longueur_mm) || 0) - (Number(a.longueur_mm) || 0));
+    }
+    for (const x of toles.values()) x.lignes.sort((a, b) => (Number(b.longueur_mm) * Number(b.largeur_mm || 0)) - (Number(a.longueur_mm) * Number(a.largeur_mm || 0)));
+    const tri = m => [...m.values()].sort((a, b) => a.profil.localeCompare(b.profil, 'fr', { numeric: true }));
+    return { barres: tri(barres), toles: tri(toles), sans };
+  }
+  function htmlDebit(lignes, pourImpression) {
+    const esc = escMat, d = calculDebit(lignes, _nomProdBarre);
+    const td = 'padding:5px 6px;border-top:1px solid #eee', th = 'padding:5px 6px;text-align:left;color:#777;font-weight:700';
+    const rep = l => esc(l.repere || l.code || '—');
+    let h = '';
+    if (d.barres.length) {
+      h += `<div style="font-weight:800;color:var(--vert,#4a7c3f);margin:10px 0 4px">📏 Barres — longueur commerciale ${nbNomProd(_nomProdBarre / 1000, 1)} m</div>`;
+      for (const x of d.barres) {
+        h += `<div style="margin:8px 0 2px;font-weight:800">${esc(x.profil)} <span style="font-weight:600;color:#777">· ${x.qte} pièce(s) · ${nbNomProd(x.ml, 2)} ml · ${nbNomProd(x.masse, 1)} kg · <b style="color:#5e35b1">${x.nbBarres} barre(s)</b>${x.nbBarres ? ' · chute ' + nbNomProd(x.chute, 2) + ' m' : ''}${x.horsBarre ? ` · <span style="color:#c0392b">${x.horsBarre} pièce(s) plus longue(s) que la barre</span>` : ''}</span></div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="${th}">Repère</th><th style="${th}">Désignation</th><th style="${th};text-align:right">Longueur (mm)</th><th style="${th};text-align:right">Qté</th><th style="${th}">Finition</th></tr></thead><tbody>
+          ${x.lignes.map(l => `<tr><td style="${td};font-family:monospace;font-weight:800">${rep(l)}</td><td style="${td}">${esc(l.type_libelle || l.designation_ref || l.designation || '')}</td><td style="${td};text-align:right;font-weight:800">${nbNomProd(l.longueur_mm, 0)}</td><td style="${td};text-align:right;font-weight:800">${nbNomProd(l.quantite, 0)}</td><td style="${td}">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td></tr>`).join('')}
+          </tbody></table>`;
+      }
+    }
+    if (d.toles.length) {
+      h += `<div style="font-weight:800;color:var(--vert,#4a7c3f);margin:14px 0 4px">▭ Tôles et plats</div>`;
+      for (const x of d.toles) {
+        h += `<div style="margin:8px 0 2px;font-weight:800">${esc(x.profil)} <span style="font-weight:600;color:#777">· ${x.qte} pièce(s) · ${nbNomProd(x.m2, 3)} m² · ${nbNomProd(x.masse, 1)} kg</span></div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="${th}">Repère</th><th style="${th}">Désignation</th><th style="${th};text-align:right">L × l (mm)</th><th style="${th};text-align:right">Qté</th><th style="${th}">Finition</th></tr></thead><tbody>
+          ${x.lignes.map(l => `<tr><td style="${td};font-family:monospace;font-weight:800">${rep(l)}</td><td style="${td}">${esc(l.type_libelle || l.designation_ref || l.designation || '')}</td><td style="${td};text-align:right;font-weight:800">${nbNomProd(l.longueur_mm, 0)} × ${nbNomProd(l.largeur_mm, 0)}</td><td style="${td};text-align:right;font-weight:800">${nbNomProd(l.quantite, 0)}</td><td style="${td}">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td></tr>`).join('')}
+          </tbody></table>`;
+      }
+    }
+    if (d.sans.length) h += `<div style="margin-top:12px;background:#fff3e0;color:#a2560f;border-radius:8px;padding:8px 10px;font-size:12px">⚠️ ${d.sans.length} ligne(s) hors débit (profilé ou longueur manquant) : ${d.sans.map(l => esc(l.repere || l.code || l.designation || '?')).join(', ')}${pourImpression ? '' : '<br><span style="font-size:11px">Renseigner le Stock Number (ex. IPE 300) dans Inventor puis rediffuser.</span>'}</div>`;
+    if (!d.barres.length && !d.toles.length && !d.sans.length) h += '<div style="color:#999;font-size:12px;padding:8px 0">Nomenclature vide.</div>';
+    return h;
+  }
+  function imprimerDebit(carteId) {
+    const vid = _nomProdRev[carteId] || carteId;
+    const det = _nomProdDetails[vid];
+    if (!det || !det.nomenclature) return;
+    const n = det.nomenclature, esc = escMat;
+    const w = window.open('', '_blank');
+    if (!w) { alert('Autorisez les fenêtres surgissantes pour imprimer.'); return; }
+    w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Débit ${esc(n.chantier_nom || '')} — ${esc(n.assemblage)}</title>
+      <style>body{font-family:Arial,sans-serif;margin:14mm;color:#222}h1{font-size:18px;margin:0}table{page-break-inside:auto}tr{page-break-inside:avoid}@page{size:A4;margin:10mm}</style></head><body>
+      <h1>✂️ Liste de débit — ${esc(n.chantier_nom || '')}</h1>
+      <div style="font-size:12px;color:#555;margin:4px 0 10px">${esc(n.assemblage)} · révision ${n.revision}${n.statut !== 'ACTIVE' ? ' (REMPLACÉE)' : ''} · diffusée le ${dateNomProd(n.diffuse_le)}${n.diffuse_par ? ' par ' + esc(n.diffuse_par) : ''} · imprimée le ${new Date().toLocaleString('fr-FR')}</div>
+      ${htmlDebit(det.lignes || [], true)}
+      <script>window.onload=function(){window.print();}<\/script></body></html>`);
+    w.document.close();
+  }
   function renderDetailNomenclature(carteId) {
     const esc = escMat;
     const vid = _nomProdRev[carteId] || carteId;
@@ -2513,9 +2595,15 @@
       h += `<div style="display:flex;gap:4px;flex-wrap:wrap;padding:0 12px 8px">${det.revisions.map(r => `<button onclick="event.stopPropagation();afficherRevisionNomenclature(${carteId}, ${r.id})" style="border:1px solid ${r.id === vid ? '#5e35b1' : '#ddd'};background:${r.id === vid ? '#ede7f6' : '#fff'};color:${r.id === vid ? '#5e35b1' : 'var(--gris)'};border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">rév. ${r.revision}${r.statut === 'ACTIVE' ? ' · en cours' : ''} · ${dateNomProd(r.diffuse_le).slice(0, 10)}</button>`).join('')}</div>`;
       if (n.statut !== 'ACTIVE') h += '<div style="margin:0 12px 8px;background:#fff3e0;color:#a2560f;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700">⚠️ Révision remplacée : ne pas fabriquer d\'après cette version.</div>';
     }
-    h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
+    const vue = _nomProdVue[carteId] || 'lignes';
+    const bouton = (v, lib) => `<button onclick="event.stopPropagation();basculerVueNomenclature(${carteId}, '${v}')" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:${vue === v ? 'var(--vert)' : '#f1f5f9'};color:${vue === v ? '#fff' : 'var(--gris)'}">${lib}</button>`;
+    h += `<div onclick="event.stopPropagation()" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 12px 8px">${bouton('lignes', '📋 Pièces')}${bouton('debit', '✂️ Liste de débit')}
+      ${vue === 'debit' ? `<select onchange="changerBarreDebit(this.value)" style="padding:5px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff">${[6000, 7000, 8000, 12000, 13500].map(v => `<option value="${v}" ${v === _nomProdBarre ? 'selected' : ''}>Barres de ${nbNomProd(v / 1000, 1)} m</option>`).join('')}</select>
+        <button onclick="event.stopPropagation();imprimerDebit(${carteId})" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">🖨️ Imprimer</button>` : ''}</div>`;
+    if (vue === 'debit') return h + `<div style="padding:0 12px 12px">${htmlDebit(lignes, false)}</div>`;
+    h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:800px">
       <thead><tr style="background:#f6f6f6;color:#777;text-align:left">
-        <th style="padding:6px">Repère</th><th style="padding:6px">Code article</th><th style="padding:6px">Désignation</th><th style="padding:6px;text-align:right">Qté</th>
+        <th style="padding:6px">Repère</th><th style="padding:6px">Code article</th><th style="padding:6px">Désignation</th><th style="padding:6px">Profilé</th><th style="padding:6px;text-align:right">Qté</th>
         <th style="padding:6px">Finition</th><th style="padding:6px;text-align:right">Dimensions (mm)</th><th style="padding:6px;text-align:right">Masse</th>
         <th style="padding:6px;text-align:right">Stock</th><th style="padding:6px">Contrôle</th></tr></thead><tbody>`;
     for (const l of lignes) {
@@ -2530,6 +2618,7 @@
         <td style="padding:6px;font-family:monospace;font-weight:800;white-space:nowrap;color:#5e35b1">${esc(l.repere || '')}</td>
         <td style="padding:6px;font-family:monospace;font-weight:700;white-space:nowrap">${codeHtml}${l.statut_ref === 'PROVISOIRE' ? ' <span title="Code interne, pas encore dans EBP" style="color:#5e35b1">🆕</span>' : ''}</td>
         <td style="padding:6px">${esc(l.designation_ref || l.type_libelle || l.designation || '')}${(l.designation_ref || l.type_libelle) && l.designation && l.designation !== (l.designation_ref || l.type_libelle) ? `<div style="font-size:10px;color:#999">${esc(l.designation)}</div>` : ''}</td>
+        <td style="padding:6px;white-space:nowrap">${esc(l.profil || '')}</td>
         <td style="padding:6px;text-align:right;font-weight:800">${l.quantite !== null ? nbNomProd(l.quantite, 3) : esc(l.quantite_brute || '?')}</td>
         <td style="padding:6px">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td>
         <td style="padding:6px;text-align:right;white-space:nowrap">${dims}</td>
