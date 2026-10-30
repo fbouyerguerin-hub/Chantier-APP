@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V16';
+  const APP_VERSION = 'V19';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2469,8 +2469,8 @@
   async function chargerNomenclaturesPage(force) {
     const zone = document.getElementById('nomprod-liste');
     if (!zone) return;
-    if (force) _nomProdDetails = {};
-    zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">⏳ Chargement des nomenclatures…</div>';
+    if (force) { _nomProdDetails = {}; _ofDetails = {}; }
+    if (force || !_nomProdListe.length) zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">⏳ Chargement des nomenclatures…</div>';
     try {
       const statut = document.getElementById('nomprod-statut')?.value || 'ACTIVE';
       const d = await appelWorkerLecture('/plm/nomenclatures?statut=' + statut);
@@ -2583,6 +2583,198 @@
       <script>window.onload=function(){window.print();}<\/script></body></html>`);
     w.document.close();
   }
+  // ── V17 : ORDRES DE FABRICATION — lancement, suivi par repère, étiquettes QR, pointage atelier ──
+  let _ofDetails = {}; // nomenclature_id → { of, ops } | { absent: true }
+  const OPS_COURTS = { DEBIT: 'Débit', USINAGE: 'Usinage', SOUDURE: 'Soudure', TRAITEMENT: 'Traitement', EXPEDITION: 'Expé.' };
+  async function appelWorkerPost(chemin, corps) {
+    const r = await _fetchNatifBrut(GB_WORKER + chemin, { method: 'POST', headers: { ...headersWorker(), 'Content-Type': 'application/json' }, body: JSON.stringify(corps || {}), cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + (r.status === 404 ? ' (Worker à mettre à jour)' : '')));
+    return d;
+  }
+  async function chargerOF(nomId, force) {
+    if (_ofDetails[nomId] && !force && !_ofDetails[nomId].chargement) return;
+    _ofDetails[nomId] = { chargement: true };
+    try { _ofDetails[nomId] = await appelWorkerLecture('/plm/of?nomenclature_id=' + nomId); }
+    catch (e) { _ofDetails[nomId] = /pas d'ordre/i.test(e.message) ? { absent: true } : { erreur: e.message }; }
+    renderNomenclatures();
+  }
+  async function lancerFabrication(nomId) {
+    if (!confirm('Lancer cette révision en fabrication ?\n\nUne gamme (débit, usinage, soudure, traitement, expédition) est créée pour chaque repère. Si une révision précédente était lancée, son avancement est repris.')) return;
+    try {
+      const r = await appelWorkerPost('/plm/of/lancer', { nomenclature_id: nomId });
+      if (r.reprise) alert('✅ Lancé en fabrication. L\'avancement de la révision précédente a été repris.');
+      await chargerOF(nomId, true);
+      chargerNomenclaturesPage(false);
+    } catch (e) { alert('❌ ' + e.message); }
+  }
+  function couleurOp(o) {
+    return o.statut === 'FAIT' ? ['#e8f0e7', 'var(--vert)'] : o.statut === 'EN_COURS' ? ['#fff3e0', '#a2560f'] : o.statut === 'SANS_OBJET' ? ['#f4f4f4', '#bbb'] : ['#fff', '#888'];
+  }
+  async function pointerOpApp(nomId, opId) {
+    const det = _ofDetails[nomId];
+    const o = det && det.ops ? det.ops.find(x => x.id === opId) : null;
+    if (!o) return;
+    const reste = Math.max(0, o.qte_prevue - o.qte_faite);
+    const rep = prompt(`${o.repere} — ${o.libelle}\nFait : ${nbNomProd(o.qte_faite, 0)} / ${nbNomProd(o.qte_prevue, 0)}\n\nQuantité à ajouter (négatif pour corriger), « na » = sans objet, « r » = rétablir :`, reste ? String(reste) : '');
+    if (rep === null || rep.trim() === '') return;
+    const t = rep.trim().toLowerCase();
+    const corps = t === 'na' ? { op_id: opId, sans_objet: true } : t === 'r' ? { op_id: opId, sans_objet: false } : { op_id: opId, qte: Number(t.replace(',', '.')) };
+    if (corps.qte !== undefined && !Number.isFinite(corps.qte)) { alert('Quantité invalide'); return; }
+    try { await appelWorkerPost('/plm/of/pointer', corps); await chargerOF(nomId, true); chargerNomenclaturesPage(false); }
+    catch (e) { alert('❌ ' + e.message); }
+  }
+  function htmlFabrication(nomId, lignes, n) {
+    const esc = escMat, det = _ofDetails[nomId];
+    if (!det || det.chargement) { if (!det) chargerOF(nomId); return '<div style="color:#999;font-size:12px;padding:6px 0">⏳ Lecture de l\'ordre de fabrication…</div>'; }
+    if (det.erreur) return `<div style="color:#c0392b;font-size:12px">❌ ${esc(det.erreur)}</div>`;
+    if (det.absent) {
+      if (n.statut !== 'ACTIVE') return '<div style="color:#999;font-size:12px;padding:6px 0">Révision remplacée : non lancée en fabrication.</div>';
+      const nbRep = lignes.filter(l => l.repere).length;
+      return `<div style="padding:8px 0"><button onclick="event.stopPropagation();lancerFabrication(${nomId})" ${nbRep ? '' : 'disabled'} style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-size:13px;font-weight:800;cursor:pointer">🏭 Lancer en fabrication (${nbRep} repère(s))</button>
+        <div style="font-size:11px;color:#999;margin-top:6px">Crée la gamme de chaque repère et permet le pointage atelier par scan des étiquettes.</div></div>`;
+    }
+    const ops = det.ops || [], parRep = new Map();
+    ops.forEach(o => { if (!parRep.has(o.repere)) parRep.set(o.repere, []); parRep.get(o.repere).push(o); });
+    const infos = new Map(lignes.filter(l => l.repere).map(l => [l.repere, l]));
+    const actifs = ops.filter(o => o.statut !== 'SANS_OBJET');
+    const pct = actifs.length ? Math.round(100 * actifs.reduce((t, o) => t + Math.min(o.qte_faite, o.qte_prevue), 0) / actifs.reduce((t, o) => t + o.qte_prevue, 0)) : 100;
+    let h = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 8px">
+        <span style="font-size:12px;font-weight:800;color:${det.of.statut === 'TERMINE' ? 'var(--vert)' : det.of.statut === 'REMPLACE' ? '#999' : '#5e35b1'}">🏭 OF n° ${det.of.id} · ${det.of.statut === 'TERMINE' ? 'terminé' : det.of.statut === 'REMPLACE' ? 'remplacé' : 'en cours'} · ${pct} %</span>
+        <div style="flex:1;min-width:80px;height:8px;background:#eee;border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${pct >= 100 ? 'var(--vert)' : '#5e35b1'}"></div></div>
+        <button onclick="event.stopPropagation();imprimerEtiquettesOF(${nomId})" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">🏷️ Étiquettes QR</button></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px"><thead><tr style="background:#f6f6f6;color:#777;text-align:left">
+        <th style="padding:6px">Repère</th><th style="padding:6px">Pièce</th><th style="padding:6px;text-align:right">Qté</th>
+        ${Object.values(OPS_COURTS).map(x => `<th style="padding:6px;text-align:center">${x}</th>`).join('')}</tr></thead><tbody>`;
+    for (const [rep, liste] of parRep) {
+      const l = infos.get(rep) || {};
+      h += `<tr style="border-top:1px solid #f0f0f0"><td style="padding:6px;font-family:monospace;font-weight:800;color:#5e35b1;white-space:nowrap">${esc(rep)}</td>
+        <td style="padding:6px">${esc(l.type_libelle || l.designation || '')}<div style="font-size:10px;color:#999">${esc([l.profil, l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) : 'L ' + nbNomProd(l.longueur_mm, 0)) : '', l.finition].filter(Boolean).join(' · '))}</div></td>
+        <td style="padding:6px;text-align:right;font-weight:800">${nbNomProd(liste[0].qte_prevue, 0)}</td>`;
+      for (const op of Object.keys(OPS_COURTS)) {
+        const o = liste.find(x => x.operation === op);
+        if (!o) { h += '<td style="padding:6px;text-align:center;color:#ddd">—</td>'; continue; }
+        const [fond, coul] = couleurOp(o);
+        h += `<td style="padding:4px;text-align:center"><button onclick="event.stopPropagation();pointerOpApp(${nomId}, ${o.id})" title="${esc(o.libelle)}${o.maj_par ? ' · ' + esc(o.maj_par) : ''}${o.en_cours_par ? ' · en cours : ' + esc(o.en_cours_par) : ''}" style="min-width:52px;border:1px solid ${o.en_cours_par ? '#5e35b1' : '#e5e5e5'};border-radius:8px;padding:5px 6px;font-size:11px;font-weight:800;cursor:pointer;background:${fond};color:${coul}">${o.statut === 'SANS_OBJET' ? 'n/a' : nbNomProd(o.qte_faite, 0) + '/' + nbNomProd(o.qte_prevue, 0)}${o.en_cours_par ? ' ▶' : ''}${Number(o.minutes) ? `<div style="font-size:9px;font-weight:600;color:#777">${dureeFab(o.minutes)}</div>` : ''}</button></td>`;
+      }
+      h += '</tr>';
+    }
+    return h + '</tbody></table></div><div style="font-size:11px;color:#999;margin-top:6px">Touchez une case pour pointer (quantité, « na » = sans objet). À l\'atelier : scanner l\'étiquette du repère.</div>' + htmlTempsOF(det, lignes);
+  }
+  async function imprimerEtiquettesOF(nomId) {
+    const det = _ofDetails[nomId], vdet = _nomProdDetails[nomId];
+    if (!det || !det.of || !vdet || !vdet.lignes) return;
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres surgissantes pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Préparation des étiquettes…</p>');
+    try {
+      await chargerLibScan('qrcode');
+      const esc = escMat, of = det.of;
+      const reps = [...new Set((det.ops || []).map(o => o.repere))];
+      const infos = new Map(vdet.lignes.filter(l => l.repere).map(l => [l.repere, l]));
+      const qr = texte => { const tmp = document.createElement('div'); tmp.style.cssText = 'position:fixed;left:-9999px;top:0'; document.body.appendChild(tmp);
+        new QRCode(tmp, { text: texte, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+        const cv = tmp.querySelector('canvas'); const src = cv ? cv.toDataURL('image/png') : (tmp.querySelector('img')?.src || ''); tmp.remove(); return src; };
+      const etiq = reps.map(rep => {
+        const l = infos.get(rep) || {};
+        const dims = l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) + (l.epaisseur_mm ? ' × ' + nbNomProd(l.epaisseur_mm, 1) : '') : 'L ' + nbNomProd(l.longueur_mm, 0)) + ' mm' : '';
+        return `<div class="e"><img src="${qr(urlScan('REP-' + rep))}"><div class="t">
+          <div class="r">${esc(rep)}</div><div class="d">${esc(l.type_libelle || l.designation || '')}</div>
+          <div class="p">${esc([l.profil, dims].filter(Boolean).join(' · '))}</div>
+          <div class="p">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''} · Qté ${nbNomProd(l.quantite, 0)}${l.masse_kg ? ' · ' + nbNomProd(l.masse_kg, 1) + ' kg/u' : ''}</div>
+          <div class="c">${esc(of.chantier_nom || '')} · rév. ${of.revision}</div></div></div>`;
+      }).join('');
+      fen.document.open();
+      fen.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Étiquettes ${esc(of.chantier_nom || '')}</title><style>
+        @page{size:A4;margin:8mm}body{font-family:Arial,sans-serif;margin:0}.g{display:grid;grid-template-columns:1fr 1fr;gap:4mm}
+        .e{display:flex;gap:3mm;align-items:center;border:1px dashed #999;border-radius:2mm;padding:3mm;height:48mm;box-sizing:border-box;page-break-inside:avoid}
+        .e img{width:36mm;height:36mm}.t{flex:1;min-width:0}.r{font-family:monospace;font-size:17px;font-weight:800}.d{font-size:14px;font-weight:700;margin:1mm 0}
+        .p{font-size:11px;color:#333}.c{font-size:10px;color:#666;margin-top:1.5mm}</style></head><body><div class="g">${etiq}</div>
+        <script>window.onload=function(){setTimeout(function(){window.print();},300);}<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) { fen.document.body.innerHTML = '<p style="font-family:sans-serif;color:#c0392b">❌ ' + escMat(e.message) + '</p>'; }
+  }
+  // Scan d'une étiquette de repère (REP-…) : pointage atelier, pour tout utilisateur connecté
+  async function ouvrirPointageRepere(repere) {
+    document.getElementById('modal-pointage-repere')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-pointage-repere';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10060;display:flex;align-items:center;justify-content:center;padding:12px';
+    fond.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;max-height:88vh;overflow:auto;padding:16px"><div style="color:#999;font-size:13px">⏳ Lecture du repère…</div></div>';
+    document.body.appendChild(fond);
+    await rafraichirPointageRepere(repere);
+  }
+  async function rafraichirPointageRepere(repere) {
+    const fond = document.getElementById('modal-pointage-repere');
+    if (!fond) return;
+    const boite = fond.firstElementChild, esc = escMat;
+    const fermer = `<button onclick="document.getElementById('modal-pointage-repere').remove()" style="width:100%;margin-top:12px;background:var(--beige-clair);border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer">Fermer</button>`;
+    let d;
+    try { d = await appelWorkerLecture('/plm/of/repere?repere=' + encodeURIComponent(repere)); }
+    catch (e) { boite.innerHTML = `<div style="font-size:15px;font-weight:800;color:var(--gris)">🏷️ ${esc(repere)}</div><div style="color:#c0392b;font-size:13px;margin-top:8px">❌ ${esc(e.message)}</div>${fermer}`; return; }
+    const l = d.ligne || {};
+    boite.innerHTML = `<div style="font-family:monospace;font-size:18px;font-weight:800;color:#5e35b1">${esc(d.repere)}</div>
+      <div style="font-size:14px;font-weight:700;color:var(--gris)">${esc(l.type_libelle || l.designation || '')}</div>
+      <div style="font-size:12px;color:#777;margin:2px 0 10px">${esc([l.profil, l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) : 'L ' + nbNomProd(l.longueur_mm, 0)) + ' mm' : '', l.finition].filter(Boolean).join(' · '))} · ${esc(d.of.chantier_nom || '')} · rév. ${d.of.revision}</div>
+      ${d.ops.map(o => {
+        const [fondC, coul] = couleurOp(o), reste = Math.max(0, o.qte_prevue - o.qte_faite);
+        const seances = o.seances || [], mienne = seances.find(x => x.moi), autres = seances.filter(x => !x.moi);
+        const rp = esc(d.repere);
+        const btn = (action, lib, style) => `<button onclick="${action}" style="${style};border-radius:8px;font-weight:800;cursor:pointer">${lib}</button>`;
+        const gros = 'border:none;padding:10px 12px;font-size:13px', petit = 'border:1px solid #ddd;background:#fff;padding:8px;font-size:11px;font-weight:600';
+        let actions = '';
+        if (o.statut === 'SANS_OBJET') actions = btn(`pointerRepereScan('${rp}', ${o.id}, {sans_objet:false})`, 'Rétablir', petit);
+        else if (mienne) actions = (reste > 1 ? btn(`terminerRepereScan('${rp}', ${o.id}, {qte:1})`, '⏹ +1', gros + ';background:#5e35b1;color:#fff') : '')
+            + btn(`terminerRepereScan('${rp}', ${o.id}, {tout:true})`, '⏹ ' + (reste > 1 ? 'Fini (' + nbNomProd(reste, 0) + ')' : 'Fini'), gros + ';background:var(--vert);color:#fff')
+            + btn(`terminerRepereScan('${rp}', ${o.id}, {annuler:true})`, '✕', petit + ';color:#c0392b');
+        else if (reste > 0) actions = btn(`demarrerRepereScan('${rp}', ${o.id})`, '▶ Démarrer', gros + ';background:#5e35b1;color:#fff')
+            + btn(`pointerRepereScan('${rp}', ${o.id}, {tout:true})`, '✓', petit + ';color:var(--vert)')
+            + (o.qte_faite === 0 ? btn(`pointerRepereScan('${rp}', ${o.id}, {sans_objet:true})`, 'n/a', petit + ';color:#999') : '');
+        else actions = btn(`pointerRepereScan('${rp}', ${o.id}, {qte:-1})`, '↶ −1', petit);
+        return `<div style="padding:8px;border:1px solid ${mienne ? '#5e35b1' : '#eee'};border-radius:10px;margin-bottom:6px;background:${fondC}">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;color:var(--gris)">${esc(o.libelle)}</div>
+              <div style="font-size:12px;font-weight:800;color:${coul}">${o.statut === 'SANS_OBJET' ? 'sans objet' : nbNomProd(o.qte_faite, 0) + ' / ' + nbNomProd(o.qte_prevue, 0)}${Number(o.minutes) ? ` <span style="color:#777;font-weight:600">· ⏱ ${dureeFab(o.minutes)}</span>` : ''}</div></div>
+            ${actions}</div>
+          ${mienne ? `<div style="font-size:11px;color:#5e35b1;font-weight:700;margin-top:4px">▶ En cours depuis ${heureFab(mienne.debut)} (${dureeFab(minutesDepuis(mienne.debut))})</div>` : ''}
+          ${autres.length ? `<div style="font-size:11px;color:#777;margin-top:4px">▶ En cours : ${autres.map(x => esc(x.par) + ' depuis ' + heureFab(x.debut)).join(', ')}</div>` : ''}
+        </div>`;
+      }).join('')}${fermer}`;
+  }
+  // V18 : temps passés — début / fin d'opération
+  function dateUtcFab(s) { return new Date(String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z')); }
+  function heureFab(s) { const d = dateUtcFab(s); return isNaN(d) ? '' : d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); }
+  function minutesDepuis(s) { const d = dateUtcFab(s); return isNaN(d) ? 0 : Math.max(0, (Date.now() - d.getTime()) / 60000); }
+  function dureeFab(m) { m = Math.round(Number(m) || 0); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0'); }
+  async function demarrerRepereScan(repere, opId) {
+    try { await appelWorkerPost('/plm/of/demarrer', { op_id: opId }); try { bipScan(true); } catch (e) {} }
+    catch (e) { try { bipScan(false); } catch (x) {} alert('❌ ' + e.message); }
+    await rafraichirPointageRepere(repere);
+  }
+  async function terminerRepereScan(repere, opId, action) {
+    if (action.annuler && !confirm('Annuler cette séance (le temps ne sera pas compté) ?')) return;
+    try { await appelWorkerPost('/plm/of/terminer', { op_id: opId, ...action }); try { bipScan(true); } catch (e) {} }
+    catch (e) { try { bipScan(false); } catch (x) {} alert('❌ ' + e.message); }
+    await rafraichirPointageRepere(repere);
+  }
+  function htmlTempsOF(det, lignes) {
+    const t = det.temps || [];
+    if (!t.length) return '<div style="font-size:11px;color:#999;margin-top:8px">⏱ Aucun temps enregistré : à l\'atelier, « ▶ Démarrer » puis « ⏹ Fini » sur la fiche du repère.</div>';
+    const esc = escMat, parOp = new Map(), parPers = new Map();
+    t.forEach(x => { parOp.set(x.operation, (parOp.get(x.operation) || 0) + Number(x.minutes)); parPers.set(x.par, (parPers.get(x.par) || 0) + Number(x.minutes)); });
+    const total = [...parOp.values()].reduce((a, b) => a + b, 0);
+    const masse = lignes.filter(l => l.repere).reduce((s, l) => s + (Number(l.masse_kg) || 0) * (Number(l.quantite) || 0), 0);
+    const pastille = (lib, m) => `<span style="display:inline-block;background:#f1f5f9;border-radius:8px;padding:3px 8px;margin:2px;font-size:11px"><b>${esc(lib)}</b> ${dureeFab(m)}</span>`;
+    return `<div style="margin-top:10px;padding:8px 10px;background:#fafafa;border-radius:10px">
+      <div style="font-size:12px;font-weight:800;color:var(--gris)">⏱ Temps passés : ${dureeFab(total)}${masse && total ? ` · ${nbNomProd(masse / (total / 60), 0)} kg/h` : ''}</div>
+      <div style="margin-top:4px">${[...parOp.entries()].map(([op, m]) => pastille(OPS_COURTS[op] || op, m)).join('')}</div>
+      <div style="margin-top:2px">${[...parPers.entries()].sort((a, b) => b[1] - a[1]).map(([p, m]) => pastille('👷 ' + (p || '?'), m)).join('')}</div></div>`;
+  }
+  async function pointerRepereScan(repere, opId, action) {
+    try { await appelWorkerPost('/plm/of/pointer', { op_id: opId, ...action }); try { bipScan(true); } catch (e) {} }
+    catch (e) { try { bipScan(false); } catch (x) {} alert('❌ ' + e.message); }
+    await rafraichirPointageRepere(repere);
+  }
   function renderDetailNomenclature(carteId) {
     const esc = escMat;
     const vid = _nomProdRev[carteId] || carteId;
@@ -2597,10 +2789,11 @@
     }
     const vue = _nomProdVue[carteId] || 'lignes';
     const bouton = (v, lib) => `<button onclick="event.stopPropagation();basculerVueNomenclature(${carteId}, '${v}')" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:${vue === v ? 'var(--vert)' : '#f1f5f9'};color:${vue === v ? '#fff' : 'var(--gris)'}">${lib}</button>`;
-    h += `<div onclick="event.stopPropagation()" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 12px 8px">${bouton('lignes', '📋 Pièces')}${bouton('debit', '✂️ Liste de débit')}
+    h += `<div onclick="event.stopPropagation()" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:0 12px 8px">${bouton('lignes', '📋 Pièces')}${bouton('debit', '✂️ Liste de débit')}${bouton('fab', '🏭 Fabrication')}
       ${vue === 'debit' ? `<select onchange="changerBarreDebit(this.value)" style="padding:5px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff">${[6000, 7000, 8000, 12000, 13500].map(v => `<option value="${v}" ${v === _nomProdBarre ? 'selected' : ''}>Barres de ${nbNomProd(v / 1000, 1)} m</option>`).join('')}</select>
         <button onclick="event.stopPropagation();imprimerDebit(${carteId})" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">🖨️ Imprimer</button>` : ''}</div>`;
     if (vue === 'debit') return h + `<div style="padding:0 12px 12px">${htmlDebit(lignes, false)}</div>`;
+    if (vue === 'fab') return h + `<div style="padding:0 12px 12px">${htmlFabrication(vid, lignes, n)}</div>`;
     h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:800px">
       <thead><tr style="background:#f6f6f6;color:#777;text-align:left">
         <th style="padding:6px">Repère</th><th style="padding:6px">Code article</th><th style="padding:6px">Désignation</th><th style="padding:6px">Profilé</th><th style="padding:6px;text-align:right">Qté</th>
@@ -2657,6 +2850,7 @@
               <span style="flex:0 0 auto;background:${n.statut === 'ACTIVE' ? '#e8f0e7' : '#f4f4f4'};color:${n.statut === 'ACTIVE' ? 'var(--vert)' : '#999'};border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">rév. ${n.revision}${n.statut === 'ACTIVE' ? '' : ' · remplacée'}</span>
             </div>
             <div style="font-size:11px;color:#888;margin-top:3px">Diffusée le ${dateNomProd(n.diffuse_le)}${n.diffuse_par ? ' par ' + esc(n.diffuse_par) : ''} · ${n.nb_lignes || 0} ligne(s)${Number(n.nb_reperes) ? ' dont ' + n.nb_reperes + ' repère(s)' : ''}${Number(n.masse_totale) ? ' · ' + nbNomProd(n.masse_totale, 1) + ' kg' + (Number(n.masse_galva) ? ' (galva ' + nbNomProd(n.masse_galva, 1) + ' kg)' : '') : ''}</div>
+            ${n.of_id ? `<div style="margin-top:5px;margin-right:4px;display:inline-block;background:${n.of_statut === 'TERMINE' ? '#e8f0e7' : '#ede7f6'};color:${n.of_statut === 'TERMINE' ? 'var(--vert)' : '#5e35b1'};border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🏭 ${n.of_statut === 'TERMINE' ? 'Fabrication terminée' : 'En fabrication · ' + (n.of_avancement ?? 0) + ' %'}</div>` : ''}
             ${aCtrl ? `<div style="margin-top:5px;display:inline-block;background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">⚠️ ${aCtrl} ligne(s) à contrôler${Number(n.nb_sans_code) ? ' · ' + n.nb_sans_code + ' sans code' : ''}${Number(n.nb_inconnus) ? ' · ' + n.nb_inconnus + ' code(s) inconnu(s)' : ''}</div>` : ''}
           </div>
           ${ouvert ? renderDetailNomenclature(n.id) : ''}
@@ -15074,6 +15268,13 @@
   // ============================================================
   let _articlesCache = [];
   let _mouvementsCache = [];
+  // V19 : marqueurs techniques à quantité 0 (proposition de stock écartée « 🚫 Traité », mouvement annulé) :
+  // ils ne sont pas de vrais mouvements → masqués des historiques, coûts et analyses
+  function estMouvementTechnique(m) {
+    if (Number(m['Quantite']) || 0) return false;
+    const lib = String(m['Libelle'] || ''), note = String(m['Note'] || '');
+    return lib.startsWith('Proposition stock écartée') || note.startsWith('ECARTE') || /ANNUL[ÉE]E/.test(note);
+  }
   let _stockParArticle = {};
   let _stockCharge = false;
   let _stockFiltre = 'tous';
@@ -15660,7 +15861,7 @@
   }
 
   function renderDetailArticle(a) {
-    const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id)
+    const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id && !estMouvementTechnique(m))
       .sort((x, y) => (y['Date'] || '').localeCompare(x['Date'] || '') || (y.id - x.id)).slice(0, 15);
     const couleurs = { 'Entrée': '#2f7d3c', 'Retour': '#2f7d3c', 'Sortie': '#c0392b', 'Inventaire': '#7c5200' };
     const lignesMvt = mvts.map(m => {
@@ -16503,7 +16704,7 @@
     }
     // Mouvements et chantiers (articles ; pas pour un ouvrage, qui n'a pas de stock propre)
     if (a && !estOuvrage) {
-      const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id)
+      const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id && !estMouvementTechnique(m))
         .sort((p, q) => String(q['Date'] || '').localeCompare(String(p['Date'] || '')) || q.id - p.id);
       // V34 : où se trouve ce qui est sorti (chantier, quantité, date et auteur de la sortie)
       const sorties = ouSortiArticle(a.id);
@@ -16590,6 +16791,14 @@
     _dernierScan = { code, t: now };
     // Bon de sortie de stock (prise en stock d'une commande) : le scan valide la sortie
     if (/^BS-\d+(\.\d+)*$/i.test(code)) { validerBonSortieScan(code); return; }
+    // V17 : étiquette de repère de fabrication → pointage atelier
+    if (/^REP-[A-Z0-9]+-[A-Z]{3}-\d{3,}$/i.test(code)) {
+      bipScan(true);
+      try { arreterCamera(); } catch (e) {}
+      document.getElementById('modal-scan-stock').style.display = 'none';
+      ouvrirPointageRepere(code.slice(4).toUpperCase());
+      return;
+    }
     // Ligne de la fiche de réception A4 (ou article pendant une non-conformité)
     if (_scanMode === 'info' && _recExpress && _recExpress.etape === 'nc' && selectionLigneExpressParCode(code, source)) { bipScan(true); return; }
     if (_scanMode === 'info' && _departScanUid && selectionDepartParCode(code)) { bipScan(true); return; }
@@ -18470,12 +18679,12 @@
   }
   function resoudreCodeScanne(brut) {
     const c = extraireCodeScan(brut);
-    const connu = x => /^LIG-\d+$/i.test(x) || /^BS-\d+(\.\d+)*$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
+    const connu = x => /^LIG-\d+$/i.test(x) || /^BS-\d+(\.\d+)*$/i.test(x) || /^REP-[A-Z0-9]+-[A-Z]{3}-\d{3,}$/i.test(x) || (typeof trouverCommandeParCode === 'function' && trouverCommandeParCode(x)) || trouverArticleParCode(x);
     if (!c || connu(c)) return c;
     // Disposition clavier différente : on retraduit le texte BRUT (adresse comprise),
     // puis on en extrait le code (…?scan=CODE).
     const t = extraireCodeScan(retraduireAzerty(String(brut || '').trim()));
-    return (t && t !== c && (connu(t) || /^(CMD|LIG|ART)-\d+$/i.test(t) || /^BS-\d+(\.\d+)*$/i.test(t))) ? t : c;
+    return (t && t !== c && (connu(t) || /^(CMD|LIG|ART)-\d+$/i.test(t) || /^REP-[A-Z0-9]+-[A-Z]{3}-\d{3,}$/i.test(t) || /^BS-\d+(\.\d+)*$/i.test(t))) ? t : c;
   }
 
   let _bufDouchette = '', _tDouchette = 0, _debutDouchette = 0;
@@ -19281,6 +19490,7 @@
     _mouvementsCache.forEach(m => {
       const type = m['Type']?.value || m['Type'] || '';
       if (type !== 'Sortie' && type !== 'Retour') return;
+      if (estMouvementTechnique(m)) return; // V19
       if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
       const chantier = (m['Chantier'] || '').trim() || '(sans chantier)';
       if (normTexte(chantier).includes('stock atelier')) return;
@@ -27282,6 +27492,7 @@
         mvts.forEach(m => {
           const type = m['Type']?.value || m['Type'] || '';
           if (type !== 'Sortie' && type !== 'Retour') return;
+          if (estMouvementTechnique(m)) return; // V19 : marqueur à quantité 0
           if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
           // V110 : kit atelier ou matériel interne (identifié par l'article lui-même, quelle que soit la note du mouvement)
           { const art = artParId.get((m['Article'] || [])[0]?.id); if (art && ((art['Origine'] || '') === 'Kit' || estMateriel(art))) return; }
