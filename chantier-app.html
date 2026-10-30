@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V12';
+  const APP_VERSION = 'V13';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1125,6 +1125,7 @@
     const navCommandesClients = document.getElementById('nav-commandes-clients');
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     { const nm = document.getElementById('nav-materiel'); if (nm) nm.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none'; } // V117
+    { const nn = document.getElementById('nav-nomenclature'); if (nn) nn.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none'; } // V13
     const navRepertoire = document.getElementById('nav-repertoire');
     if (navRepertoire) navRepertoire.style.display = 'flex'; // Visible pour tous (édition réservée Admin/Gestionnaire)
     { const bx = document.getElementById('btn-excel-relances'); if (bx) bx.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // V100
@@ -2439,10 +2440,138 @@
       if (!peutVoirMateriel()) { switchPage('saisie'); return; }
       showPage('page-materiel');
       chargerMaterielPage(false);
+    } else if (nav === 'nomenclature') {
+      if (!peutVoirNomenclature()) { switchPage('saisie'); return; }
+      showPage('page-nomenclature');
+      chargerNomenclaturesPage(false);
     } else if (nav === 'repertoire') {
       showPage('page-repertoire');
       chargerRepertoirePage();
     }
+  }
+
+  // ── V13 : ONGLET « NOMENCLATURE » — nomenclatures de production diffusées depuis Inventor ──
+  // Source : Worker /plm/nomenclatures (en-têtes) et /plm/nomenclature?id=… (lignes), base D1.
+  let _nomProdListe = [], _nomProdDetails = {}, _nomProdOuverts = new Set(), _nomProdRev = {};
+  function peutVoirNomenclature() { return connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire'; }
+  async function appelWorkerLecture(chemin) {
+    const r = await _fetchNatifBrut(GB_WORKER + chemin + (chemin.includes('?') ? '&' : '?') + 't=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + (r.status === 404 ? ' (Worker à mettre à jour)' : '')));
+    return d;
+  }
+  function dateNomProd(s) {
+    if (!s) return '—';
+    const d = new Date(String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z'));
+    return isNaN(d) ? String(s) : d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function nbNomProd(v, dec = 2) { return v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('fr-FR', { maximumFractionDigits: dec }); }
+  async function chargerNomenclaturesPage(force) {
+    const zone = document.getElementById('nomprod-liste');
+    if (!zone) return;
+    if (force) _nomProdDetails = {};
+    zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">⏳ Chargement des nomenclatures…</div>';
+    try {
+      const statut = document.getElementById('nomprod-statut')?.value || 'ACTIVE';
+      const d = await appelWorkerLecture('/plm/nomenclatures?statut=' + statut);
+      _nomProdListe = d.nomenclatures || [];
+      if (typeof stockTablesConfigurees === 'function' && stockTablesConfigurees() && !_stockCharge) chargerStock().then(() => renderNomenclatures()).catch(() => {});
+      renderNomenclatures();
+      for (const id of _nomProdOuverts) chargerDetailNomenclature(_nomProdRev[id] || id);
+    } catch (e) { zone.innerHTML = `<div style="padding:16px;color:#c0392b;font-size:13px">❌ ${escMat(e.message)}</div>`; }
+  }
+  async function chargerDetailNomenclature(id) {
+    if (_nomProdDetails[id]) return;
+    _nomProdDetails[id] = { chargement: true };
+    try { _nomProdDetails[id] = await appelWorkerLecture('/plm/nomenclature?id=' + id); }
+    catch (e) { _nomProdDetails[id] = { erreur: e.message }; }
+    renderNomenclatures();
+  }
+  function basculerNomenclature(id) {
+    if (_nomProdOuverts.has(id)) _nomProdOuverts.delete(id);
+    else { _nomProdOuverts.add(id); chargerDetailNomenclature(_nomProdRev[id] || id); }
+    renderNomenclatures();
+  }
+  function afficherRevisionNomenclature(carteId, revId) {
+    _nomProdRev[carteId] = revId;
+    chargerDetailNomenclature(revId);
+    renderNomenclatures();
+  }
+  function stockLigneNomProd(l) {
+    if (!(l.stock_ids || []).length || !_stockCharge) return null;
+    return l.stock_ids.reduce((t, id) => t + (Number(_stockParArticle[id]) || 0), 0);
+  }
+  function renderDetailNomenclature(carteId) {
+    const esc = escMat;
+    const vid = _nomProdRev[carteId] || carteId;
+    const det = _nomProdDetails[vid];
+    if (!det || det.chargement) return '<div style="padding:10px 12px;color:#999;font-size:12px">⏳ Lecture des lignes…</div>';
+    if (det.erreur) return `<div style="padding:10px 12px;color:#c0392b;font-size:12px">❌ ${esc(det.erreur)}</div>`;
+    const n = det.nomenclature, lignes = det.lignes || [];
+    let h = '';
+    if ((det.revisions || []).length > 1) {
+      h += `<div style="display:flex;gap:4px;flex-wrap:wrap;padding:0 12px 8px">${det.revisions.map(r => `<button onclick="event.stopPropagation();afficherRevisionNomenclature(${carteId}, ${r.id})" style="border:1px solid ${r.id === vid ? '#5e35b1' : '#ddd'};background:${r.id === vid ? '#ede7f6' : '#fff'};color:${r.id === vid ? '#5e35b1' : 'var(--gris)'};border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">rév. ${r.revision}${r.statut === 'ACTIVE' ? ' · en cours' : ''} · ${dateNomProd(r.diffuse_le).slice(0, 10)}</button>`).join('')}</div>`;
+      if (n.statut !== 'ACTIVE') h += '<div style="margin:0 12px 8px;background:#fff3e0;color:#a2560f;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:700">⚠️ Révision remplacée : ne pas fabriquer d\'après cette version.</div>';
+    }
+    h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px">
+      <thead><tr style="background:#f6f6f6;color:#777;text-align:left">
+        <th style="padding:6px">Code</th><th style="padding:6px">Désignation</th><th style="padding:6px;text-align:right">Qté</th>
+        <th style="padding:6px">Finition</th><th style="padding:6px;text-align:right">Long. / ép.</th><th style="padding:6px;text-align:right">Masse</th>
+        <th style="padding:6px;text-align:right">Stock</th><th style="padding:6px">Contrôle</th></tr></thead><tbody>`;
+    for (const l of lignes) {
+      const st = stockLigneNomProd(l);
+      const qte = Number(l.quantite) || 0;
+      const manque = st !== null && st < qte;
+      const dims = [l.longueur_mm ? 'L ' + nbNomProd(l.longueur_mm, 1) : '', l.epaisseur_mm ? 'ép. ' + nbNomProd(l.epaisseur_mm, 1) : ''].filter(Boolean).join(' · ');
+      const codeHtml = l.code
+        ? ((l.stock_ids || []).length ? `<span onclick="event.stopPropagation();ouvrirFicheArticleModal(${l.stock_ids[0]}, '${esc(l.code).replace(/'/g, "\\'")}')" style="text-decoration:underline;cursor:pointer">${esc(l.code)}</span>` : esc(l.code))
+        : '<span style="color:#c0392b">—</span>';
+      h += `<tr style="border-top:1px solid #f0f0f0;${l.controle ? 'background:#fffaf0' : ''}">
+        <td style="padding:6px;font-family:monospace;font-weight:700;white-space:nowrap">${codeHtml}${l.statut_ref === 'PROVISOIRE' ? ' <span title="Code interne, pas encore dans EBP" style="color:#5e35b1">🆕</span>' : ''}</td>
+        <td style="padding:6px">${esc(l.designation_ref || l.designation || '')}${l.designation_ref && l.designation && l.designation !== l.designation_ref ? `<div style="font-size:10px;color:#999">${esc(l.designation)}</div>` : ''}</td>
+        <td style="padding:6px;text-align:right;font-weight:800">${l.quantite !== null ? nbNomProd(l.quantite, 3) : esc(l.quantite_brute || '?')}</td>
+        <td style="padding:6px">${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td>
+        <td style="padding:6px;text-align:right;white-space:nowrap">${dims}</td>
+        <td style="padding:6px;text-align:right;white-space:nowrap">${l.masse_kg ? nbNomProd(l.masse_kg * qte, 2) + ' kg' : ''}</td>
+        <td style="padding:6px;text-align:right;font-weight:700;color:${st === null ? '#bbb' : manque ? '#c0392b' : 'var(--vert)'}">${st === null ? '—' : nbNomProd(st, 2)}</td>
+        <td style="padding:6px;color:#a2560f;font-size:11px">${esc(l.controle || '')}</td></tr>`;
+    }
+    h += '</tbody></table></div>';
+    return h;
+  }
+  function renderNomenclatures() {
+    const zone = document.getElementById('nomprod-liste');
+    if (!zone) return;
+    const esc = escMat;
+    const q = (document.getElementById('nomprod-recherche')?.value || '').toLowerCase().trim();
+    const correspond = n => {
+      if (!q) return true;
+      if (`${n.chantier_nom || ''} ${n.assemblage || ''} ${n.diffuse_par || ''}`.toLowerCase().includes(q)) return true;
+      const det = _nomProdDetails[_nomProdRev[n.id] || n.id];
+      return !!(det && det.lignes && det.lignes.some(l => `${l.code || ''} ${l.designation || ''} ${l.designation_ref || ''}`.toLowerCase().includes(q)));
+    };
+    const liste = _nomProdListe.filter(correspond);
+    if (!_nomProdListe.length) { zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">Aucune nomenclature diffusée pour l\'instant.<br><span style="font-size:11px">Elles arrivent depuis Inventor (règle « Diffuser_Nomenclature »).</span></div>'; return; }
+    if (!liste.length) { zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">Aucune nomenclature ne correspond à la recherche.</div>'; return; }
+    const parChantier = new Map();
+    liste.forEach(n => { const k = n.chantier_nom || ('Chantier ' + n.chantier_id); if (!parChantier.has(k)) parChantier.set(k, []); parChantier.get(k).push(n); });
+    zone.innerHTML = [...parChantier.entries()].map(([ch, ns]) => `
+      <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;letter-spacing:.4px;margin:14px 0 6px">🏗️ ${esc(ch)}</div>
+      ${ns.map(n => {
+        const ouvert = _nomProdOuverts.has(n.id);
+        const aCtrl = Number(n.nb_a_controler) || 0;
+        return `<div style="background:#fff;border-radius:12px;margin:0 0 8px;box-shadow:0 2px 8px rgba(0,0,0,0.06);overflow:hidden">
+          <div onclick="basculerNomenclature(${n.id})" style="padding:10px 12px;cursor:pointer">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+              <div style="font-size:14px;font-weight:800;color:var(--gris)">📐 ${esc(n.assemblage)}</div>
+              <span style="flex:0 0 auto;background:${n.statut === 'ACTIVE' ? '#e8f0e7' : '#f4f4f4'};color:${n.statut === 'ACTIVE' ? 'var(--vert)' : '#999'};border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">rév. ${n.revision}${n.statut === 'ACTIVE' ? '' : ' · remplacée'}</span>
+            </div>
+            <div style="font-size:11px;color:#888;margin-top:3px">Diffusée le ${dateNomProd(n.diffuse_le)}${n.diffuse_par ? ' par ' + esc(n.diffuse_par) : ''} · ${n.nb_lignes || 0} ligne(s)${Number(n.masse_totale) ? ' · ' + nbNomProd(n.masse_totale, 1) + ' kg' + (Number(n.masse_galva) ? ' (galva ' + nbNomProd(n.masse_galva, 1) + ' kg)' : '') : ''}</div>
+            ${aCtrl ? `<div style="margin-top:5px;display:inline-block;background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">⚠️ ${aCtrl} ligne(s) à contrôler${Number(n.nb_sans_code) ? ' · ' + n.nb_sans_code + ' sans code' : ''}${Number(n.nb_inconnus) ? ' · ' + n.nb_inconnus + ' code(s) inconnu(s)' : ''}</div>` : ''}
+          </div>
+          ${ouvert ? renderDetailNomenclature(n.id) : ''}
+        </div>`;
+      }).join('')}`).join('');
   }
 
   // ── V117 : ONGLET « SORTIE MATÉRIEL GUÉRIN » (Administrateur / Gestionnaire) ──
@@ -28910,6 +29039,10 @@
     <span class="nav-icon">🧰</span>
     Matériel
   </button>
+  <button class="nav-btn" id="nav-nomenclature" style="display:none" onclick="switchPage('nomenclature')">
+    <span class="nav-icon">📐</span>
+    Nomenclature
+  </button>
   <button class="nav-btn" id="nav-repertoire" style="display:none" onclick="switchPage('repertoire')">
     <span class="nav-icon">📇</span>
     Répertoire
@@ -29209,6 +29342,22 @@
   <datalist id="materiel-chantiers-list"></datalist>
 </div>
 
+<div id="page-nomenclature" class="page" style="display:none">
+  <div class="bandeau-fige">
+  <div style="padding:14px 16px 4px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <div style="font-size:16px;font-weight:800;color:var(--gris)">📐 Nomenclatures de production</div>
+    <button onclick="chargerNomenclaturesPage(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer">🔄</button>
+  </div>
+  <div style="padding:6px 16px 6px;display:flex;gap:6px;flex-wrap:wrap">
+    <input type="text" id="nomprod-recherche" placeholder="🔍 Chantier, assemblage, code ou désignation…" oninput="renderNomenclatures()" style="flex:1 1 60%;min-width:0;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:8px 10px;font-size:13px">
+    <select id="nomprod-statut" onchange="chargerNomenclaturesPage(true)" style="flex:1 1 30%;min-width:0;padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px;background:#fff">
+      <option value="ACTIVE">Révisions en cours</option>
+      <option value="TOUTES">Tout l'historique</option>
+    </select>
+  </div>
+  </div>
+  <div id="nomprod-liste" style="padding:4px 16px 90px"></div>
+</div>
 <div id="page-repertoire" class="page" style="display:none">
   <div class="bandeau-fige">
   <div style="padding:16px 16px 4px;display:flex;justify-content:space-between;align-items:center">
