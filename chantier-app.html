@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V19';
+  const APP_VERSION = 'V21';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2469,7 +2469,7 @@
   async function chargerNomenclaturesPage(force) {
     const zone = document.getElementById('nomprod-liste');
     if (!zone) return;
-    if (force) { _nomProdDetails = {}; _ofDetails = {}; }
+    if (force) { _nomProdDetails = {}; _ofDetails = {}; _delaisOF = {}; }
     if (force || !_nomProdListe.length) zone.innerHTML = '<div style="padding:24px;text-align:center;color:#999;font-size:13px">⏳ Chargement des nomenclatures…</div>';
     try {
       const statut = document.getElementById('nomprod-statut')?.value || 'ACTIVE';
@@ -2624,6 +2624,14 @@
     try { await appelWorkerPost('/plm/of/pointer', corps); await chargerOF(nomId, true); chargerNomenclaturesPage(false); }
     catch (e) { alert('❌ ' + e.message); }
   }
+  // Colonnes du tableau de suivi : postes réellement présents dans l'OF, dans l'ordre de l'atelier
+  function colonnesOF(det) {
+    const presents = new Set((det.ops || []).map(o => o.operation));
+    const lib = new Map((det.ops || []).map(o => [o.operation, o.operation === 'TRAITEMENT' ? 'Traitement' : o.libelle]));
+    const ordre = (det.postes || []).map(p => p.code);
+    return [...presents].sort((a, b) => (ordre.indexOf(a) < 0 ? 999 : ordre.indexOf(a)) - (ordre.indexOf(b) < 0 ? 999 : ordre.indexOf(b)))
+      .map(code => ({ code, libelle: lib.get(code) || code }));
+  }
   function htmlFabrication(nomId, lignes, n) {
     const esc = escMat, det = _ofDetails[nomId];
     if (!det || det.chargement) { if (!det) chargerOF(nomId); return '<div style="color:#999;font-size:12px;padding:6px 0">⏳ Lecture de l\'ordre de fabrication…</div>'; }
@@ -2642,16 +2650,18 @@
     let h = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 8px">
         <span style="font-size:12px;font-weight:800;color:${det.of.statut === 'TERMINE' ? 'var(--vert)' : det.of.statut === 'REMPLACE' ? '#999' : '#5e35b1'}">🏭 OF n° ${det.of.id} · ${det.of.statut === 'TERMINE' ? 'terminé' : det.of.statut === 'REMPLACE' ? 'remplacé' : 'en cours'} · ${pct} %</span>
         <div style="flex:1;min-width:80px;height:8px;background:#eee;border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${pct >= 100 ? 'var(--vert)' : '#5e35b1'}"></div></div>
+        <button onclick="event.stopPropagation();imprimerOF(${nomId})" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:#5e35b1;color:#fff">🖨️ Imprimer l'OF</button>
         <button onclick="event.stopPropagation();imprimerEtiquettesOF(${nomId})" style="border:none;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;background:var(--beige-clair);color:var(--gris)">🏷️ Étiquettes QR</button></div>
+      ${htmlDelaiOF(det.of.chantier_id, pct)}
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px"><thead><tr style="background:#f6f6f6;color:#777;text-align:left">
         <th style="padding:6px">Repère</th><th style="padding:6px">Pièce</th><th style="padding:6px;text-align:right">Qté</th>
-        ${Object.values(OPS_COURTS).map(x => `<th style="padding:6px;text-align:center">${x}</th>`).join('')}</tr></thead><tbody>`;
+        ${colonnesOF(det).map(c => `<th style="padding:6px;text-align:center;font-size:11px">${esc(c.libelle)}</th>`).join('')}</tr></thead><tbody>`;
     for (const [rep, liste] of parRep) {
       const l = infos.get(rep) || {};
       h += `<tr style="border-top:1px solid #f0f0f0"><td style="padding:6px;font-family:monospace;font-weight:800;color:#5e35b1;white-space:nowrap">${esc(rep)}</td>
         <td style="padding:6px">${esc(l.type_libelle || l.designation || '')}<div style="font-size:10px;color:#999">${esc([l.profil, l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) : 'L ' + nbNomProd(l.longueur_mm, 0)) : '', l.finition].filter(Boolean).join(' · '))}</div></td>
         <td style="padding:6px;text-align:right;font-weight:800">${nbNomProd(liste[0].qte_prevue, 0)}</td>`;
-      for (const op of Object.keys(OPS_COURTS)) {
+      for (const op of colonnesOF(det).map(c => c.code)) {
         const o = liste.find(x => x.operation === op);
         if (!o) { h += '<td style="padding:6px;text-align:center;color:#ddd">—</td>'; continue; }
         const [fond, coul] = couleurOp(o);
@@ -2765,15 +2775,243 @@
     const total = [...parOp.values()].reduce((a, b) => a + b, 0);
     const masse = lignes.filter(l => l.repere).reduce((s, l) => s + (Number(l.masse_kg) || 0) * (Number(l.quantite) || 0), 0);
     const pastille = (lib, m) => `<span style="display:inline-block;background:#f1f5f9;border-radius:8px;padding:3px 8px;margin:2px;font-size:11px"><b>${esc(lib)}</b> ${dureeFab(m)}</span>`;
+    const libOp = new Map((det.ops || []).map(o => [o.operation, o.operation === 'TRAITEMENT' ? 'Traitement' : o.libelle]));
+    const std = (det.ops || []).filter(o => Number(o.temps_std_min) > 0 && o.statut !== 'SANS_OBJET').reduce((s, o) => s + Number(o.temps_std_min) * Number(o.qte_faite || 0), 0);
     return `<div style="margin-top:10px;padding:8px 10px;background:#fafafa;border-radius:10px">
-      <div style="font-size:12px;font-weight:800;color:var(--gris)">⏱ Temps passés : ${dureeFab(total)}${masse && total ? ` · ${nbNomProd(masse / (total / 60), 0)} kg/h` : ''}</div>
-      <div style="margin-top:4px">${[...parOp.entries()].map(([op, m]) => pastille(OPS_COURTS[op] || op, m)).join('')}</div>
+      <div style="font-size:12px;font-weight:800;color:var(--gris)">⏱ Temps passés : ${dureeFab(total)}${masse && total ? ` · ${nbNomProd(masse / (total / 60), 0)} kg/h` : ''}${std ? ` · <span style="color:${total > std * 1.1 ? '#c0392b' : 'var(--vert)'}">standard ${dureeFab(std)} pour les quantités faites (${total > std ? '+' : ''}${Math.round(100 * (total - std) / std)} %)</span>` : ''}</div>
+      <div style="margin-top:4px">${[...parOp.entries()].map(([op, m]) => pastille(libOp.get(op) || op, m)).join('')}</div>
       <div style="margin-top:2px">${[...parPers.entries()].sort((a, b) => b[1] - a[1]).map(([p, m]) => pastille('👷 ' + (p || '?'), m)).join('')}</div></div>`;
   }
   async function pointerRepereScan(repere, opId, action) {
     try { await appelWorkerPost('/plm/of/pointer', { op_id: opId, ...action }); try { bipScan(true); } catch (e) {} }
     catch (e) { try { bipScan(false); } catch (x) {} alert('❌ ' + e.message); }
     await rafraichirPointageRepere(repere);
+  }
+  // ── V19 : GAMMES DE FABRICATION — postes atelier et gamme par type de pièce ──
+  let _gammesEdit = null, _gammesType = '';
+  async function ouvrirEditeurGammes() {
+    document.getElementById('modal-gammes')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-gammes';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:12px';
+    fond.innerHTML = '<div id="gammes-boite" style="background:#fff;border-radius:14px;max-width:760px;width:100%;max-height:90vh;overflow:auto;padding:16px"><div style="color:#999">⏳ Lecture des gammes…</div></div>';
+    document.body.appendChild(fond);
+    try {
+      const d = await appelWorkerLecture('/plm/gammes');
+      _gammesEdit = { postes: d.postes.map(p => ({ code: p.code, libelle: p.libelle, actif: p.actif !== 0 })), gammes: JSON.parse(JSON.stringify(d.gammes || {})), types: d.types || [], secours: d.secours || [] };
+      _gammesType = _gammesType || ((d.types || [])[0] || {}).code || '';
+      renderEditeurGammes();
+    } catch (e) { document.getElementById('gammes-boite').innerHTML = `<div style="color:#c0392b">❌ ${escMat(e.message)}</div>`; }
+  }
+  function renderEditeurGammes() {
+    const boite = document.getElementById('gammes-boite');
+    if (!boite || !_gammesEdit) return;
+    const esc = escMat, G = _gammesEdit;
+    const champ = 'padding:6px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:12px';
+    const petit = 'border:1px solid #ddd;background:#fff;border-radius:6px;padding:4px 7px;font-size:11px;cursor:pointer';
+    const etapes = G.gammes[_gammesType] || [];
+    const optPostes = sel => G.postes.filter(p => p.actif || p.code === sel).map(p => `<option value="${esc(p.code)}" ${p.code === sel ? 'selected' : ''}>${esc(p.libelle)}</option>`).join('');
+    boite.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="font-size:16px;font-weight:800;color:var(--gris)">⚙️ Gammes de fabrication</div>
+        <button onclick="document.getElementById('modal-gammes').remove()" style="${petit}">✕ Fermer</button></div>
+      <div style="font-size:11px;color:#888;margin:4px 0 12px">Appliquées au lancement de chaque OF, selon le type de la pièce. « Traitement » devient Galvanisation ou Peinture selon la finition, et disparaît pour une pièce brute. Les OF déjà lancés ne changent pas.</div>
+      <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin-bottom:6px">Gamme par type de pièce</div>
+      <select onchange="_gammesType=this.value;renderEditeurGammes()" style="${champ};width:100%;margin-bottom:8px">
+        ${G.types.map(t => `<option value="${esc(t.code)}" ${t.code === _gammesType ? 'selected' : ''}>${esc(t.code)} – ${esc(t.libelle)}${(G.gammes[t.code] || []).length ? '' : ' (gamme par défaut)'}</option>`).join('')}</select>
+      ${etapes.length ? '' : `<div style="font-size:11px;color:#a2560f;margin-bottom:6px">Pas de gamme propre : la gamme par défaut s'applique (${G.secours.map(c => esc((G.postes.find(p => p.code === c) || {}).libelle || c)).join(' → ')}).</div>`}
+      ${etapes.map((x, i) => `<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+          <span style="width:20px;text-align:right;font-weight:800;color:#999;font-size:12px">${i + 1}</span>
+          <select onchange="_gammesEdit.gammes[_gammesType][${i}].poste=this.value" style="${champ};flex:1">${optPostes(x.poste)}</select>
+          <input type="number" min="0" step="1" value="${x.temps_std_min ?? ''}" placeholder="min/pièce" onchange="_gammesEdit.gammes[_gammesType][${i}].temps_std_min=this.value===''?null:Number(this.value)" title="Temps standard par pièce (minutes)" style="${champ};width:90px">
+          <button onclick="deplacerEtapeGamme(${i},-1)" style="${petit}" ${i ? '' : 'disabled'}>↑</button>
+          <button onclick="deplacerEtapeGamme(${i},1)" style="${petit}" ${i < etapes.length - 1 ? '' : 'disabled'}>↓</button>
+          <button onclick="_gammesEdit.gammes[_gammesType].splice(${i},1);renderEditeurGammes()" style="${petit};color:#c0392b">✕</button></div>`).join('')}
+      <div style="display:flex;gap:6px;margin:4px 0 16px">
+        <button onclick="(_gammesEdit.gammes[_gammesType]=_gammesEdit.gammes[_gammesType]||[]).push({poste:(_gammesEdit.postes.find(p=>p.actif)||{}).code,temps_std_min:null});renderEditeurGammes()" style="${petit}">+ Étape</button>
+        ${etapes.length ? '' : `<button onclick="_gammesEdit.gammes[_gammesType]=_gammesEdit.secours.map(c=>({poste:c,temps_std_min:null}));renderEditeurGammes()" style="${petit}">Partir de la gamme par défaut</button>`}</div>
+      <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin-bottom:6px">Postes de l'atelier</div>
+      ${G.postes.map((p, i) => `<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+          <span style="width:96px;font-family:monospace;font-size:11px;font-weight:700;color:#777">${esc(p.code)}</span>
+          <input value="${esc(p.libelle)}" onchange="_gammesEdit.postes[${i}].libelle=this.value" style="${champ};flex:1">
+          <label style="font-size:11px;color:#777;white-space:nowrap"><input type="checkbox" ${p.actif ? 'checked' : ''} onchange="_gammesEdit.postes[${i}].actif=this.checked"> actif</label></div>`).join('')}
+      <button onclick="ajouterPosteGamme()" style="${petit};margin:4px 0 16px">+ Poste</button>
+      <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eee;padding-top:12px">
+        <button onclick="document.getElementById('modal-gammes').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Annuler</button>
+        <button onclick="enregistrerGammesApp(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">💾 Enregistrer</button></div>`;
+  }
+  function deplacerEtapeGamme(i, sens) {
+    const g = _gammesEdit.gammes[_gammesType], j = i + sens;
+    if (!g || j < 0 || j >= g.length) return;
+    [g[i], g[j]] = [g[j], g[i]];
+    renderEditeurGammes();
+  }
+  function ajouterPosteGamme() {
+    const lib = prompt('Nom du nouveau poste (ex. Grenaillage) :');
+    if (!lib || !lib.trim()) return;
+    let code = lib.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16) || 'POSTE';
+    while (_gammesEdit.postes.some(p => p.code === code)) code = code.slice(0, 14) + Math.floor(Math.random() * 90 + 10);
+    _gammesEdit.postes.push({ code, libelle: lib.trim(), actif: true });
+    renderEditeurGammes();
+  }
+  async function enregistrerGammesApp(btn) {
+    btn.disabled = true;
+    try {
+      await appelWorkerPost('/plm/gammes', { postes: _gammesEdit.postes, gammes: _gammesEdit.gammes });
+      document.getElementById('modal-gammes').remove();
+      alert('✅ Gammes enregistrées. Elles s\'appliqueront aux prochains lancements en fabrication.');
+    } catch (e) { alert('❌ ' + e.message); btn.disabled = false; }
+  }
+  // ── V21 : DÉLAIS DE FABRICATION d'après le plan de charge (même calcul que l'onglet Charge) ──
+  let _delaisOF = {}; // chantier_id → { fabDebut, fabFin, pose, joursRestants } | { aucun: true } | { chargement: true }
+  function joursOuvresJusqua(finStr) {
+    const auj = dateYMD(new Date());
+    if (!finStr) return null;
+    let n = 0; const d = new Date(auj + 'T12:00:00'), fin = finStr;
+    const sens = fin >= auj ? 1 : -1;
+    while (dateYMD(d) !== fin && n < 400) { d.setDate(d.getDate() + sens); const ds = dateYMD(d), dow = d.getDay(); if (dow !== 0 && dow !== 6 && !estJourFerie(ds)) n += sens; }
+    return n;
+  }
+  async function chargerDelaisOF(chantierId) {
+    if (!chantierId || _delaisOF[chantierId]) return _delaisOF[chantierId];
+    _delaisOF[chantierId] = { chargement: true };
+    try {
+      const [rPc, rCol] = await Promise.all([
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_PLAN_CHARGE + '/?user_field_names=true&size=200&filter__Chantier__link_row_has=' + chantierId, { headers: HEADERS }),
+        fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_COLLABS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS })]);
+      const affaires = ((await rPc.json()).results || []).filter(a => a['Date livraison']);
+      const collabs = (await rCol.json()).results || [];
+      if (!affaires.length) { _delaisOF[chantierId] = { aucun: true }; return _delaisOF[chantierId]; }
+      // plusieurs lignes de plan de charge : la pose la plus proche
+      affaires.sort((a, b) => String(a['Date livraison']).localeCompare(String(b['Date livraison'])));
+      const p = calculerPeriodesAffaire(affaires[0], collabs);
+      const fab = p && p['Fab Acier'] && p['Fab Acier'].jours ? p['Fab Acier'] : (p && p['Fab Bois'] && p['Fab Bois'].jours ? p['Fab Bois'] : null);
+      _delaisOF[chantierId] = p ? {
+        fabDebut: fab ? fab.debut : null, fabFin: fab ? fab.fin : (p['Pose'] ? reculerUnJourOuvre(p['Pose'].debut) : null),
+        pose: p['Pose'] ? p['Pose'].debut : String(affaires[0]['Date livraison']).slice(0, 10)
+      } : { aucun: true };
+      if (_delaisOF[chantierId].fabFin) _delaisOF[chantierId].joursRestants = joursOuvresJusqua(_delaisOF[chantierId].fabFin);
+    } catch (e) { _delaisOF[chantierId] = { erreur: e.message }; }
+    return _delaisOF[chantierId];
+  }
+  function reculerUnJourOuvre(ds) {
+    const d = new Date(ds + 'T12:00:00');
+    do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6 || estJourFerie(dateYMD(d)));
+    return dateYMD(d);
+  }
+  const frDate = ds => ds ? String(ds).slice(0, 10).split('-').reverse().join('/') : '—';
+  function etatDelai(dl, pct) {
+    if (!dl || dl.aucun || dl.erreur || dl.chargement || !dl.fabFin) return null;
+    const j = dl.joursRestants;
+    if (pct >= 100) return { coul: 'var(--vert)', fond: '#e8f0e7', txt: 'Fabrication terminée' };
+    if (j < 0) return { coul: '#c0392b', fond: '#fdecea', txt: `En retard de ${-j} jour(s) ouvré(s)` };
+    if (j <= 3) return { coul: '#a2560f', fond: '#fff3e0', txt: `Urgent : ${j} jour(s) ouvré(s) restant(s)` };
+    return { coul: '#5e35b1', fond: '#ede7f6', txt: `${j} jour(s) ouvré(s) restant(s)` };
+  }
+  function htmlDelaiOF(chantierId, pct) {
+    const dl = _delaisOF[chantierId];
+    if (!dl) { chargerDelaisOF(chantierId).then(() => renderNomenclatures()); return '<div style="font-size:11px;color:#999;margin-bottom:6px">⏳ Lecture du plan de charge…</div>'; }
+    if (dl.chargement) return '';
+    if (dl.erreur) return `<div style="font-size:11px;color:#c0392b;margin-bottom:6px">Plan de charge illisible : ${escMat(dl.erreur)}</div>`;
+    if (dl.aucun) return '<div style="font-size:11px;color:#999;margin-bottom:6px">📅 Chantier absent du plan de charge (pas de date de pose) : délai non calculé.</div>';
+    const e = etatDelai(dl, pct);
+    return `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px;margin-bottom:8px">
+      <span>📅 Fabrication ${dl.fabDebut ? 'du <b>' + frDate(dl.fabDebut) + '</b> ' : ''}au <b>${frDate(dl.fabFin)}</b> · pose le <b>${frDate(dl.pose)}</b></span>
+      ${e ? `<span style="background:${e.fond};color:${e.coul};border-radius:8px;padding:2px 8px;font-weight:800">${e.txt}</span>` : ''}</div>`;
+  }
+  // ── V20 : DOCUMENT « ORDRE DE FABRICATION » imprimable (A4 paysage) — en-tête, logo, chantier, repères, gammes, QR ──
+  async function imprimerOF(nomId) {
+    const det = _ofDetails[nomId], vdet = _nomProdDetails[nomId];
+    if (!det || !det.of || !vdet || !vdet.lignes) return;
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres surgissantes pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Préparation de l\'ordre de fabrication…</p>');
+    try {
+      await chargerLibScan('qrcode');
+      const esc = escMat, of = det.of, n = vdet.nomenclature || {};
+      // Fiche chantier (lecture seule, champs présents uniquement)
+      let ch = {};
+      try {
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/1014441/${of.chantier_id}/?user_field_names=true`, { headers: HEADERS });
+        if (r.ok) ch = await r.json();
+      } catch (e) {}
+      const val = v => v == null ? '' : Array.isArray(v) ? v.map(x => x && typeof x === 'object' ? (x.value ?? x.name ?? '') : x).filter(Boolean).join(', ') : typeof v === 'object' ? (v.value ?? '') : String(v);
+      const dateFr = v => { const s = val(v); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10).split('-').reverse().join('/') : s; };
+      const nomCh = of.chantier_nom || val(ch['Nom du chantier']);
+      const numCh = (nomCh.match(/\bCH\s*0*\d+/i) || [''])[0].toUpperCase().replace(/\s/g, '');
+      const devis = (nomCh.match(/\bDE\s*\d+(-\d+)?/i) || [''])[0].toUpperCase().replace(/\s/g, '');
+      const client = val(ch['Client']) || nomCh.replace(/\bCH\s*0*\d+/i, '').replace(/\bDE\s*\d+(-\d+)?/i, '').trim();
+      const infosCh = [
+        ['Chantier', esc(nomCh)], ['N° chantier', esc(numCh)], ['Client', esc(client)], ['Devis', esc(devis)],
+        ['Adresse', esc([val(ch['Adresse']), [val(ch['Code postal']), val(ch['Ville'])].filter(Boolean).join(' ')].filter(Boolean).join(' – '))],
+        ['Début', esc(dateFr(ch['Date de début'] || ch['Date début']))], ['Fin prévue', esc(dateFr(ch['Date fin']))], ['Livraison', esc(dateFr(ch['Date livraison']))],
+        ['Statut', esc(val(ch['Statue']))]
+      ].filter(x => x[1]);
+      const infosOF = [
+        ['Assemblage', esc(of.assemblage)], ['Révision', 'rév. ' + of.revision + (of.statut === 'REMPLACE' ? ' — REMPLACÉE' : '')],
+        ['Diffusée le', esc(dateNomProd(n.diffuse_le)) + (n.diffuse_par ? ' par ' + esc(n.diffuse_par) : '')],
+        ['Lancé le', esc(dateNomProd(of.cree_le)) + (of.cree_par ? ' par ' + esc(of.cree_par) : '')]
+      ];
+      // Délais d'après le plan de charge
+      const dl = await chargerDelaisOF(of.chantier_id);
+      const actifsD = (det.ops || []).filter(o => o.statut !== 'SANS_OBJET');
+      const pctD = actifsD.length ? Math.round(100 * actifsD.reduce((t, o) => t + Math.min(Number(o.qte_faite) || 0, Number(o.qte_prevue) || 0), 0) / (actifsD.reduce((t, o) => t + (Number(o.qte_prevue) || 0), 0) || 1)) : 0;
+      const eD = etatDelai(dl, pctD);
+      const infosDelai = dl && dl.fabFin ? [
+        ...(dl.fabDebut ? [['Début fabrication', frDate(dl.fabDebut)]] : []),
+        ['<b style="color:#c0392b">À terminer le</b>', '<span style="font-size:13px;color:#c0392b">' + frDate(dl.fabFin) + '</span>'],
+        ['Début de pose', frDate(dl.pose)], ['Avancement', pctD + ' %'], ...(eD ? [['Situation', eD.txt]] : [])
+      ] : [['Délai', 'non planifié (chantier absent du plan de charge)']];
+      // Repères, gammes, totaux
+      const parRep = new Map();
+      (det.ops || []).forEach(o => { if (!parRep.has(o.repere)) parRep.set(o.repere, []); parRep.get(o.repere).push(o); });
+      const lignes = vdet.lignes.filter(l => l.repere && parRep.has(l.repere));
+      let pieces = 0, masse = 0, galva = 0, std = 0;
+      lignes.forEach(l => { const q = Number(l.quantite) || 0; pieces += q; masse += (Number(l.masse_kg) || 0) * q; if (l.finition === 'GALVA') galva += (Number(l.masse_kg) || 0) * q; });
+      (det.ops || []).forEach(o => { if (Number(o.temps_std_min) > 0 && o.statut !== 'SANS_OBJET') std += Number(o.temps_std_min) * Number(o.qte_prevue || 0); });
+      const qr = texte => { const tmp = document.createElement('div'); tmp.style.cssText = 'position:fixed;left:-9999px;top:0'; document.body.appendChild(tmp);
+        new QRCode(tmp, { text: texte, width: 160, height: 160, correctLevel: QRCode.CorrectLevel.M });
+        const cv = tmp.querySelector('canvas'); const src = cv ? cv.toDataURL('image/png') : (tmp.querySelector('img')?.src || ''); tmp.remove(); return src; };
+      const dims = l => l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) + (l.epaisseur_mm ? ' × ' + nbNomProd(l.epaisseur_mm, 1) : '') : 'L ' + nbNomProd(l.longueur_mm, 0)) : '';
+      const rangees = lignes.map(l => {
+        const ops = parRep.get(l.repere).sort((a, b) => a.ordre - b.ordre);
+        return `<tr><td class="qr"><img src="${qr(urlScan('REP-' + l.repere))}"></td>
+          <td class="rep">${esc(l.repere)}</td>
+          <td><b>${esc(l.type_libelle || l.designation || '')}</b>${l.designation && l.designation !== l.type_libelle ? `<div class="pt">${esc(l.designation)}</div>` : ''}</td>
+          <td>${esc(l.profil || '')}</td><td class="nb">${dims(l)}</td><td class="nb"><b>${nbNomProd(l.quantite, 0)}</b></td>
+          <td>${esc(l.finition || '')}${l.ral ? ' RAL ' + esc(l.ral) : ''}</td><td class="nb">${l.masse_kg ? nbNomProd(l.masse_kg, 1) : ''}</td>
+          <td><div class="gamme">${ops.map(o => `<span class="op ${o.statut === 'FAIT' ? 'fait' : o.statut === 'SANS_OBJET' ? 'na' : ''}">${o.statut === 'FAIT' ? '☑' : o.statut === 'SANS_OBJET' ? '–' : '☐'} ${esc(o.operation === 'TRAITEMENT' ? o.libelle : o.libelle)}${Number(o.temps_std_min) ? ` <i>${nbNomProd(o.temps_std_min, 0)}′</i>` : ''}</span>`).join('')}</div></td></tr>`;
+      }).join('');
+      const bloc = (titre, lignesInfo) => `<div class="bloc"><div class="bt">${titre}</div>${lignesInfo.map(([k, v]) => `<div class="li"><span>${k}</span><b>${v}</b></div>`).join('')}</div>`;
+      fen.document.open();
+      fen.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>OF ${of.id} — ${esc(nomCh)}</title><style>
+        @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;font-size:11px}
+        .ent{display:flex;align-items:center;gap:14px;border-bottom:3px solid #4a7c3f;padding-bottom:8px}
+        .ent img{height:54px}.ent .t{flex:1}.ent h1{margin:0;font-size:22px;letter-spacing:.5px;color:#4a7c3f}.ent .s{color:#666;font-size:11px;margin-top:2px}
+        .ent .num{text-align:right}.ent .num b{display:block;font-size:20px;color:#5e35b1}
+        .blocs{display:grid;grid-template-columns:1.25fr 1fr 0.9fr 0.8fr;gap:8px;margin:10px 0}
+        .bloc{border:1px solid #ddd;border-radius:6px;padding:6px 8px}.bt{font-weight:800;color:#4a7c3f;text-transform:uppercase;font-size:10px;margin-bottom:4px;letter-spacing:.4px}
+        .li{display:flex;justify-content:space-between;gap:8px;padding:2px 0;border-bottom:1px dotted #eee}.li span{color:#777}.li b{text-align:right}
+        table{width:100%;border-collapse:collapse}thead{display:table-header-group}th{background:#4a7c3f;color:#fff;text-align:left;padding:5px;font-size:10px}
+        td{border-bottom:1px solid #e5e5e5;padding:4px 5px;vertical-align:middle}tr{page-break-inside:avoid}
+        td.qr img{width:17mm;height:17mm;display:block}.rep{font-family:monospace;font-weight:800;font-size:12px;color:#5e35b1;white-space:nowrap}.nb{text-align:right;white-space:nowrap}.pt{color:#888;font-size:9px}
+        .gamme{display:flex;flex-wrap:wrap;gap:3px}.op{border:1px solid #ccc;border-radius:4px;padding:2px 5px;font-size:10px;white-space:nowrap}.op.fait{background:#e8f0e7;border-color:#9bc29a}.op.na{color:#bbb;text-decoration:line-through}.op i{color:#888;font-style:normal}
+        .visa{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.visa div{border:1px solid #ccc;border-radius:6px;height:22mm;padding:5px;font-size:10px;color:#777}
+        .pied{margin-top:8px;font-size:9px;color:#999;display:flex;justify-content:space-between}</style></head><body>
+        <div class="ent"><img src="${LOGO_URL}" alt="Guérin Bâtiments"><div class="t"><h1>ORDRE DE FABRICATION</h1><div class="s">Guérin Bâtiments — Saint-André-Goule-d'Oie (85) · conception, fabrication et pose de bâtiments</div></div>
+          <div class="num"><b>OF n° ${of.id}</b>${esc(numCh || nomCh)} · rév. ${of.revision}<br>édité le ${new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div></div>
+        <div class="blocs">${bloc('Chantier', infosCh)}${bloc('Fabrication', infosOF)}${bloc('Délais (plan de charge)', infosDelai)}${bloc('Synthèse', [
+          ['Repères', String(lignes.length)], ['Pièces', nbNomProd(pieces, 0)], ['Masse totale', nbNomProd(masse, 1) + ' kg'],
+          ...(galva ? [['dont galva', nbNomProd(galva, 1) + ' kg']] : []), ...(std ? [['Temps standard', dureeFab(std)]] : [])])}</div>
+        ${eD && dl.joursRestants < 0 && pctD < 100 ? `<div style="background:#fdecea;color:#c0392b;font-weight:800;padding:6px 10px;border-radius:6px;margin-bottom:8px">⚠ Fabrication en retard sur le plan de charge : à terminer le ${frDate(dl.fabFin)} (pose le ${frDate(dl.pose)}).</div>` : ''}
+        ${of.statut === 'REMPLACE' ? '<div style="background:#fdecea;color:#c0392b;font-weight:800;padding:6px 10px;border-radius:6px;margin-bottom:8px">⚠ OF REMPLACÉ par une révision plus récente : ne pas fabriquer d\'après ce document.</div>' : ''}
+        <table><thead><tr><th>QR</th><th>Repère</th><th>Désignation</th><th>Profilé</th><th style="text-align:right">Dimensions (mm)</th><th style="text-align:right">Qté</th><th>Finition</th><th style="text-align:right">kg/u</th><th>Gamme (☑ fait · ′ = min standard / pièce)</th></tr></thead>
+        <tbody>${rangees}</tbody></table>
+        <div class="visa"><div>Établi par / date</div><div>Contrôlé par / date</div><div>Remarques atelier</div></div>
+        <div class="pied"><span>Scanner le QR d'un repère pour pointer ses opérations dans l'appli.</span><span>${esc(of.assemblage)} — OF ${of.id}</span></div>
+        <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`);
+      fen.document.close();
+    } catch (e) { fen.document.body.innerHTML = '<p style="font-family:sans-serif;color:#c0392b">❌ ' + escMat(e.message) + '</p>'; }
   }
   function renderDetailNomenclature(carteId) {
     const esc = escMat;
@@ -15268,13 +15506,6 @@
   // ============================================================
   let _articlesCache = [];
   let _mouvementsCache = [];
-  // V19 : marqueurs techniques à quantité 0 (proposition de stock écartée « 🚫 Traité », mouvement annulé) :
-  // ils ne sont pas de vrais mouvements → masqués des historiques, coûts et analyses
-  function estMouvementTechnique(m) {
-    if (Number(m['Quantite']) || 0) return false;
-    const lib = String(m['Libelle'] || ''), note = String(m['Note'] || '');
-    return lib.startsWith('Proposition stock écartée') || note.startsWith('ECARTE') || /ANNUL[ÉE]E/.test(note);
-  }
   let _stockParArticle = {};
   let _stockCharge = false;
   let _stockFiltre = 'tous';
@@ -15861,7 +16092,7 @@
   }
 
   function renderDetailArticle(a) {
-    const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id && !estMouvementTechnique(m))
+    const mvts = _mouvementsCache.filter(m => (m['Article'] || [])[0]?.id === a.id)
       .sort((x, y) => (y['Date'] || '').localeCompare(x['Date'] || '') || (y.id - x.id)).slice(0, 15);
     const couleurs = { 'Entrée': '#2f7d3c', 'Retour': '#2f7d3c', 'Sortie': '#c0392b', 'Inventaire': '#7c5200' };
     const lignesMvt = mvts.map(m => {
@@ -16704,7 +16935,7 @@
     }
     // Mouvements et chantiers (articles ; pas pour un ouvrage, qui n'a pas de stock propre)
     if (a && !estOuvrage) {
-      const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id && !estMouvementTechnique(m))
+      const mvts = (_mouvementsCache || []).filter(m => (m['Article'] || [])[0]?.id === a.id)
         .sort((p, q) => String(q['Date'] || '').localeCompare(String(p['Date'] || '')) || q.id - p.id);
       // V34 : où se trouve ce qui est sorti (chantier, quantité, date et auteur de la sortie)
       const sorties = ouSortiArticle(a.id);
@@ -19490,7 +19721,6 @@
     _mouvementsCache.forEach(m => {
       const type = m['Type']?.value || m['Type'] || '';
       if (type !== 'Sortie' && type !== 'Retour') return;
-      if (estMouvementTechnique(m)) return; // V19
       if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
       const chantier = (m['Chantier'] || '').trim() || '(sans chantier)';
       if (normTexte(chantier).includes('stock atelier')) return;
@@ -27492,7 +27722,6 @@
         mvts.forEach(m => {
           const type = m['Type']?.value || m['Type'] || '';
           if (type !== 'Sortie' && type !== 'Retour') return;
-          if (estMouvementTechnique(m)) return; // V19 : marqueur à quantité 0
           if (String(m['Note'] || '').startsWith('Kit ')) return; // matériel prêté (kit interne) : pas un coût du chantier
           // V110 : kit atelier ou matériel interne (identifié par l'article lui-même, quelle que soit la note du mouvement)
           { const art = artParId.get((m['Article'] || [])[0]?.id); if (art && ((art['Origine'] || '') === 'Kit' || estMateriel(art))) return; }
@@ -29647,7 +29876,10 @@
   <div class="bandeau-fige">
   <div style="padding:14px 16px 4px;display:flex;justify-content:space-between;align-items:center;gap:8px">
     <div style="font-size:16px;font-weight:800;color:var(--gris)">📐 Nomenclatures de production</div>
-    <button onclick="chargerNomenclaturesPage(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer">🔄</button>
+    <div style="display:flex;gap:6px">
+      <button onclick="ouvrirEditeurGammes()" title="Postes atelier et gammes par type de pièce" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer">⚙️ Gammes</button>
+      <button onclick="chargerNomenclaturesPage(true)" title="Actualiser" style="background:#fff;border:1.5px solid #ddd5c5;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer">🔄</button>
+    </div>
   </div>
   <div style="padding:6px 16px 6px;display:flex;gap:6px;flex-wrap:wrap">
     <input type="text" id="nomprod-recherche" placeholder="🔍 Chantier, assemblage, repère, code ou désignation…" oninput="renderNomenclatures()" style="flex:1 1 60%;min-width:0;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:8px 10px;font-size:13px">
