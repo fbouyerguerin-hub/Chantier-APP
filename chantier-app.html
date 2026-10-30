@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V14';
+  const APP_VERSION = 'V15';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2516,13 +2516,13 @@
     h += `<div style="overflow-x:auto;padding:0 12px 12px"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:720px">
       <thead><tr style="background:#f6f6f6;color:#777;text-align:left">
         <th style="padding:6px">Repère</th><th style="padding:6px">Code article</th><th style="padding:6px">Désignation</th><th style="padding:6px;text-align:right">Qté</th>
-        <th style="padding:6px">Finition</th><th style="padding:6px;text-align:right">Long. / ép.</th><th style="padding:6px;text-align:right">Masse</th>
+        <th style="padding:6px">Finition</th><th style="padding:6px;text-align:right">Dimensions (mm)</th><th style="padding:6px;text-align:right">Masse</th>
         <th style="padding:6px;text-align:right">Stock</th><th style="padding:6px">Contrôle</th></tr></thead><tbody>`;
     for (const l of lignes) {
       const st = stockLigneNomProd(l);
       const qte = Number(l.quantite) || 0;
       const manque = st !== null && st < qte;
-      const dims = [l.longueur_mm ? 'L ' + nbNomProd(l.longueur_mm, 1) : '', l.epaisseur_mm ? 'ép. ' + nbNomProd(l.epaisseur_mm, 1) : ''].filter(Boolean).join(' · ');
+      const dims = [l.longueur_mm ? (l.largeur_mm ? nbNomProd(l.longueur_mm, 0) + ' × ' + nbNomProd(l.largeur_mm, 0) : 'L ' + nbNomProd(l.longueur_mm, 0)) : '', l.epaisseur_mm ? 'ép. ' + nbNomProd(l.epaisseur_mm, 1) : ''].filter(Boolean).join(' · ');
       const codeHtml = l.code
         ? ((l.stock_ids || []).length ? `<span onclick="event.stopPropagation();ouvrirFicheArticleModal(${l.stock_ids[0]}, '${esc(l.code).replace(/'/g, "\\'")}')" style="text-decoration:underline;cursor:pointer">${esc(l.code)}</span>` : esc(l.code))
         : (l.repere ? '' : '<span style="color:#c0392b">—</span>');
