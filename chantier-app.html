@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V10';
+  const APP_VERSION = 'V11';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1955,7 +1955,8 @@
   const GROUPES_D1 = () => [
     { cle: 'mouvements', nom: '📦 Mouvements de stock', tables: [TABLE_MOUVEMENTS_STOCK] },
     { cle: 'commandes', nom: '🧾 Commandes fournisseurs + lignes', tables: [TABLE_COMMANDES_FOURNISSEURS, TABLE_COMMANDES_FOURNISSEURS_LIGNES] },
-    { cle: 'clients', nom: '🧾 Commandes clients + lignes', tables: [TABLE_COMMANDES_CLIENTS, TABLE_COMMANDES_CLIENTS_LIGNES] }
+    { cle: 'clients', nom: '🧾 Commandes clients + lignes', tables: [TABLE_COMMANDES_CLIENTS, TABLE_COMMANDES_CLIENTS_LIGNES] },
+    { cle: 'articles', nom: '🏷️ Articles du stock', tables: [TABLE_ARTICLES] } // V11 : nécessite le Worker v10.8
   ];
   async function afficherBasculesD1() {
     const zone = document.getElementById('d1-bascules');
