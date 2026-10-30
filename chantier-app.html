@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V11';
+  const APP_VERSION = 'V12';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -16104,7 +16104,8 @@
     let html = `<div style="font-size:18px;font-weight:800;color:var(--gris);line-height:1.25">${esc(designation)}</div>
       <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
         ${estOuvrage ? `<span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🧩 Ouvrage · ${x.nbComp} composant(s)</span>` : ''}
-        ${code ? `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>` : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
+        ${code ? (estCodeApp(code) ? `<span title="Code du référentiel interne, pas encore créé dans EBP" style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">🆕 ${esc(code)}</span>` : `<span style="background:#eef2f7;color:#5a6b80;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;font-family:monospace">EBP ${esc(code)}</span>`) : '<span style="background:#fdf3e0;color:#a5761f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">hors EBP</span>'}
+        ${a && gestion && !estOuvrage && !estKit(a) && (!code || estCodeApp(code)) ? `<button onclick="rattacherCodeArticle(${a.id})" style="background:#fff;border:1px solid #d1c4e9;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700;color:#5e35b1;cursor:pointer">${code ? '🔗 Changer le code' : '🔗 Rattacher à un code'}</button>` : ''}
         ${a && estKit(a) ? '<span style="background:#5e35b1;color:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">🧰 kit interne</span>' : a && !estOuvrage ? '<span style="background:#e8f0e7;color:var(--vert);border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">suivi au stock</span>' : estOuvrage ? '' : '<span style="background:#f4f4f4;color:#999;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">pas encore au stock</span>'}
         ${(a && a['Actif'] === false) ? '<span style="background:#fdecea;color:#c0392b;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">inactif dans EBP</span>' : ''}
         ${code && estCodeGenerique(code) ? '<span title="Code « divers » : ses lignes de commande ne sont pas rattachées à cet article" style="background:#fff3e0;color:#a2560f;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800">🏷️ code générique</span>' : ''}
@@ -16127,7 +16128,7 @@
       + champ('Famille', esc((x && x.famille) || (a && a['Famille']) || ''))
       + champ('Unité', esc(libUnite(unite)))
       + (prive && prix ? champ('Prix d\'achat HT', `<span style="color:#2e7d32">${fmtEur(prix)} / ${esc(libUnite(unite))}</span>`) : '');
-    if (!x && code) html += `<div style="font-size:11px;color:#999;padding:4px 0">${_catLocal ? 'Article absent du catalogue EBP actif (inactif ou supprimé dans EBP ?).' : '⏳ Lecture du catalogue EBP…'}</div>`;
+    if (!x && code) html += `<div style="font-size:11px;color:#999;padding:4px 0">${estCodeApp(code) ? 'Code du référentiel interne : article pas encore créé dans EBP.' : _catLocal ? 'Article absent du catalogue EBP actif (inactif ou supprimé dans EBP ?).' : '⏳ Lecture du catalogue EBP…'}</div>`;
     if (!code) html += '<div style="font-size:11px;color:#999;padding:4px 0">Article créé hors EBP : aucune information EBP disponible.</div>';
 
     // Ouvrage : nomenclature à la place du stock (pas de stock propre)
@@ -18421,7 +18422,7 @@
   // conservée dans son champ — les anciennes étiquettes restent donc reconnues au scan).
   function corrigerCodeEbpArticle(a) {
     const code = String(a['Code EBP'] || '').trim();
-    if (!code || !_catLocal || _catLocal.parCode.has(normRef(code))) return a;
+    if (!code || estCodeApp(code) || !_catLocal || _catLocal.parCode.has(normRef(code))) return a; // V12 : code du référentiel interne
     const x = catParRefUnique(code);
     if (!x || !x.code) return a;
     const b = { ...a, 'Code EBP': x.code, 'Reference fournisseur': a['Reference fournisseur'] || code };
@@ -18431,6 +18432,63 @@
       }).then(r => { if (r.ok) { const c = (_articlesCache || []).find(y => y.id === a.id); if (c) { c['Code EBP'] = x.code; c['Reference fournisseur'] = b['Reference fournisseur']; } } }).catch(() => {});
     }
     return b;
+  }
+  // ── V12 : rattacher un article du stock à un code du référentiel articles (code EBP ou …-APP) ──
+  const RE_CODE_APP = /^[A-Z]{4}-[A-Z]{3}-\d{5}-APP$/i;
+  function estCodeApp(c) { return RE_CODE_APP.test(String(c || '').trim()); }
+  function rattacherCodeArticle(articleId) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a || !peutGererStock()) return;
+    const esc = echapperHtmlNote;
+    document.getElementById('modal-code-article')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-code-article';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:12px';
+    fond.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;padding:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris)">🔗 Code article</div>
+      <div style="font-size:12px;color:#777;margin:4px 0 10px">${esc(a['Designation'] || '')}${a['Code EBP'] ? ' · code actuel <b>' + esc(a['Code EBP']) + '</b>' : ''}</div>
+      <input id="code-article-q" autocomplete="off" placeholder="Rechercher dans le référentiel (code ou désignation)…" style="padding:10px;border:1.5px solid #ddd;border-radius:8px;font-size:14px">
+      <div id="code-article-res" style="overflow:auto;margin-top:8px;flex:1;min-height:80px;font-size:12px;color:#999">Tapez au moins 2 caractères.</div>
+      <button onclick="document.getElementById('modal-code-article').remove()" style="margin-top:10px;background:var(--beige-clair);border:none;border-radius:8px;padding:9px;font-weight:700;cursor:pointer">Fermer</button>
+    </div>`;
+    document.body.appendChild(fond);
+    const champ = document.getElementById('code-article-q');
+    let minuteur = null;
+    champ.oninput = () => { clearTimeout(minuteur); minuteur = setTimeout(() => chercherCodeArticle(articleId, champ.value), 250); };
+    champ.focus();
+  }
+  async function chercherCodeArticle(articleId, q) {
+    const zone = document.getElementById('code-article-res');
+    if (!zone) return;
+    q = String(q || '').trim();
+    if (q.length < 2) { zone.textContent = 'Tapez au moins 2 caractères.'; return; }
+    zone.textContent = '⏳ Recherche…';
+    try {
+      const r = await _fetchNatifBrut(GB_WORKER + '/referentiel/recherche?q=' + encodeURIComponent(q) + '&t=' + Date.now(), { headers: headersWorker(), cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('Worker ' + r.status + (r.status === 404 ? ' (Worker à mettre à jour)' : '')));
+      if (document.getElementById('code-article-q')?.value.trim() !== q) return; // réponse d'une ancienne frappe
+      const esc = echapperHtmlNote;
+      if (!(d.results || []).length) { zone.innerHTML = '<div style="padding:8px 0">Aucun article trouvé. Les nouveaux codes se créent dans le référentiel.</div>'; return; }
+      zone.innerHTML = d.results.map(x => `<div onclick="appliquerCodeArticle(${articleId}, '${esc(x.code).replace(/'/g, "\\'")}')" style="cursor:pointer;padding:8px;border-bottom:1px solid #f0f0f0;color:var(--gris)">
+          <div style="font-weight:800;font-family:monospace">${esc(x.code)} <span style="font-family:sans-serif;font-size:10px;font-weight:700;color:${x.statut === 'PROVISOIRE' ? '#5e35b1' : '#4a7c3f'}">${esc(x.statut === 'PROVISOIRE' ? 'interne' : 'EBP')}</span></div>
+          <div>${esc(x.designation || '')}</div>
+          ${(x.stock_ids || []).filter(i => i !== articleId).length ? `<div style="font-size:10px;color:#a5761f">⚠️ déjà relié à une autre fiche du stock (n° ${x.stock_ids.filter(i => i !== articleId).join(', ')})</div>` : ''}
+        </div>`).join('');
+    } catch (e) { zone.textContent = '❌ ' + e.message; }
+  }
+  async function appliquerCodeArticle(articleId, code) {
+    const a = (_articlesCache || []).find(x => x.id === articleId);
+    if (!a) return;
+    if (!confirm(`Rattacher « ${a['Designation'] || ''} » au code ${code} ?`)) return;
+    try {
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_ARTICLES}/${articleId}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Code EBP': code }) });
+      if (!r.ok) throw new Error('Enregistrement refusé (' + r.status + ')');
+      a['Code EBP'] = code;
+      document.getElementById('modal-code-article')?.remove();
+      if (_ficheArticle && _ficheArticle.id === articleId) _ficheArticle.code = code;
+      rafraichirFicheArticleOuverte();
+    } catch (e) { alert('❌ ' + e.message); }
   }
   function chargerCatalogueLocal(force = false) {
     const avecPrix = estProfilPrix();
