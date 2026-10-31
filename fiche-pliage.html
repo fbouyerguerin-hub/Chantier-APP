@@ -699,7 +699,11 @@ if(INTEGRE){
   bJ.addEventListener('click',function(){
     closePop();var a=allIssues();
     if(a.length&&!confirm(a.length+(a.length>1?' pièces sont incomplètes':' pièce est incomplète')+'. Joindre quand même à la commande ?')){goPiece(a[0].i);return;}
-    parent.postMessage({type:'gb-pliage-joindre',state:JSON.parse(JSON.stringify(state,strip))},'*');
+    /* repère par défaut (P1, P2… = n° de la case) pour les pièces remplies sans repère : identique sur la fiche et dans la commande */
+    var change=false;
+    state.pieces.forEach(function(p,i){if(!p.blank&&!String(p.rep||'').trim()){p.rep='P'+(i+1);change=true;}});
+    if(change){fillHeader();renderAll();}
+    setTimeout(function(){parent.postMessage({type:'gb-pliage-joindre',state:JSON.parse(JSON.stringify(state,strip))},'*');},change?150:0);
   });
   window.addEventListener('message',function(e){
     var m=e.data||{};if(m.type!=='gb-pliage-init')return;

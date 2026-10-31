@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V30';
+  const APP_VERSION = 'V31';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -3288,16 +3288,18 @@
     pignon: 'Bas pignon', plat: 'Plat', L: 'Cornière (L)', U: 'U', Z: 'Z', omega: 'Oméga', retour: 'L à retour', V: 'V', custom: 'Forme spéciale' };
   async function lignesPliageCommande(cmdId, etat) {
     const nombre = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return isFinite(n) ? n : 0; };
-    const pieces = (etat.pieces || []).filter(p => !p.blank && (p.segs || []).length);
-    const items = pieces.map((p, i) => {
+    // V31 : une ligne par pièce, repère par défaut = n° de la case (P1, P2…), toutes les caractéristiques dans la désignation
+    const items = (etat.pieces || []).map((p, i) => ({ p, i })).filter(({ p }) => !p.blank && (p.segs || []).length).map(({ p, i }) => {
       const dev = (p.segs || []).reduce((t, g) => t + nombre(g.len), 0);
       const plis = Math.max(0, (p.segs || []).length - 1);
       const repere = String(p.rep || '').trim() || 'P' + (i + 1);
-      const desc = ['Pliage ' + repere, FORMES_PLIAGE[p.tpl] || 'Forme spéciale',
-        [p.mat, p.ep ? 'ép. ' + p.ep : ''].filter(Boolean).join(' '), p.ral && p.mat !== 'Galva' ? 'RAL ' + p.ral : '',
-        dev ? 'dév. ' + Math.round(dev) + ' mm' : '', nombre(p.long) ? 'L ' + Math.round(nombre(p.long)) + ' mm' : '', plis ? plis + ' pli' + (plis > 1 ? 's' : '') : ''
-      ].filter(Boolean).join(' – ');
-      return { 'Reference fournisseur': 'PLIAGE-' + repere.replace(/\s+/g, '').slice(0, 40), 'Description': desc + ' (selon fiche de pliage)', 'Unite': 'U', 'Quantite': nombre(p.qte) || 1, 'Debourse HT': 0, 'Montant HT': 0, 'TVA': 0 };
+      const qte = nombre(p.qte) || 1, lg = nombre(p.long);
+      const desc = ['Rep. ' + repere, FORMES_PLIAGE[p.tpl] || 'Forme spéciale',
+        p.mat || '', p.ep ? 'ép. ' + p.ep : '', p.ral && p.mat !== 'Galva' ? 'RAL ' + p.ral : '',
+        lg ? 'Lg ' + Math.round(lg) + ' mm' : 'Lg à préciser', dev ? 'Dév. ' + Math.round(dev) + ' mm' : '',
+        plis + ' pli' + (plis > 1 ? 's' : ''), 'Qté ' + qte
+      ].filter(Boolean).join(' · ');
+      return { 'Reference fournisseur': 'PLIAGE-' + repere.replace(/\s+/g, '').slice(0, 40), 'Description': desc + ' (fiche de pliage)', 'Unite': 'U', 'Quantite': qte, 'Debourse HT': 0, 'Montant HT': 0, 'TVA': 0 };
     });
     const r0 = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
     const existantes = (await r0.json()).results || [];
