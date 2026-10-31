@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V37';
+  const APP_VERSION = 'V39';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -3384,7 +3384,7 @@
       const des = String(x.designation || '');
       const f = des.match(/(\d+)\s*\/\s*100\b/), mm = des.match(/(?:ep\.?|épaisseur|ép\.?)\s*(\d+(?:[.,]\d+)?)\s*mm/i) || des.match(/(\d+(?:[.,]\d+)?)\s*mm/i);
       const ep = f ? Number(f[1]) / 100 : mm ? Number(mm[1].replace(',', '.')) : 0;
-      return { code: x.code, designation: des, unite: x.unite || 'ML', ep, galva: /galva/i.test(des), libEp: f ? f[1] + '/100' : mm ? mm[1] + ' mm' : '' };
+      return { code: x.code, designation: des, unite: x.unite || 'ML', ep, galva: /galva/i.test(des), libEp: f ? f[1] + '/100' : mm ? mm[1] + ' mm' : '', prix: Number(x.prix) || 0 };
     }).filter(x => x.ep > 0);
   }
   function articlePourPiece(arts, p) {
@@ -3396,6 +3396,7 @@
     const m = lgMm / 1000;
     if (!m) return 0;
     const paliers = (regles && regles.paliers_ml) || [];
+    if (!paliers.length) return Math.round(m * 1000) / 1000; // pas de règle fournisseur : longueur réelle
     const p = paliers.find(x => x >= m - 1e-6);
     return p || Math.ceil(m - 1e-6);
   }
@@ -3454,8 +3455,12 @@
       const noteLg = lgFact && Math.abs(lgFact * 1000 - lg) > 0.5 ? ` (facturé ${String(lgFact).replace('.', ',')} m)` : '';
       if (art && /^ml$/i.test(art.unite) && lgFact && (!tarif || tarif.g.unite === 'ml')) {
         // Article EBP au mètre linéaire : quantité = longueur facturée × nombre de pièces, prix au ml de la grille
-        const ml = Math.round(lgFact * qte * 1000) / 1000, pu = tarif ? Number(tarif.g.prix) : 0, mt = Math.round(pu * ml * 100) / 100;
-        return { 'Reference fournisseur': art.code, 'Description': `${art.designation} — ${desc.replace(' · Qté ' + qte, '')}${noteLg} · ${qte} pc${qte > 1 ? 's' : ''}${noteTarif} (fiche de pliage)`,
+        // sans grille pour ce fournisseur / cette pièce : prix d'achat de l'article au catalogue EBP
+        const puCat = !tarif && art.prix > 0 ? art.prix : 0;
+        if (puCat) chiffrees++;
+        const ml = Math.round(lgFact * qte * 1000) / 1000, pu = tarif ? Number(tarif.g.prix) : puCat, mt = Math.round(pu * ml * 100) / 100;
+        const note = tarif ? noteTarif : puCat ? ` · prix catalogue EBP ${puCat} €/ml` : noteTarif;
+        return { 'Reference fournisseur': art.code, 'Description': `${art.designation} — ${desc.replace(' · Qté ' + qte, '')}${noteLg} · ${qte} pc${qte > 1 ? 's' : ''}${note} (fiche de pliage)`,
           'Unite': art.unite, 'Quantite': ml, 'Debourse HT': pu, 'Montant HT': mt, 'TVA': Math.round(mt * TAUX_TVA_BC) / 100 };
       }
       const pu = tarif ? tarif.pu : 0, mt = Math.round(pu * qte * 100) / 100;
@@ -3481,7 +3486,7 @@
     }
     try { delete _commandesLignesCache[cmdId]; } catch (e) {}
     if (/^CA-/i.test(String(cmdP && cmdP['Numero commande'] || ''))) { try { await majTotauxCommandeAppli(cmdId); } catch (e) {} }
-    return { lignes: items.length, chiffrees };
+    return { lignes: items.length, chiffrees, grille: grille.length > 0, fournisseur: cmdP ? cmdP['Fournisseur'] : '' };
   }
   async function recevoirMessagePliage(e) {
     const cadre = document.getElementById('pliage-cadre');
@@ -3526,7 +3531,10 @@
       } catch (e) { console.warn('Copie PDF de la fiche non déposée', e); }
       // V26 : une ligne d'article par pièce pliée (les lignes « PLIAGE » précédentes sont remplacées)
       const nbL = await lignesPliageCommande(_pliage.id, m.state);
-      msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe · ${nbL.lignes} ligne(s) de pliage${nbL.chiffrees ? ` dont ${nbL.chiffrees} chiffrée(s) avec la grille du fournisseur` : ''}</span>`;
+      msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe · ${nbL.lignes} ligne(s) de pliage${nbL.chiffrees ? ` dont ${nbL.chiffrees} chiffrée(s) avec la grille du fournisseur` : ''}</span>`
+        + (!nbL.grille ? `<br><span style="color:#a2560f">Pas de grille de tarifs pour « ${echapperHtmlNote(nbL.fournisseur || '?')} »${nbL.chiffrees ? ' : prix d\'achat du catalogue EBP appliqué' : ' : prix à 0'}.</span>` : nbL.chiffrees < nbL.lignes ? `<br><span style="color:#a2560f">${nbL.lignes - nbL.chiffrees} pièce(s) hors grille et sans prix catalogue : prix à 0.</span>` : '');
+      // V38 : formulaire de modification ouvert sur cette commande → lignes de pliage et totaux rafraîchis
+      if (_nouvCmd && _nouvCmd.mode === 'edition' && _nouvCmd.id === _pliage.id) { try { await rafraichirLignesPliageNC(_pliage.id); } catch (e) {} }
       try { chargerCommandesPage(); } catch (e) {}
     } catch (err) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(err.message)}</span>`; }
   }
@@ -3633,6 +3641,17 @@
     fond.innerHTML = '<div id="nc-boite" style="background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:92vh;overflow:auto;padding:16px"></div>';
     document.body.appendChild(fond);
     chargerCatalogueLocal().catch(() => {});
+    renderNouvelleCommande();
+  }
+  // V38 : après « Joindre » depuis le formulaire de modification, les lignes de pliage affichées sont remplacées
+  // par celles réellement enregistrées (avec leurs prix) ; les autres lignes gardent les modifications en cours.
+  async function rafraichirLignesPliageNC(id) {
+    const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`, { headers: HEADERS });
+    const estPliage = l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')) || /\(fiche de pliage\)\s*$/i.test(String(l['Description'] || ''));
+    const pliages = ((await rl.json()).results || []).filter(estPliage).sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0))
+      .map(l => ({ id: l.id, pliage: true, ordre: Number(l['Ordre']) || 0, code: l['Reference fournisseur'] || '', description: l['Description'] || '', unite: l['Unite'] || '',
+        quantite: l['Quantite'] ?? '', pu: l['Debourse HT'] ?? '', chantier_id: ((l['Chantier'] || [])[0] || {}).id || '', chantier_texte: ((l['Chantier'] || [])[0] || {}).value || '' }));
+    _nouvCmd.lignes = [..._nouvCmd.lignes.filter(l => !l.pliage), ...pliages];
     renderNouvelleCommande();
   }
   async function enregistrerModifCommande(btn) {
