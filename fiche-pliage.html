@@ -708,6 +708,8 @@ if(INTEGRE){
   window.addEventListener('message',function(e){
     var m=e.data||{};if(m.type!=='gb-pliage-init')return;
     state=(m.state&&valid(m.state))?oneArrow(m.state):newState();
+    /* épaisseurs = articles de pliage EBP (les valeurs déjà saisies restent proposées) */
+    if(Array.isArray(m.ep)&&m.ep.length){var l=m.ep.slice();state.pieces.forEach(function(p){if(p.ep&&l.indexOf(p.ep)<0)l.push(p.ep);});EP=l;}
     if(m.h)Object.keys(m.h).forEach(function(k){if(m.h[k]!==undefined&&m.h[k]!==null&&m.h[k]!=='')state.h[k]=m.h[k];});
     fillHeader();renderAll();
   });

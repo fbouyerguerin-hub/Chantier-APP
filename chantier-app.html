@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V31';
+  const APP_VERSION = 'V36';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1028,10 +1028,28 @@
       const user = data.user;
       // Listes de référence (collaborateurs, chantiers…) : chargées une fois connecté
       if (btn) btn.textContent = 'Chargement des listes…';
-      await Promise.race([
-        Promise.all(Object.keys(TABLES).map(k => loadTable(k))),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('Baserow ne répond pas (chargement des listes > 30 s)')), 30000))
-      ]);
+      // V32 : si Baserow est lent, connexion avec les listes de la dernière session (mises à jour en arrière-plan)
+      const chargementListes = Promise.all(Object.keys(TABLES).map(k => loadTable(k))).then(() => {
+        if (Object.keys(TABLES).every(k => (tableData[k] || []).length)) memoriserListes();
+        return true;
+      });
+      const attente = ms => new Promise(r => setTimeout(() => r(false), ms));
+      let listesPretes = await Promise.race([chargementListes, attente(8000)]);
+      if (!listesPretes) {
+        if (restaurerListes()) {
+          _listesDeSecours = true;
+          chargementListes.then(() => { _listesDeSecours = false; try { if (typeof filtrerChantiersSelonDroit === 'function') filtrerChantiersSelonDroit(); } catch (e) {} });
+        } else {
+          if (btn) btn.textContent = 'Baserow est lent, patientez…';
+          listesPretes = await Promise.race([chargementListes, attente(22000)]);
+          // V33 : on n'empêche plus la connexion — les pages sur Cloudflare (stock, commandes clients, nomenclatures…) restent utilisables
+          if (!listesPretes) {
+            _listesDeSecours = true;
+            chargementListes.then(() => { _listesDeSecours = false; try { filtrerChantiersSelonDroit(); } catch (e) {} });
+            setTimeout(() => alert("⚠️ Baserow ne répond pas pour l'instant.\n\nVous êtes connecté, mais les listes (chantiers, collaborateurs…) et les pages qui dépendent de Baserow peuvent rester vides. Elles se rempliront dès que Baserow répondra.\n\nLe stock, les commandes clients et les nomenclatures restent disponibles."), 600);
+          }
+        }
+      }
 
       errEl.style.display = 'none';
       connectedUserRowId = user.id;
@@ -1624,6 +1642,20 @@
     if (!on && l.zone) { l.zone = null; const zv = document.getElementById(`val-Zones-${l.id}`); if (zv) { zv.textContent = 'Sélectionner…'; zv.classList.add('empty'); } }
   }
 
+  // V32 : listes de référence mémorisées sur l'appareil (noms des collaborateurs, chantiers, tâches…)
+  const CLE_LISTES_REF = 'gb_listes_ref_v1';
+  let _listesDeSecours = false;
+  function memoriserListes() { try { localStorage.setItem(CLE_LISTES_REF, JSON.stringify({ t: Date.now(), d: tableData })); } catch (e) {} }
+  function restaurerListes() {
+    try {
+      const x = JSON.parse(localStorage.getItem(CLE_LISTES_REF) || 'null');
+      if (!x || !x.d) return false;
+      let ok = false;
+      Object.keys(TABLES).forEach(k => { if (Array.isArray(x.d[k]) && x.d[k].length && !(tableData[k] || []).length) { tableData[k] = x.d[k]; ok = true; } });
+      if (ok && tableData.Chantiers) { _chantiersTousSaisie = tableData.Chantiers; try { filtrerChantiersSelonDroit(); } catch (e) {} }
+      return ok;
+    } catch (e) { return false; }
+  }
   async function loadTable(key) {
     const { id, field } = TABLES[key];
     try {
@@ -1635,7 +1667,7 @@
         statut: key === 'Chantiers' ? (row['Statue']?.value || row['Statue'] || '') : undefined,
         zoneRequise: (key === 'TypeTaches' || key === 'SousTaches') ? tacheExigeZone(row) : false }));
       if (key === 'Chantiers') { _chantiersTousSaisie = tableData[key]; filtrerChantiersSelonDroit(); }
-    } catch(e) { tableData[key] = []; }
+    } catch(e) { if (!(tableData[key] || []).length) tableData[key] = []; } // V32 : liste mémorisée conservée en cas d'échec
   }
 
   // Utilisateurs : seuls les chantiers « En cours » sont proposés (saisie des heures,
@@ -3134,7 +3166,11 @@
     document.body.appendChild(fond);
     try {
       const d = await donneesBonCommande(id);
-      const docs = (d.cmd['Documents'] || []).filter(f => f && f.url && !/\.json$/i.test(f.visible_name || '')).map(f => ({ nom: f.visible_name || f.name || 'document', url: f.url, coche: true }));
+      const pliage = await lireFichePliage(id);
+      const docs = (d.cmd['Documents'] || []).filter(f => f && f.url && !/\.json$/i.test(f.visible_name || '') && !(pliage && RE_FICHE_PLIAGE.test(f.visible_name || '')))
+        .map(f => ({ nom: f.visible_name || f.name || 'document', url: f.url, coche: true }));
+      // V35 : fiche de pliage régénérée automatiquement depuis ses données (toujours à jour, aucun fichier à préparer)
+      if (pliage) docs.unshift({ nom: `Fiche pliage ${d.cmd['Numero commande'] || ''}.pdf`, pliage, coche: true });
       _envoiBC = { id, d, email: _bcEmails[id] || (d.four && d.four.email) || '', docs };
       renderEnvoiBC();
     } catch (e) { document.getElementById('envoi-bc-boite').innerHTML = `<div style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</div>`; }
@@ -3151,7 +3187,7 @@
       <input value="${esc(E.email)}" oninput="_envoiBC.email=this.value" placeholder="adresse e-mail du fournisseur" style="width:100%;box-sizing:border-box;padding:8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px">
       <div style="font-size:11px;font-weight:700;color:#777;margin:12px 0 3px">Pièces jointes</div>
       <label style="display:block;font-size:13px;padding:3px 0"><input type="checkbox" checked disabled> 📄 Bon de commande ${esc(num)}.pdf</label>
-      ${E.docs.map((f, i) => `<label style="display:block;font-size:13px;padding:3px 0"><input type="checkbox" ${f.coche ? 'checked' : ''} onchange="_envoiBC.docs[${i}].coche=this.checked"> 📎 ${esc(f.nom)}</label>`).join('') || '<div style="font-size:11px;color:#999">Aucun document attaché à la commande.</div>'}
+      ${E.docs.map((f, i) => `<label style="display:block;font-size:13px;padding:3px 0"><input type="checkbox" ${f.coche ? 'checked' : ''} onchange="_envoiBC.docs[${i}].coche=this.checked"> ${f.pliage ? '📐' : '📎'} ${esc(f.nom)}${f.pliage ? ' <span style="font-size:11px;color:#5e35b1">(générée automatiquement)</span>' : ''}</label>`).join('') || '<div style="font-size:11px;color:#999">Aucun document attaché à la commande.</div>'}
       <div id="envoi-bc-msg" style="font-size:12px;margin-top:8px"></div>
       ${btn('envoyerBCEml()', '💻 Ouvrir dans ma messagerie (ordinateur)', '#5e35b1', '#fff')}
       ${partageOk ? btn('envoyerBCPartage()', '📱 Partager vers ma messagerie (téléphone)', 'var(--vert)', '#fff') : ''}
@@ -3179,9 +3215,19 @@
     const E = _envoiBC, num = E.d.cmd['Numero commande'];
     const res = [{ nom: `Bon de commande ${num}.pdf`, type: 'application/pdf', blob: await pdfBonCommande(E.d) }];
     for (const f of E.docs.filter(x => x.coche)) {
-      const r = await _fetchNatifBrut(GB_WORKER + '/achats/fichier?url=' + encodeURIComponent(f.url), { headers: headersWorker() });
-      if (!r.ok) throw new Error('Document « ' + f.nom + ' » illisible');
-      const blob = await r.blob();
+      if (f.pliage) { res.push({ nom: f.nom, type: 'application/pdf', blob: await pdfFichePliage(f.pliage, E.d.cmd) }); continue; }
+      // V34 : relais du Worker, sinon lecture directe ; en cas d'échec, raison affichée et choix de continuer sans
+      let blob = null, raison = '';
+      try {
+        const r = await _fetchNatifBrut(GB_WORKER + '/achats/fichier?url=' + encodeURIComponent(f.url), { headers: headersWorker() });
+        if (r.ok) blob = await r.blob();
+        else raison = (await r.json().catch(() => ({}))).error || ('HTTP ' + r.status + (r.status === 404 ? ' — Worker à mettre à jour' : ''));
+      } catch (e) { raison = e.message; }
+      if (!blob) { try { const r2 = await _fetchNatifBrut(f.url); if (r2.ok) blob = await r2.blob(); } catch (e) {} }
+      if (!blob) {
+        if (!confirm(`Le document « ${f.nom} » n'a pas pu être récupéré :\n${raison || 'stockage des fichiers injoignable'}\n\nContinuer sans ce document ?`)) throw new Error('Document « ' + f.nom + ' » illisible : ' + (raison || 'stockage injoignable'));
+        continue;
+      }
       res.push({ nom: f.nom, type: blob.type || 'application/octet-stream', blob });
     }
     return res;
@@ -3251,6 +3297,39 @@
   // et en .json (pour la rouvrir et la modifier). Une nouvelle version remplace la précédente.
   let _pliage = null;
   const RE_FICHE_PLIAGE = /^Fiche pliage .*\.(pdf|json)$/i;
+  function entetePliage(cmd) {
+    return { num: cmd['Numero commande'] || '', ref: (cmd['Chantier'] || [])[0]?.value || '', emetteur: connectedCollab || '',
+      type: 'commande', liv: true, livDate: String(cmd['Date reception prevue'] || '').slice(0, 10) };
+  }
+  async function lireFichePliage(id) {
+    try { const d = await appelWorkerLecture('/achats/pliage?commande_id=' + id); return d.etat || null; } catch (e) { return null; }
+  }
+  // V35 : PDF de la fiche généré à la volée (iframe invisible) à partir des données enregistrées
+  async function pdfFichePliage(etat, cmd) {
+    if (location.protocol === 'file:') throw new Error("La fiche de pliage nécessite l'appli en ligne (adresse https)");
+    await chargerHtml2pdf();
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:1000px;height:1500px;border:0';
+    document.body.appendChild(ifr);
+    try {
+      await new Promise((ok, ko) => {
+        const minuteur = setTimeout(() => { window.removeEventListener('message', ecoute); ko(new Error('Fiche de pliage : chargement trop long')); }, 15000);
+        const ecoute = e => {
+          if (e.source !== ifr.contentWindow || (e.data || {}).type !== 'gb-pliage-pret') return;
+          window.removeEventListener('message', ecoute);
+          ifr.contentWindow.postMessage({ type: 'gb-pliage-init', state: etat, h: entetePliage(cmd) }, '*');
+          setTimeout(() => { clearTimeout(minuteur); ok(); }, 500);
+        };
+        window.addEventListener('message', ecoute);
+        ifr.src = 'fiche-pliage.html?integre=1&t=' + Date.now();
+      });
+      const doc = ifr.contentDocument;
+      doc.documentElement.classList.add('pdf');
+      await new Promise(r => setTimeout(r, 300));
+      return await window.html2pdf().set({ margin: 6, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'avoid-all'] } })
+        .from(doc.getElementById('sheet')).outputPdf('blob');
+    } finally { ifr.remove(); }
+  }
   async function ouvrirFichePliage(id) {
     if (!estProfilPrix()) { alert('Réservé aux profils Administrateur et Gestionnaire.'); return; }
     document.getElementById('modal-pliage')?.remove();
@@ -3266,8 +3345,8 @@
       let cmd = (_commandesCache || []).find(x => x.id === id);
       if (!cmd) { const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS }); if (!r.ok) throw new Error('Commande introuvable'); cmd = await r.json(); }
       const docs = cmd['Documents'] || [];
-      let etat = null;
-      const json = docs.find(f => /^Fiche pliage .*\.json$/i.test(f.visible_name || ''));
+      let etat = await lireFichePliage(id);
+      const json = etat ? null : docs.find(f => /^Fiche pliage .*\.json$/i.test(f.visible_name || ''));
       if (json) {
         const r = await _fetchNatifBrut(GB_WORKER + '/achats/fichier?url=' + encodeURIComponent(json.url), { headers: headersWorker() });
         if (r.ok) { try { etat = await r.json(); } catch (e) {} }
@@ -3286,44 +3365,130 @@
   }
   const FORMES_PLIAGE = { cheneau: 'Chéneau', faitage: 'Faîtage', rive: 'Rive', casquette: 'Casquette', portail: 'Portail applique', rejet: "Rejet d'eau", capot: 'Capot portail',
     pignon: 'Bas pignon', plat: 'Plat', L: 'Cornière (L)', U: 'U', Z: 'Z', omega: 'Oméga', retour: 'L à retour', V: 'V', custom: 'Forme spéciale' };
+  // ── V36 : TARIFS DE PLIAGE par fournisseur (grille épaisseur × plis × développé, chargée via le connecteur) ──
+  function epaisseurMm(ep) {
+    const t = String(ep || '').replace(',', '.').toLowerCase();
+    const f = t.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+)/); // « 75/100 »
+    if (f) return Number(f[1]) / Number(f[2]);
+    const n = parseFloat(t); return isFinite(n) ? n : 0;
+  }
+  async function grillePliage(fournisseur) {
+    try { const d = await appelWorkerLecture('/achats/grilles?fournisseur=' + encodeURIComponent(fournisseur || '')); return { lignes: d.lignes || [], regles: d.regles || null }; }
+    catch (e) { return { lignes: [], regles: null }; }
+  }
+  // Articles EBP de pliage (« *Pliages 75/100 », « *Pliage Galva - ep 2 mm »…) : épaisseurs proposées dans la fiche et code des lignes
+  async function articlesPliageEBP() {
+    try { await chargerCatalogueLocal(); } catch (e) {}
+    return ((_catLocal && _catLocal.items) || []).filter(x => /pliage/i.test(x.designation || '')).map(x => {
+      const des = String(x.designation || '');
+      const f = des.match(/(\d+)\s*\/\s*100\b/), mm = des.match(/(?:ep\.?|épaisseur|ép\.?)\s*(\d+(?:[.,]\d+)?)\s*mm/i) || des.match(/(\d+(?:[.,]\d+)?)\s*mm/i);
+      const ep = f ? Number(f[1]) / 100 : mm ? Number(mm[1].replace(',', '.')) : 0;
+      return { code: x.code, designation: des, unite: x.unite || 'ML', ep, galva: /galva/i.test(des), libEp: f ? f[1] + '/100' : mm ? mm[1] + ' mm' : '' };
+    }).filter(x => x.ep > 0);
+  }
+  function articlePourPiece(arts, p) {
+    const ep = epaisseurMm(p.ep), galva = /galva/i.test(p.mat || '');
+    return arts.find(a => Math.abs(a.ep - ep) < 0.005 && a.galva === galva) || null;
+  }
+  // Longueur facturée : palier supérieur du fournisseur (ex. 1 / 1,5 / 2 / 3 / 4 m), au-delà mètre entier supérieur
+  function longueurFacturee(lgMm, regles) {
+    const m = lgMm / 1000;
+    if (!m) return 0;
+    const paliers = (regles && regles.paliers_ml) || [];
+    const p = paliers.find(x => x >= m - 1e-6);
+    return p || Math.ceil(m - 1e-6);
+  }
+  function prixPliage(grille, p, dev, plis, lg) {
+    const ep = epaisseurMm(p.ep);
+    if (!ep || !grille || !grille.length) return null;
+    const mat = String(p.mat || '').toLowerCase();
+    const cand = grille.filter(g => Math.abs(Number(g.epaisseur) - ep) < 0.005 && (g.matiere === '*' || mat.includes(String(g.matiere).toLowerCase()))
+      && Number(g.plis_max) >= plis && Number(g.dev_max) >= dev);
+    if (!cand.length) return null;
+    cand.sort((a, b) => (a.matiere === '*') - (b.matiere === '*') || a.plis_max - b.plis_max || a.dev_max - b.dev_max);
+    const g = cand[0];
+    if (g.unite !== 'u' && !lg) return null; // prix au ml ou au m² : longueur indispensable
+    const pu = g.unite === 'u' ? Number(g.prix) : g.unite === 'm2' ? Number(g.prix) * dev / 1000 * lg / 1000 : Number(g.prix) * lg / 1000;
+    return { pu: Math.round(pu * 100) / 100, g };
+  }
+  // Totaux de l'en-tête recalculés depuis les lignes (commandes créées dans l'appli)
+  async function majTotauxCommandeAppli(cmdId) {
+    const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
+    const lignes = (await rl.json()).results || [];
+    const ht = Math.round(lignes.reduce((t, l) => t + (Number(l['Montant HT']) || 0), 0) * 100) / 100, tva = Math.round(lignes.reduce((t, l) => t + (Number(l['TVA']) || 0), 0) * 100) / 100;
+    await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${cmdId}/?user_field_names=true`,
+      { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Montant total HT': ht, 'Montant total TVA': tva, 'Net a payer': Math.round((ht + tva) * 100) / 100 }) });
+    const c = (_commandesCache || []).find(x => x.id === cmdId); if (c) { c['Montant total HT'] = ht; c['Montant total TVA'] = tva; c['Net a payer'] = Math.round((ht + tva) * 100) / 100; }
+    if (lignes.some(l => (l['Chantier'] || []).length)) { try { await majRepartitionCommande(cmdId); } catch (e) {} }
+  }
+  async function recalculerTarifsPliage(cmdId) {
+    const etat = await lireFichePliage(cmdId);
+    if (!etat) { alert('Pas de fiche de pliage enregistrée pour cette commande : ouvrir 📐 Pliage puis ✅ Joindre.'); return; }
+    try { const n = await lignesPliageCommande(cmdId, etat); alert(`✅ ${n.lignes} ligne(s) de pliage recalculée(s) · ${n.chiffrees} chiffrée(s) avec la grille${n.lignes > n.chiffrees ? ` · ${n.lignes - n.chiffrees} hors grille (prix à 0)` : ''}.`); try { chargerCommandesPage(); } catch (e) {} }
+    catch (e) { alert('❌ ' + e.message); }
+  }
   async function lignesPliageCommande(cmdId, etat) {
     const nombre = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return isFinite(n) ? n : 0; };
+    let cmdP = (_commandesCache || []).find(x => x.id === cmdId);
+    if (!cmdP) { try { const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${cmdId}/?user_field_names=true`, { headers: HEADERS }); if (r.ok) cmdP = await r.json(); } catch (e) {} }
+    const { lignes: grille, regles } = await grillePliage(cmdP ? cmdP['Fournisseur'] : '');
+    const arts = await articlesPliageEBP();
+    let chiffrees = 0;
     // V31 : une ligne par pièce, repère par défaut = n° de la case (P1, P2…), toutes les caractéristiques dans la désignation
     const items = (etat.pieces || []).map((p, i) => ({ p, i })).filter(({ p }) => !p.blank && (p.segs || []).length).map(({ p, i }) => {
       const dev = (p.segs || []).reduce((t, g) => t + nombre(g.len), 0);
       const plis = Math.max(0, (p.segs || []).length - 1);
       const repere = String(p.rep || '').trim() || 'P' + (i + 1);
       const qte = nombre(p.qte) || 1, lg = nombre(p.long);
+      const lgFact = longueurFacturee(lg, regles); // m
+      const tarif = prixPliage(grille, p, dev, plis, lgFact * 1000);
+      if (tarif) chiffrees++;
+      const art = articlePourPiece(arts, p);
       const desc = ['Rep. ' + repere, FORMES_PLIAGE[p.tpl] || 'Forme spéciale',
         p.mat || '', p.ep ? 'ép. ' + p.ep : '', p.ral && p.mat !== 'Galva' ? 'RAL ' + p.ral : '',
         lg ? 'Lg ' + Math.round(lg) + ' mm' : 'Lg à préciser', dev ? 'Dév. ' + Math.round(dev) + ' mm' : '',
         plis + ' pli' + (plis > 1 ? 's' : ''), 'Qté ' + qte
       ].filter(Boolean).join(' · ');
-      return { 'Reference fournisseur': 'PLIAGE-' + repere.replace(/\s+/g, '').slice(0, 40), 'Description': desc + ' (fiche de pliage)', 'Unite': 'U', 'Quantite': qte, 'Debourse HT': 0, 'Montant HT': 0, 'TVA': 0 };
+      const noteTarif = tarif ? ` · grille ${tarif.g.prix} €/${tarif.g.unite === 'u' ? 'pièce' : tarif.g.unite}` : (grille.length ? ' · hors grille' : '');
+      const noteLg = lgFact && Math.abs(lgFact * 1000 - lg) > 0.5 ? ` (facturé ${String(lgFact).replace('.', ',')} m)` : '';
+      if (art && /^ml$/i.test(art.unite) && lgFact && (!tarif || tarif.g.unite === 'ml')) {
+        // Article EBP au mètre linéaire : quantité = longueur facturée × nombre de pièces, prix au ml de la grille
+        const ml = Math.round(lgFact * qte * 1000) / 1000, pu = tarif ? Number(tarif.g.prix) : 0, mt = Math.round(pu * ml * 100) / 100;
+        return { 'Reference fournisseur': art.code, 'Description': `${art.designation} — ${desc.replace(' · Qté ' + qte, '')}${noteLg} · ${qte} pc${qte > 1 ? 's' : ''}${noteTarif} (fiche de pliage)`,
+          'Unite': art.unite, 'Quantite': ml, 'Debourse HT': pu, 'Montant HT': mt, 'TVA': Math.round(mt * TAUX_TVA_BC) / 100 };
+      }
+      const pu = tarif ? tarif.pu : 0, mt = Math.round(pu * qte * 100) / 100;
+      return { 'Reference fournisseur': art ? art.code : 'PLIAGE-' + repere.replace(/\s+/g, '').slice(0, 40), 'Description': (art ? art.designation + ' — ' : '') + desc + noteLg + noteTarif + ' (fiche de pliage)', 'Unite': 'U', 'Quantite': qte, 'Debourse HT': pu, 'Montant HT': mt, 'TVA': Math.round(mt * TAUX_TVA_BC) / 100 };
     });
+    const totalPliage = items.reduce((t, x) => t + (Number(x['Montant HT']) || 0), 0);
+    if (regles && Number(regles.minimum_ht) > 0 && totalPliage > 0 && totalPliage < Number(regles.minimum_ht)) {
+      const comp = Math.round((Number(regles.minimum_ht) - totalPliage) * 100) / 100;
+      items.push({ 'Reference fournisseur': 'PLIAGE-MINI', 'Description': `Complément minimum de facturation pliage (${regles.minimum_ht} € HT) (fiche de pliage)`, 'Unite': 'U', 'Quantite': 1, 'Debourse HT': comp, 'Montant HT': comp, 'TVA': Math.round(comp * TAUX_TVA_BC) / 100 });
+    }
     const r0 = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
     const existantes = (await r0.json()).results || [];
-    for (const l of existantes.filter(l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')))) {
+    const estLignePliage = l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')) || /\(fiche de pliage\)\s*$/i.test(String(l['Description'] || ''));
+    for (const l of existantes.filter(estLignePliage)) {
       const rd = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${l.id}/`, { method: 'DELETE', headers: HEADERS });
       if (!rd.ok && rd.status !== 404) throw new Error('Remplacement des lignes de pliage : HTTP ' + rd.status);
     }
-    const ordre0 = existantes.filter(l => !/^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || ''))).reduce((m, l) => Math.max(m, Number(l['Ordre']) || 0), 0);
+    const ordre0 = existantes.filter(l => !estLignePliage(l)).reduce((m, l) => Math.max(m, Number(l['Ordre']) || 0), 0);
     if (items.length) {
       const rb = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/batch/?user_field_names=true`,
         { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: items.map((x, i) => ({ ...x, 'Commande': [cmdId], 'Ordre': ordre0 + i + 1 })) }) });
       if (!rb.ok) throw new Error('Création des lignes de pliage : HTTP ' + rb.status);
     }
     try { delete _commandesLignesCache[cmdId]; } catch (e) {}
-    return items.length;
+    if (/^CA-/i.test(String(cmdP && cmdP['Numero commande'] || ''))) { try { await majTotauxCommandeAppli(cmdId); } catch (e) {} }
+    return { lignes: items.length, chiffrees };
   }
   async function recevoirMessagePliage(e) {
     const cadre = document.getElementById('pliage-cadre');
     if (!cadre || e.source !== cadre.contentWindow || !_pliage) return;
     const m = e.data || {}, cmd = _pliage.cmd;
     if (m.type === 'gb-pliage-pret') {
-      cadre.contentWindow.postMessage({ type: 'gb-pliage-init', state: _pliage.etat, h: {
-        num: cmd['Numero commande'] || '', ref: (cmd['Chantier'] || [])[0]?.value || '', emetteur: connectedCollab || '',
-        type: 'commande', liv: true, livDate: String(cmd['Date reception prevue'] || '').slice(0, 10) } }, '*');
+      const eps = [...new Set((await articlesPliageEBP()).sort((a, b) => a.ep - b.ep).map(a => a.libEp))];
+      cadre.contentWindow.postMessage({ type: 'gb-pliage-init', state: _pliage.etat, h: entetePliage(cmd), ep: eps }, '*');
       return;
     }
     if (m.type !== 'gb-pliage-joindre') return;
@@ -3341,25 +3506,26 @@
           .from(doc.getElementById('sheet')).outputPdf('blob');
       } finally { doc.documentElement.classList.remove('pdf'); }
       const num = String(cmd['Numero commande'] || 'commande').replace(/[^\w-]+/g, '_');
+      // V35 : la fiche (données) est enregistrée dans la base : c'est elle qui sert à régénérer le PDF à l'envoi
+      await appelWorkerPost('/achats/pliage', { commande_id: _pliage.id, numero: cmd['Numero commande'] || '', etat: m.state });
       const envoyer = async (blob, nom) => {
         const fd = new FormData(); fd.append('file', new File([blob], nom, { type: blob.type }));
         const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
         if (!r.ok) throw new Error('Envoi du fichier « ' + nom + ' » refusé');
         return { name: (await r.json()).name };
       };
-      const fPdf = await envoyer(pdf, `Fiche pliage ${num}.pdf`);
-      const fJson = await envoyer(new Blob([JSON.stringify(m.state, null, 1)], { type: 'application/json' }), `Fiche pliage ${num}.json`);
-      // Documents de la commande : la fiche précédente est remplacée, les autres documents conservés
-      const garder = (cmd['Documents'] || []).filter(f => !RE_FICHE_PLIAGE.test(f.visible_name || '')).map(f => ({ name: f.name }));
-      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${_pliage.id}/?user_field_names=true`,
-        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Documents': [...garder, fPdf, fJson] }) });
-      if (!r.ok) throw new Error('Mise à jour de la commande : HTTP ' + r.status);
-      const maj = await r.json();
-      const c = (_commandesCache || []).find(x => x.id === _pliage.id); if (c) c['Documents'] = maj['Documents'];
-      _pliage.cmd['Documents'] = maj['Documents']; _pliage.etat = m.state;
+      _pliage.etat = m.state;
+      // Copie PDF consultable dans les documents de la commande (l'envoi n'en dépend plus)
+      try {
+        const fPdf = await envoyer(pdf, `Fiche pliage ${num}.pdf`);
+        const garder = (cmd['Documents'] || []).filter(f => !RE_FICHE_PLIAGE.test(f.visible_name || '')).map(f => ({ name: f.name }));
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${_pliage.id}/?user_field_names=true`,
+          { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Documents': [...garder, fPdf] }) });
+        if (r.ok) { const maj = await r.json(); const c = (_commandesCache || []).find(x => x.id === _pliage.id); if (c) c['Documents'] = maj['Documents']; _pliage.cmd['Documents'] = maj['Documents']; }
+      } catch (e) { console.warn('Copie PDF de la fiche non déposée', e); }
       // V26 : une ligne d'article par pièce pliée (les lignes « PLIAGE » précédentes sont remplacées)
-      const nbLignes = await lignesPliageCommande(_pliage.id, m.state);
-      msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe (PDF + modifiable) · ${nbLignes} ligne(s) de pliage dans la commande</span>`;
+      const nbL = await lignesPliageCommande(_pliage.id, m.state);
+      msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe · ${nbL.lignes} ligne(s) de pliage${nbL.chiffrees ? ` dont ${nbL.chiffrees} chiffrée(s) avec la grille du fournisseur` : ''}</span>`;
       try { chargerCommandesPage(); } catch (e) {}
     } catch (err) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(err.message)}</span>`; }
   }
@@ -22148,6 +22314,7 @@
         <span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800">🆕 Commande appli</span>
         ${estProfilPrix() ? `<button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
           <button onclick="event.stopPropagation();ouvrirFichePliage(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">📐 Pliage${(r['Documents'] || []).some(f => /^Fiche pliage .*\.pdf$/i.test(f.visible_name || '')) ? ' ✓' : ''}</button>
+          <button onclick="event.stopPropagation();recalculerTarifsPliage(${r.id})" title="Recalculer le prix des pliages avec la grille du fournisseur" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">💶 Tarifs pliage</button>
           <button onclick="event.stopPropagation();envoyerCommandeMail(${r.id})" style="border:none;background:var(--vert);color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✉️ Envoyer</button>` : ''}</div>` : ''}
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
       ${retardAR ? `<div style="font-size:11px;color:#c0392b;font-weight:700;margin-bottom:2px"><span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ AR en attente depuis ${retardAR} j</span>commandé le ${dateLabel}</div>` : ''}
