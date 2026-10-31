@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V28';
+  const APP_VERSION = 'V29';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -15723,6 +15723,8 @@
   // Recherche globale au-dessus des onglets : bascule entre les résultats
   // (tous statuts confondus, avec badge de statut visible) et l'affichage
   // normal des onglets selon qu'une recherche est en cours ou non.
+  let _minuteurRecherche = null;
+  function differerRecherche(fn) { clearTimeout(_minuteurRecherche); _minuteurRecherche = setTimeout(fn, 250); }
   function rechercherCommandesGlobal(valeur) {
     const zoneResultats = document.getElementById('commandes-recherche-globale-resultats');
     const zoneOnglets = document.getElementById('commandes-onglets-normaux');
@@ -15738,6 +15740,7 @@
     if (blocOnglets) blocOnglets.style.display = 'none';
     zoneResultats.style.display = 'block';
 
+    if (texte.length < 2) { zoneResultats.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Tapez au moins 2 caractères…</div>'; return; }
     const recherche = texte.toLowerCase();
     const peutVoirPrix = estProfilPrix(); // contrôle en direct du profil connecté
     const filtrees = _commandesCache.filter(r => {
@@ -15748,8 +15751,9 @@
       return correspondRechercheCommande(r, recherche);
     });
     const triees = [...filtrees].sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
+    const MAX_RESULTATS = 50; // V29 : au-delà, affiner la recherche
     zoneResultats.innerHTML = triees.length
-      ? `<div style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px">${triees.length} résultat(s)</div>` + triees.map(r => renderCarteCommande(r, peutVoirPrix, 'recherche')).join('')
+      ? `<div style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px">${triees.length} résultat(s)${triees.length > MAX_RESULTATS ? ` — ${MAX_RESULTATS} plus récents affichés, affinez la recherche (plusieurs mots possibles)` : ''}</div>` + triees.slice(0, MAX_RESULTATS).map(r => renderCarteCommande(r, peutVoirPrix, 'recherche')).join('')
       : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande trouvée.</div>';
   }
 
@@ -20394,7 +20398,10 @@
     return ['PRISE_STOCK', ...Object.entries(o).filter(([k]) => k !== 'PRISE_STOCK').map(([k, v]) => `${k}=${v}`)].join(';');
   }
   // Prises en stock actives (quantité non nulle), indexées par id de ligne de commande
+  let _prisesMemo = { ref: null, n: -1, t: 0, res: null };
   function prisesStockParLigne() {
+    const mv = _mouvementsCache || [];
+    if (_prisesMemo.res && _prisesMemo.ref === mv && _prisesMemo.n === mv.length && Date.now() - _prisesMemo.t < 2000) return _prisesMemo.res;
     const res = {};
     (_mouvementsCache || []).forEach(m => {
       if (!String(m['Libelle'] || '').startsWith(PREFIXE_PRISE_STOCK)) return;
@@ -20410,6 +20417,7 @@
       if (q <= 0) return;
       (res[lid] = res[lid] || []).push({ mvt: m, qte: q, qteEBP: Number(n.qteEBP) || 0, statut, par: n.par || m['Par'] || '', sortiPar: n.sorti_par || '', sortiLe: n.sorti_le || '' });
     });
+    _prisesMemo = { ref: mv, n: mv.length, t: Date.now(), res };
     return res;
   }
   // Propositions écartées (« Traité : pas de prise en stock ») : mouvement de quantité 0,
@@ -21935,7 +21943,7 @@
     const formaterDate = formaterDateStatut;
 
     const nbArticles = (_commandesLignesCache[r.id] || []).length;
-    const lignesHTML = renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix, statut);
+    const lignesHTML = () => renderLignesArticlesGroupees(_commandesLignesCache[r.id] || [], peutVoirPrix, statut); // V29 : à la demande
     const nbRetour = (_commandesLignesCache[r.id] || []).filter(l => l['Retour chantier']).length;
     const nbManquant = (_commandesLignesCache[r.id] || []).filter(l => l['Non réceptionné']).length;
     const peutSignalerRetour = false; // ancien retour par case à cocher : remplacé par Stock atelier › Retour chantier
@@ -22021,7 +22029,7 @@
 
     // Tout ce qui n'est pas l'entete essentiel (fournisseur/chantier/référence/
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
-    const contenuDetails = `
+    const genererDetails = () => `
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
       ${(() => {
         const st = 'font-size:10px;color:#aaa;margin-top:2px';
@@ -22045,7 +22053,7 @@
         return h;
       })()}
       ${envoyePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">🚚 Envoyé sur chantier par : ${envoyePar}${dateEnvoiChantier ? ` (${formaterDate(dateEnvoiChantier)})` : ''}</div>` : ''}
-      ${lignesHTML}
+      ${lignesHTML()}
       ${noteStatut ? `<div style="margin-top:6px;padding:6px 10px;background:#f5f5f5;border-radius:8px;font-size:11px;color:#666;font-style:italic">📝 ${noteStatut}</div>` : ''}
       ${(pdf && peutVoirPrix) ? `<a href="${pdf.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF</a>` : ''}
       ${(pdfSansPrix && !peutVoirPrix) ? `<a href="${pdfSansPrix.url}" target="_blank" style="font-size:11px;font-weight:700;color:var(--vert);text-decoration:underline">📎 PDF de la commande</a>` : ''}
@@ -22068,6 +22076,9 @@
     // Fiche ouverte par scan d'étiquette : détail déplié d'office, sinon les
     // actions (réception, emplacement, départ chantier) restent invisibles.
     const detailsOuvert = contexte === 'scan';
+    // V29 : le contenu du détail (lignes, formulaires, documents…) n'est construit qu'à l'ouverture
+    const contenuDetails = detailsOuvert ? genererDetails() : '';
+    if (!detailsOuvert) _detailsDifferes.set(uid, genererDetails);
     const detailsHTML = `
       <div onclick="toggleDetailsCommande('${uid}')" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding:8px 12px;background:#eef4ec;border:1px solid #cfe0ca;border-radius:8px;font-size:12px;font-weight:800;color:var(--vert)">
         <span>📋 Détail${nbArticles ? ` (${nbArticles} article${nbArticles > 1 ? 's' : ''})` : ''}</span>
@@ -22123,10 +22134,12 @@
     </div>`;
   }
 
+  const _detailsDifferes = new Map(); // V29 : uid → génération différée du détail de la carte
   function toggleDetailsCommande(uid) {
     const div = document.getElementById('details-' + uid);
     const chevron = document.getElementById('details-chevron-' + uid);
     if (!div) return;
+    if (_detailsDifferes.has(uid)) { div.innerHTML = _detailsDifferes.get(uid)(); _detailsDifferes.delete(uid); }
     const ouvert = div.style.display !== 'none';
     div.style.display = ouvert ? 'none' : 'block';
     if (chevron) chevron.textContent = ouvert ? '▸' : '▾';
@@ -30144,7 +30157,7 @@
   </div>
   <div id="sync-ebp-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
-    <input type="text" id="commandes-recherche-globale" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="rechercherCommandesGlobal(this.value)" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+    <input type="text" id="commandes-recherche-globale" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis)…" oninput="const v=this.value;differerRecherche(() => rechercherCommandesGlobal(v))" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
   <div id="commandes-tabs-bloc" style="padding:4px 16px 0">
     <div id="commandes-tabs-scroll" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:2px">
@@ -30176,7 +30189,7 @@
         <div id="commandes-resume" style="flex:1;font-size:12px;color:var(--gris-moyen)"></div>
         <button id="btn-excel-relances" onclick="exporterCommandesEnAttenteReception()" title="Export Excel : toutes les commandes en attente + feuille « À relancer » (délai dépassé)" style="flex:0 0 auto;background:#e8f0e7;color:var(--vert);border:none;border-radius:8px;padding:6px 10px;font-size:11px;font-weight:800;cursor:pointer">📥 Excel relances</button>
       </div>
-      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesListe()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
+      <input type="text" id="commandes-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="differerRecherche(renderCommandesListe)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none;margin-bottom:8px" />
     </div>
     <div id="commandes-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -30185,7 +30198,7 @@
   <div id="commandes-vue-ar" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="commandes-ar-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesEnAttenteAR()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-ar-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="differerRecherche(renderCommandesEnAttenteAR)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-ar-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -30193,7 +30206,7 @@
   <!-- Vue Réception partielle -->
   <div id="commandes-vue-partielle" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesPartielles()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-partielle-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="differerRecherche(renderCommandesPartielles)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-partielle-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -30201,7 +30214,7 @@
   <!-- Vue Réceptionnées -->
   <div id="commandes-vue-receptionnees" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
-      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesReceptionnees()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-receptionnees-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="differerRecherche(renderCommandesReceptionnees)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
       <div style="display:flex;gap:6px;margin:6px 0 4px;overflow-x:auto">
         <button class="recep-sous-btn" data-sous="atelier" onclick="setSousOngletReceptionnees('atelier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:var(--vert);color:#fff">🏭 À l'atelier <span id="recep-nb-atelier"></span></button>
         <button class="recep-sous-btn" data-sous="chantier" onclick="setSousOngletReceptionnees('chantier')" style="flex:0 0 auto;border:1px solid #ddd;border-radius:14px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;background:#fff;color:var(--gris-moyen)">🚚 Parties sur chantier <span id="recep-nb-chantier"></span></button>
@@ -30248,7 +30261,7 @@
   <div id="commandes-vue-retour" style="display:none">
     <div class="filtre-fige" style="padding:10px 16px 2px">
       <div id="retour-resume" style="font-size:12px;color:var(--gris-moyen);margin-bottom:8px"></div>
-      <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="renderCommandesRetour()" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
+      <input type="text" id="commandes-retour-recherche" placeholder="🔍 Rechercher une commande (chantier, fournisseur, n° commande ou devis) — plusieurs mots possibles (ex. FB emaneo)…" oninput="differerRecherche(renderCommandesRetour)" style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:13px;outline:none" />
     </div>
     <div id="commandes-retour-liste" style="padding:8px 16px 80px"></div>
   </div>
@@ -30338,7 +30351,7 @@
   </div>
   <div id="sync-ebp-clients-status" style="display:none;margin:0 16px 8px;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:600"></div>
   <div style="padding:0 16px 10px">
-    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="renderCommandesClientsListe()" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
+    <input type="text" id="commandes-clients-recherche" placeholder="🔍 Rechercher une commande client (client, n° commande)…" oninput="differerRecherche(renderCommandesClientsListe)" style="width:100%;box-sizing:border-box;border:1.5px solid var(--vert);border-radius:8px;padding:10px 12px;font-size:13px;outline:none" />
   </div>
   <div style="padding:0 16px 8px">
     <div id="cmdcli-onglets" style="display:flex;background:#f1f5f9;border-radius:10px;padding:3px;gap:2px">
