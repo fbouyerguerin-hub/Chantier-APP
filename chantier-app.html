@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V26';
+  const APP_VERSION = 'V28';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2918,8 +2918,8 @@
           <select onchange="_nouvCmd.lieu=this.value" style="${champ};width:100%">${['Atelier', 'Chantier'].map(x => `<option ${x === C.lieu ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       </div>
       <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin:14px 0 6px">Lignes</div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px">
-        <thead><tr style="color:#777;text-align:left"><th style="padding:4px">Code</th><th style="padding:4px">Désignation</th><th style="padding:4px;width:70px">Qté</th><th style="padding:4px;width:60px">Unité</th><th style="padding:4px;width:90px">PU HT €</th><th style="padding:4px;width:90px;text-align:right">Total HT</th><th></th></tr></thead>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
+        <thead><tr style="color:#777;text-align:left"><th style="padding:4px">Code</th><th style="padding:4px">Désignation</th><th style="padding:4px;width:70px">Qté</th><th style="padding:4px;width:60px">Unité</th><th style="padding:4px;width:90px">PU HT €</th><th style="padding:4px;width:90px;text-align:right">Total HT</th><th style="padding:4px;width:150px">Chantier</th><th></th></tr></thead>
         <tbody>${C.lignes.map((l, i) => `<tr>
           <td style="padding:3px"><input value="${esc(l.code)}" oninput="_nouvCmd.lignes[${i}].code=this.value" style="${champ};width:100%;font-family:monospace;font-size:12px"></td>
           <td style="padding:3px"><input value="${esc(l.description)}" oninput="_nouvCmd.lignes[${i}].description=this.value" style="${champ};width:100%"></td>
@@ -2927,9 +2927,12 @@
           <td style="padding:3px"><input value="${esc(l.unite)}" oninput="_nouvCmd.lignes[${i}].unite=this.value" style="${champ};width:100%"></td>
           <td style="padding:3px"><input type="number" min="0" step="any" value="${esc(l.pu)}" oninput="_nouvCmd.lignes[${i}].pu=this.value;majTotauxNC()" style="${champ};width:100%"></td>
           <td id="nc-tot-${i}" style="padding:3px;text-align:right;font-weight:700"></td>
+          <td style="padding:3px"><select onchange="_nouvCmd.lignes[${i}].chantier_id=this.value" title="Imputer cette ligne à un autre chantier que celui de la commande" style="${champ};width:100%;font-size:11px;${l.chantier_id ? 'border-color:#c25e00;color:#c25e00;font-weight:700' : 'color:#999'}">
+            <option value="">= commande</option>${(_nouvCmdChantiers || []).map(c => `<option value="${c.id}" ${String(c.id) === String(l.chantier_id || '') ? 'selected' : ''}>${esc(c.nom)}</option>`).join('')}</select></td>
           <td style="padding:3px"><button onclick="_nouvCmd.lignes.splice(${i},1);renderNouvelleCommande()" style="${petit};color:#c0392b">✕</button></td></tr>`).join('')}</tbody></table></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
         <button onclick="_nouvCmd.lignes.push({code:'',description:'',unite:'U',quantite:1,pu:''});renderNouvelleCommande()" style="${petit}">＋ Ligne libre</button>
+        <button onclick="_nouvCmd.pliage=!_nouvCmd.pliage;renderNouvelleCommande()" title="Les lignes de pliage sont créées depuis la fiche, juste après la commande" style="${petit};${_nouvCmd.pliage ? 'background:#ede7f6;border-color:#5e35b1;color:#5e35b1;font-weight:800' : 'color:#5e35b1'}">📐 ${_nouvCmd.pliage ? 'Fiche de pliage : oui ✓' : 'Ajouter des pliages'}</button>
         <input id="nc-cat" placeholder="🔍 Ajouter depuis le catalogue EBP (code, désignation, réf. fournisseur)…" oninput="chercherCatalogueNC(this.value)" style="${champ};flex:1;min-width:220px"></div>
       <div id="nc-cat-res" style="font-size:12px"></div>
       <div id="nc-totaux" style="text-align:right;margin-top:10px;font-size:13px"></div>
@@ -2993,11 +2996,15 @@
     const C = _nouvCmd, msg = document.getElementById('nc-msg');
     if (!C.fournisseur) { msg.innerHTML = '<span style="color:#c0392b">Choisir un fournisseur.</span>'; return; }
     const chantier = (_nouvCmdChantiers || []).find(c => String(c.id) === String(C.chantier_id));
+    const lignesSaisies = C.lignes.filter(l => (String(l.description).trim() || String(l.code).trim()) && Number(String(l.quantite).replace(',', '.')) > 0)
+      .map(l => ({ ...l, chantier_nom: ((_nouvCmdChantiers || []).find(c => String(c.id) === String(l.chantier_id)) || {}).nom || '' }));
+    if (!lignesSaisies.length && !C.pliage) { msg.innerHTML = '<span style="color:#c0392b">Ajouter au moins une ligne, ou des pliages.</span>'; return; }
     btn.disabled = true; msg.textContent = '⏳ Création…';
     try {
       const r = await appelWorkerPost('/achats/commandes', {
         fournisseur: C.fournisseur.societe, chantier_id: C.chantier_id || null, objet: C.objet, date_livraison: C.date_livraison,
-        lieu: C.lieu === 'Chantier' && chantier ? 'Chantier ' + chantier.nom : 'Atelier', taux_tva: TAUX_TVA_BC, lignes: C.lignes });
+        lieu: C.lieu === 'Chantier' && chantier ? 'Chantier ' + chantier.nom : 'Atelier', taux_tva: TAUX_TVA_BC, pliage: !!C.pliage,
+        lignes: lignesSaisies.length ? lignesSaisies : [{ code: 'PLIAGE', description: 'Pliages selon fiche de pliage', unite: 'U', quantite: 1, pu: 0 }] });
       _bcEmails[r.id] = C.email;
       document.getElementById('nc-boite').innerHTML = `<div style="text-align:center;padding:20px">
         <div style="font-size:40px">✅</div><div style="font-size:17px;font-weight:800;color:var(--gris);margin:6px 0">Commande ${echapperHtmlNote(r.numero)} créée</div>
@@ -3009,6 +3016,8 @@
           <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Fermer</button></div>
         <div style="font-size:11px;color:#999;margin-top:14px">Si elle est aussi saisie dans EBP, reporter « ${echapperHtmlNote(r.numero)} » dans la référence EBP : la synchro la reliera à cette fiche.</div></div>`;
       try { _commandesCache = []; chargerCommandesPage(); } catch (e) {}
+      if (r.avertissement) alert('⚠️ ' + r.avertissement);
+      if (C.pliage) ouvrirFichePliage(r.id);
     } catch (e) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; btn.disabled = false; }
   }
   // ── Bon de commande (impression / PDF) ──
@@ -3052,7 +3061,12 @@
           ${chantier ? `<div style="margin-top:4px">Affaire : <b>${esc(chantier)}</b></div>` : ''}
           ${cmd['Designation'] && cmd['Designation'] !== cmd['Numero commande'] ? `<div>Objet : ${esc(cmd['Designation'])}</div>` : ''}</div></div>
       <table><thead><tr><th style="width:24mm">Référence</th><th>Désignation</th><th class="nb" style="width:16mm">Qté</th><th style="width:13mm">Unité</th><th class="nb" style="width:22mm">PU HT</th><th class="nb" style="width:25mm">Montant HT</th></tr></thead>
-      <tbody>${lignes.map(l => `<tr><td class="code">${esc(l['Reference fournisseur'] || '')}</td><td>${esc(l['Description'] || '')}</td>
+      <tbody>${(() => {
+        const autre = l => (l['Chantier'] || [])[0]?.value || '';
+        const tri = [...lignes].sort((a, b) => (autre(a) ? 1 : 0) - (autre(b) ? 1 : 0) || autre(a).localeCompare(autre(b)));
+        let courant = null;
+        return tri.map(l => { const a = autre(l); const titre = a !== courant && a ? `<tr><td colspan="6" style="background:#fff3e0;font-weight:800;color:#c25e00;padding:5px 6px">Affaire : ${esc(a)}</td></tr>` : ''; courant = a; return titre + `<tr data-l="1">`; }).map((debut, i) => [debut, tri[i]]);
+      })().map(([debut, l]) => `${debut.replace('<tr data-l="1">', '')}<tr><td class="code">${esc(l['Reference fournisseur'] || '')}</td><td>${esc(l['Description'] || '')}</td>
         <td class="nb">${(Number(l['Quantite']) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 })}</td><td>${esc(l['Unite'] || '')}</td>
         <td class="nb">${Number(l['Debourse HT']) ? eurBC(l['Debourse HT']) : ''}</td><td class="nb">${Number(l['Montant HT']) ? eurBC(l['Montant HT']) : ''}</td></tr>`).join('')}</tbody></table>
       <div class="tot"><div><span>Total HT</span><b>${eurBC(ht)}</b></div><div><span>TVA</span><span>${eurBC(tva)}</span></div><div class="ttc"><span>Total TTC</span><span>${eurBC(ht + tva)}</span></div></div>
@@ -3222,6 +3236,7 @@
       _pliage = { id, cmd, etat };
       document.getElementById('pliage-titre').textContent = (cmd['Numero commande'] || '') + ' · ' + (cmd['Fournisseur'] || '') + (etat ? ' (fiche existante)' : '');
       window.addEventListener('message', recevoirMessagePliage);
+      if (location.protocol === 'file:') throw new Error("La fiche de pliage nécessite l'appli en ligne (adresse https), pas le fichier ouvert depuis l'ordinateur.");
       document.getElementById('pliage-cadre').src = 'fiche-pliage.html?integre=1&t=' + Date.now();
     } catch (e) { document.getElementById('pliage-msg').innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; }
   }
@@ -3247,11 +3262,11 @@
     });
     const r0 = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
     const existantes = (await r0.json()).results || [];
-    for (const l of existantes.filter(l => /^PLIAGE-/i.test(String(l['Reference fournisseur'] || '')))) {
+    for (const l of existantes.filter(l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')))) {
       const rd = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${l.id}/`, { method: 'DELETE', headers: HEADERS });
       if (!rd.ok && rd.status !== 404) throw new Error('Remplacement des lignes de pliage : HTTP ' + rd.status);
     }
-    const ordre0 = existantes.filter(l => !/^PLIAGE-/i.test(String(l['Reference fournisseur'] || ''))).reduce((m, l) => Math.max(m, Number(l['Ordre']) || 0), 0);
+    const ordre0 = existantes.filter(l => !/^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || ''))).reduce((m, l) => Math.max(m, Number(l['Ordre']) || 0), 0);
     if (items.length) {
       const rb = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/batch/?user_field_names=true`,
         { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: items.map((x, i) => ({ ...x, 'Commande': [cmdId], 'Ordre': ordre0 + i + 1 })) }) });
@@ -3306,6 +3321,73 @@
       msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe (PDF + modifiable) · ${nbLignes} ligne(s) de pliage dans la commande</span>`;
       try { chargerCommandesPage(); } catch (e) {}
     } catch (err) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(err.message)}</span>`; }
+  }
+  // ── V28 : CHANTIER PAR LIGNE DE COMMANDE ──
+  // Champs Baserow : « Chantier » (lien vers Chantiers) dans les lignes, « Repartition chantiers » (texte long) dans les commandes.
+  async function chargerChantiersActifs() {
+    if (_nouvCmdChantiers) return _nouvCmdChantiers;
+    try {
+      const r = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+      _nouvCmdChantiers = ((await r.json()).results || []).filter(c => !/^\s*(termin|cl[oô]tur)/i.test(extraireValeurChamp(c['Statue'], '')))
+        .map(c => ({ id: c.id, nom: c['Nom du chantier'] || '' })).filter(c => c.nom).sort((a, b) => b.nom.localeCompare(a.nom, 'fr', { numeric: true }));
+    } catch (e) { _nouvCmdChantiers = []; }
+    return _nouvCmdChantiers;
+  }
+  function badgeChantierLigne(l) {
+    const ch = (l['Chantier'] || [])[0];
+    const cmdId = (l['Commande'] || [])[0]?.id;
+    const modif = estProfilPrix() && cmdId;
+    if (ch) return ` <span ${modif ? `onclick="event.stopPropagation();changerChantierLigne(${l.id}, ${cmdId})" title="Ligne imputée à un autre chantier — cliquer pour changer"` : ''} style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fff3e0;color:#c25e00;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap;${modif ? 'cursor:pointer' : ''}">🏗 ${echapperHtmlNote(String(ch.value || '').split(' ')[0] || 'autre chantier')}</span>`;
+    return modif ? ` <span onclick="event.stopPropagation();changerChantierLigne(${l.id}, ${cmdId})" title="Imputer cette ligne à un autre chantier" style="cursor:pointer;opacity:.35;font-size:10px;margin-left:3px">🏗</span>` : '';
+  }
+  async function changerChantierLigne(ligneId, cmdId) {
+    const chantiers = await chargerChantiersActifs();
+    document.getElementById('modal-chantier-ligne')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-chantier-ligne';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10060;display:flex;align-items:center;justify-content:center;padding:12px';
+    fond.innerHTML = `<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;padding:16px">
+      <div style="font-size:15px;font-weight:800;color:var(--gris);margin-bottom:8px">🏗 Chantier de cette ligne</div>
+      <select id="chantier-ligne-sel" style="width:100%;padding:8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px">
+        <option value="">— Même chantier que la commande —</option>${chantiers.map(c => `<option value="${c.id}">${echapperHtmlNote(c.nom)}</option>`).join('')}</select>
+      <div id="chantier-ligne-msg" style="font-size:12px;margin-top:8px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button onclick="document.getElementById('modal-chantier-ligne').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer">Annuler</button>
+        <button onclick="validerChantierLigne(${ligneId}, ${cmdId}, this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:9px 14px;font-weight:800;cursor:pointer">Enregistrer</button></div></div>`;
+    document.body.appendChild(fond);
+    const l = (_commandesLignesCache[cmdId] || []).find(x => x.id === ligneId);
+    const actuel = l && (l['Chantier'] || [])[0]?.id;
+    if (actuel) document.getElementById('chantier-ligne-sel').value = String(actuel);
+  }
+  async function validerChantierLigne(ligneId, cmdId, btn) {
+    const v = document.getElementById('chantier-ligne-sel').value, msg = document.getElementById('chantier-ligne-msg');
+    btn.disabled = true;
+    try {
+      const cmd = (_commandesCache || []).find(x => x.id === cmdId);
+      const entete = cmd && (cmd['Chantier'] || [])[0]?.id;
+      const cible = v && Number(v) !== Number(entete) ? [Number(v)] : [];
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${ligneId}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Chantier': cible }) });
+      if (!r.ok) throw new Error(/field|champ/i.test(await r.text()) ? 'Le champ « Chantier » n\'existe pas encore dans la table « Commandes Fournisseurs Lignes » de Baserow.' : 'HTTP ' + r.status);
+      const maj = await r.json();
+      const l = (_commandesLignesCache[cmdId] || []).find(x => x.id === ligneId); if (l) l['Chantier'] = maj['Chantier'];
+      await majRepartitionCommande(cmdId);
+      document.getElementById('modal-chantier-ligne').remove();
+      try { chargerCommandesPage(); } catch (e) {}
+    } catch (e) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; btn.disabled = false; }
+  }
+  // Montant HT de la commande réparti par chantier (en-tête par défaut), pour la rentabilité
+  async function majRepartitionCommande(cmdId) {
+    const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
+    const lignes = (await rl.json()).results || [];
+    _commandesLignesCache[cmdId] = lignes;
+    const cmd = (_commandesCache || []).find(x => x.id === cmdId);
+    const entete = cmd && (cmd['Chantier'] || [])[0]?.id;
+    const rep = {};
+    lignes.forEach(l => { const c = (l['Chantier'] || [])[0]?.id || entete || 0; if (c) rep[c] = Math.round(((rep[c] || 0) + (Number(l['Montant HT']) || 0)) * 100) / 100; });
+    const valeur = lignes.some(l => (l['Chantier'] || []).length) ? JSON.stringify(rep) : '';
+    const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${cmdId}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Repartition chantiers': valeur }) });
+    if (!r.ok) throw new Error('Ligne enregistrée, mais la répartition n\'a pas pu être mise à jour : créer le champ texte « Repartition chantiers » dans la table « Commandes Fournisseurs » de Baserow.');
+    if (cmd) cmd['Repartition chantiers'] = valeur;
   }
   // ── V21 : DÉLAIS DE FABRICATION d'après le plan de charge (même calcul que l'onglet Charge) ──
   let _delaisOF = {}; // chantier_id → { fabDebut, fabFin, pose, joursRestants } | { aucun: true } | { chargement: true }
@@ -10673,6 +10755,13 @@
     const commandesTotalParChantier = {};
     const chantierIdsAvecCommandes = new Set();
     allCommandesSuivi.forEach(c => {
+      // V28 : commande répartie sur plusieurs chantiers (lignes imputées à un autre chantier)
+      let rep = null;
+      try { rep = c['Repartition chantiers'] ? JSON.parse(c['Repartition chantiers']) : null; } catch (e) { rep = null; }
+      if (rep && typeof rep === 'object' && Object.keys(rep).length) {
+        Object.entries(rep).forEach(([id, m]) => { const n = Number(id); if (!n) return; commandesTotalParChantier[n] = (commandesTotalParChantier[n] || 0) + (Number(m) || 0); chantierIdsAvecCommandes.add(n); });
+        return;
+      }
       const cId = (c['Chantier'] || [])[0]?.id;
       if (!cId) return;
       commandesTotalParChantier[cId] = (commandesTotalParChantier[cId] || 0) + (Number(c['Montant total HT']) || 0);
@@ -15921,7 +16010,7 @@
           </td>` : '';
         return `<tr${estManquante ? ' style="background:#fdf3e0"' : ''}>
           <td style="padding:3px 4px;font-size:10px;color:#999;border-bottom:1px dotted #eee;white-space:nowrap">${l['Reference fournisseur'] || ''}</td>
-          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${lienFicheArticleLigne(l)}${badgeEtat}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
+          <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee">${lienFicheArticleLigne(l)}${badgeEtat}${badgeChantierLigne(l)}${badgeStockLigne(l, statutCommande)}${(() => { const rv = _stockCharge ? qteRevenueLigne(l.id) : 0; return rv > 0 ? ` <span title="Surplus de ce chantier remis au stock atelier" style="display:inline-block;padding:1px 6px;border-radius:8px;background:#fde8c3;color:#7c5200;font-size:9px;font-weight:800;margin-left:4px;white-space:nowrap">↩️ ${fmtQte(rv)} revenu(s) en stock</span>` : ''; })()}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${qte}</td>
           <td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;white-space:nowrap">${uniteApresQte(l['Unite'])}</td>
           ${peutVoirPrix ? `<td style="padding:3px 4px;font-size:11px;color:#777;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${puLigne}</td><td style="padding:3px 4px;font-size:11px;color:#555;border-bottom:1px dotted #eee;text-align:right;white-space:nowrap">${montantLigne}</td>` : ''}
