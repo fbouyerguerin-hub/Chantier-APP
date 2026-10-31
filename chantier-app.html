@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V21';
+  const APP_VERSION = 'V26';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -1126,6 +1126,7 @@
     if (navCommandesClients) navCommandesClients.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none';
     { const nm = document.getElementById('nav-materiel'); if (nm) nm.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none'; } // V117
     { const nn = document.getElementById('nav-nomenclature'); if (nn) nn.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? 'flex' : 'none'; } // V13
+    { const bc = document.getElementById('btn-nouvelle-commande'); if (bc) bc.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // V22
     const navRepertoire = document.getElementById('nav-repertoire');
     if (navRepertoire) navRepertoire.style.display = 'flex'; // Visible pour tous (édition réservée Admin/Gestionnaire)
     { const bx = document.getElementById('btn-excel-relances'); if (bx) bx.style.display = (connectedDroit === 'Administrateur' || connectedDroit === 'Gestionnaire') ? '' : 'none'; } // V100
@@ -2861,6 +2862,450 @@
       document.getElementById('modal-gammes').remove();
       alert('✅ Gammes enregistrées. Elles s\'appliqueront aux prochains lancements en fabrication.');
     } catch (e) { alert('❌ ' + e.message); btn.disabled = false; }
+  }
+  // ── V22 : COMMANDES FOURNISSEURS CRÉÉES DANS L'APPLI (n° CA-AAAA-NNNN), bon de commande à en-tête, envoi par e-mail ──
+  // Coordonnées imprimées sur le bon : à compléter (téléphone, e-mail, SIRET, n° TVA)
+  const SOCIETE_BC = { nom: 'Guérin Bâtiments', adresse: '2 ZA Le Pont Girouard', ville: "85250 Saint-André-Goule-d'Oie", tel: '02 51 42 60 78', email: '', siret: '', tva: '' };
+  const TAUX_TVA_BC = 20;
+  let _nouvCmd = null, _nouvCmdChantiers = null, _nouvCmdMinuteur = null;
+  const eurBC = v => (Number(v) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+  async function ouvrirNouvelleCommande() {
+    if (!estProfilPrix()) { alert('Réservé aux profils Administrateur et Gestionnaire.'); return; }
+    _nouvCmd = { fournisseur: null, email: '', chantier_id: '', objet: '', date_livraison: '', lieu: 'Atelier', lignes: [{ code: '', description: '', unite: 'U', quantite: 1, pu: '' }] };
+    document.getElementById('modal-nouv-cmd')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-nouv-cmd';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:10px';
+    fond.innerHTML = '<div id="nc-boite" style="background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:92vh;overflow:auto;padding:16px"><div style="color:#999">⏳ Préparation…</div></div>';
+    document.body.appendChild(fond);
+    chargerCatalogueLocal().catch(() => {});
+    if (!_nouvCmdChantiers) {
+      try {
+        const r = await fetchListeComplete('https://api.baserow.io/api/database/rows/table/' + TABLE_CHANTIERS_ADMIN + '/?user_field_names=true&size=200', { headers: HEADERS });
+        _nouvCmdChantiers = ((await r.json()).results || []).filter(c => !/^\s*(termin|cl[oô]tur)/i.test(extraireValeurChamp(c['Statue'], '')))
+          .map(c => ({ id: c.id, nom: c['Nom du chantier'] || '' })).filter(c => c.nom).sort((a, b) => b.nom.localeCompare(a.nom, 'fr', { numeric: true }));
+      } catch (e) { _nouvCmdChantiers = []; }
+    }
+    renderNouvelleCommande();
+  }
+  function renderNouvelleCommande() {
+    const boite = document.getElementById('nc-boite');
+    if (!boite || !_nouvCmd) return;
+    const esc = echapperHtmlNote, C = _nouvCmd;
+    const champ = 'padding:7px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px;box-sizing:border-box';
+    const petit = 'border:1px solid #ddd;background:#fff;border-radius:6px;padding:5px 8px;font-size:12px;cursor:pointer';
+    boite.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:800;color:var(--gris)">🛒 Nouvelle commande fournisseur</div>
+        <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="${petit}">✕</button></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+        <div style="grid-column:1/-1;position:relative">
+          <div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Fournisseur *</div>
+          ${C.fournisseur
+            ? `<div style="display:flex;gap:8px;align-items:center;background:#f1f8ef;border-radius:8px;padding:8px"><b style="flex:1">${esc(C.fournisseur.societe)}</b>
+                <input id="nc-email" value="${esc(C.email)}" placeholder="e-mail de commande" oninput="_nouvCmd.email=this.value" style="${champ};flex:1">
+                <button onclick="_nouvCmd.fournisseur=null;renderNouvelleCommande()" style="${petit}">Changer</button></div>`
+            : `<input id="nc-fourn" placeholder="Rechercher dans le répertoire (2 lettres minimum)…" oninput="chercherFournisseurNC(this.value)" style="${champ};width:100%">
+               <div id="nc-fourn-res" style="font-size:12px"></div>`}
+        </div>
+        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Chantier</div>
+          <select onchange="_nouvCmd.chantier_id=this.value" style="${champ};width:100%"><option value="">— Stock atelier / sans chantier —</option>
+            ${(_nouvCmdChantiers || []).map(c => `<option value="${c.id}" ${String(c.id) === String(C.chantier_id) ? 'selected' : ''}>${esc(c.nom)}</option>`).join('')}</select></div>
+        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Objet / référence</div>
+          <input value="${esc(C.objet)}" oninput="_nouvCmd.objet=this.value" placeholder="ex. Boulonnerie portiques" style="${champ};width:100%"></div>
+        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Livraison souhaitée le</div>
+          <input type="date" value="${esc(C.date_livraison)}" onchange="_nouvCmd.date_livraison=this.value" style="${champ};width:100%"></div>
+        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Lieu de livraison</div>
+          <select onchange="_nouvCmd.lieu=this.value" style="${champ};width:100%">${['Atelier', 'Chantier'].map(x => `<option ${x === C.lieu ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      </div>
+      <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin:14px 0 6px">Lignes</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:620px">
+        <thead><tr style="color:#777;text-align:left"><th style="padding:4px">Code</th><th style="padding:4px">Désignation</th><th style="padding:4px;width:70px">Qté</th><th style="padding:4px;width:60px">Unité</th><th style="padding:4px;width:90px">PU HT €</th><th style="padding:4px;width:90px;text-align:right">Total HT</th><th></th></tr></thead>
+        <tbody>${C.lignes.map((l, i) => `<tr>
+          <td style="padding:3px"><input value="${esc(l.code)}" oninput="_nouvCmd.lignes[${i}].code=this.value" style="${champ};width:100%;font-family:monospace;font-size:12px"></td>
+          <td style="padding:3px"><input value="${esc(l.description)}" oninput="_nouvCmd.lignes[${i}].description=this.value" style="${champ};width:100%"></td>
+          <td style="padding:3px"><input type="number" min="0" step="any" value="${esc(l.quantite)}" oninput="_nouvCmd.lignes[${i}].quantite=this.value;majTotauxNC()" style="${champ};width:100%"></td>
+          <td style="padding:3px"><input value="${esc(l.unite)}" oninput="_nouvCmd.lignes[${i}].unite=this.value" style="${champ};width:100%"></td>
+          <td style="padding:3px"><input type="number" min="0" step="any" value="${esc(l.pu)}" oninput="_nouvCmd.lignes[${i}].pu=this.value;majTotauxNC()" style="${champ};width:100%"></td>
+          <td id="nc-tot-${i}" style="padding:3px;text-align:right;font-weight:700"></td>
+          <td style="padding:3px"><button onclick="_nouvCmd.lignes.splice(${i},1);renderNouvelleCommande()" style="${petit};color:#c0392b">✕</button></td></tr>`).join('')}</tbody></table></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+        <button onclick="_nouvCmd.lignes.push({code:'',description:'',unite:'U',quantite:1,pu:''});renderNouvelleCommande()" style="${petit}">＋ Ligne libre</button>
+        <input id="nc-cat" placeholder="🔍 Ajouter depuis le catalogue EBP (code, désignation, réf. fournisseur)…" oninput="chercherCatalogueNC(this.value)" style="${champ};flex:1;min-width:220px"></div>
+      <div id="nc-cat-res" style="font-size:12px"></div>
+      <div id="nc-totaux" style="text-align:right;margin-top:10px;font-size:13px"></div>
+      <div id="nc-msg" style="margin-top:8px;font-size:12px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eee;padding-top:12px;margin-top:10px">
+        <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Annuler</button>
+        <button id="nc-creer" onclick="creerCommandeNC(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">💾 Créer la commande</button></div>`;
+    majTotauxNC();
+  }
+  function majTotauxNC() {
+    if (!_nouvCmd) return;
+    let ht = 0;
+    _nouvCmd.lignes.forEach((l, i) => {
+      const t = (Number(String(l.quantite).replace(',', '.')) || 0) * (Number(String(l.pu).replace(',', '.')) || 0);
+      ht += t;
+      const el = document.getElementById('nc-tot-' + i); if (el) el.textContent = eurBC(t);
+    });
+    const tva = ht * TAUX_TVA_BC / 100, el = document.getElementById('nc-totaux');
+    if (el) el.innerHTML = `Total HT <b>${eurBC(ht)}</b> · TVA ${TAUX_TVA_BC} % ${eurBC(tva)} · <b style="font-size:15px">TTC ${eurBC(ht + tva)}</b>`;
+  }
+  function chercherFournisseurNC(q) {
+    clearTimeout(_nouvCmdMinuteur);
+    _nouvCmdMinuteur = setTimeout(async () => {
+      const zone = document.getElementById('nc-fourn-res');
+      if (!zone) return;
+      if (String(q).trim().length < 2) { zone.innerHTML = ''; return; }
+      zone.innerHTML = '<div style="color:#999;padding:4px">⏳…</div>';
+      try {
+        const d = await appelWorkerLecture('/achats/fournisseurs?q=' + encodeURIComponent(q.trim()));
+        window._ncFournisseurs = d.results || [];
+        zone.innerHTML = (d.results || []).length ? d.results.map((f, i) => `<div onclick="choisirFournisseurNC(${i})" style="cursor:pointer;padding:6px;border-bottom:1px solid #f0f0f0"><b>${echapperHtmlNote(f.societe)}</b> <span style="color:#888">${echapperHtmlNote([f.contact, f.email || 'pas d\'e-mail'].filter(Boolean).join(' · '))}</span></div>`).join('')
+          : '<div style="color:#999;padding:4px">Aucun fournisseur trouvé dans le répertoire.</div>';
+      } catch (e) { zone.innerHTML = `<div style="color:#c0392b;padding:4px">❌ ${echapperHtmlNote(e.message)}</div>`; }
+    }, 250);
+  }
+  function choisirFournisseurNC(i) {
+    const f = (window._ncFournisseurs || [])[i];
+    if (!f) return;
+    _nouvCmd.fournisseur = f; _nouvCmd.email = f.email || '';
+    renderNouvelleCommande();
+  }
+  function chercherCatalogueNC(q) {
+    const zone = document.getElementById('nc-cat-res');
+    if (!zone) return;
+    const mots = normCatLocal(q).split(' ').filter(Boolean);
+    if (!mots.length || !_catLocal) { zone.innerHTML = mots.length ? '<div style="color:#999;padding:4px">⏳ Catalogue en cours de chargement…</div>' : ''; return; }
+    const res = _catLocal.items.filter(x => mots.every(m => x._t.includes(m))).slice(0, 12);
+    window._ncCatRes = res;
+    zone.innerHTML = res.length ? res.map((x, i) => `<div onclick="ajouterArticleNC(${i})" style="cursor:pointer;padding:5px 6px;border-bottom:1px solid #f0f0f0"><span style="font-family:monospace;font-weight:700">${echapperHtmlNote(x.code)}</span> ${echapperHtmlNote(x.designation)} <span style="color:#888">${echapperHtmlNote([x.fournisseur, x.unite, x.prix ? eurBC(x.prix) : ''].filter(Boolean).join(' · '))}</span></div>`).join('')
+      : '<div style="color:#999;padding:4px">Aucun article.</div>';
+  }
+  function ajouterArticleNC(i) {
+    const x = (window._ncCatRes || [])[i];
+    if (!x) return;
+    const vide = _nouvCmd.lignes.findIndex(l => !l.code && !l.description);
+    const ligne = { code: x.code, description: x.designation, unite: x.unite || 'U', quantite: 1, pu: x.prix ?? '' };
+    if (vide >= 0) _nouvCmd.lignes[vide] = ligne; else _nouvCmd.lignes.push(ligne);
+    renderNouvelleCommande();
+  }
+  async function creerCommandeNC(btn) {
+    const C = _nouvCmd, msg = document.getElementById('nc-msg');
+    if (!C.fournisseur) { msg.innerHTML = '<span style="color:#c0392b">Choisir un fournisseur.</span>'; return; }
+    const chantier = (_nouvCmdChantiers || []).find(c => String(c.id) === String(C.chantier_id));
+    btn.disabled = true; msg.textContent = '⏳ Création…';
+    try {
+      const r = await appelWorkerPost('/achats/commandes', {
+        fournisseur: C.fournisseur.societe, chantier_id: C.chantier_id || null, objet: C.objet, date_livraison: C.date_livraison,
+        lieu: C.lieu === 'Chantier' && chantier ? 'Chantier ' + chantier.nom : 'Atelier', taux_tva: TAUX_TVA_BC, lignes: C.lignes });
+      _bcEmails[r.id] = C.email;
+      document.getElementById('nc-boite').innerHTML = `<div style="text-align:center;padding:20px">
+        <div style="font-size:40px">✅</div><div style="font-size:17px;font-weight:800;color:var(--gris);margin:6px 0">Commande ${echapperHtmlNote(r.numero)} créée</div>
+        <div style="color:#777;font-size:13px">${echapperHtmlNote(C.fournisseur.societe)} · ${eurBC(r.total_ht)} HT</div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+          <button onclick="imprimerBonCommande(${r.id})" style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">🖨️ Bon de commande</button>
+          <button onclick="ouvrirFichePliage(${r.id})" style="background:#fff;color:#5e35b1;border:1.5px solid #d1c4e9;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">📐 Fiche de pliage</button>
+          <button onclick="envoyerCommandeMail(${r.id})" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">✉️ Envoyer au fournisseur</button>
+          <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Fermer</button></div>
+        <div style="font-size:11px;color:#999;margin-top:14px">Si elle est aussi saisie dans EBP, reporter « ${echapperHtmlNote(r.numero)} » dans la référence EBP : la synchro la reliera à cette fiche.</div></div>`;
+      try { _commandesCache = []; chargerCommandesPage(); } catch (e) {}
+    } catch (e) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; btn.disabled = false; }
+  }
+  // ── Bon de commande (impression / PDF) ──
+  let _bcEmails = {};
+  async function donneesBonCommande(id) {
+    let cmd = (_commandesCache || []).find(x => x.id === id);
+    if (!cmd) { const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS }); if (!r.ok) throw new Error('Commande introuvable'); cmd = await r.json(); }
+    const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`, { headers: HEADERS });
+    const lignes = ((await rl.json()).results || []).sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
+    let four = null;
+    try { const d = await appelWorkerLecture('/achats/fournisseurs?q=' + encodeURIComponent(String(cmd['Fournisseur'] || '').slice(0, 40))); four = (d.results || []).find(f => f.societe.toUpperCase() === String(cmd['Fournisseur'] || '').toUpperCase()) || (d.results || [])[0] || null; } catch (e) {}
+    return { cmd, lignes, four };
+  }
+  function htmlBonCommande({ cmd, lignes, four }) {
+    const esc = echapperHtmlNote, S = SOCIETE_BC;
+    const ht = lignes.reduce((t, l) => t + (Number(l['Montant HT']) || 0), 0), tva = lignes.reduce((t, l) => t + (Number(l['TVA']) || 0), 0);
+    const chantier = (cmd['Chantier'] || [])[0]?.value || '';
+    const dateFr = s => s ? String(s).slice(0, 10).split('-').reverse().join('/') : '';
+    const lieu = cmd['Lieu de réception'] || (chantier ? '' : 'Atelier');
+    return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Commande ${esc(cmd['Numero commande'] || '')}</title><style>
+      @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;font-size:11.5px}
+      .ent{display:flex;align-items:flex-start;gap:16px;border-bottom:3px solid #4a7c3f;padding-bottom:10px}.ent img{height:62px}.ent .t{flex:1}
+      .ent h1{margin:0;font-size:22px;color:#4a7c3f;letter-spacing:.5px}.ent .num{text-align:right}.ent .num b{display:block;font-size:19px;color:#5e35b1}
+      .soc{font-size:10.5px;color:#555;margin-top:4px;line-height:1.4}
+      .blocs{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.bloc{border:1px solid #ddd;border-radius:6px;padding:8px 10px;min-height:22mm}
+      .bt{font-weight:800;color:#4a7c3f;text-transform:uppercase;font-size:10px;margin-bottom:4px;letter-spacing:.4px}.four{font-size:13px;font-weight:800}
+      table{width:100%;border-collapse:collapse}th{background:#4a7c3f;color:#fff;text-align:left;padding:6px;font-size:10.5px}td{border-bottom:1px solid #e5e5e5;padding:6px;vertical-align:top}
+      .nb{text-align:right;white-space:nowrap}.code{font-family:monospace;font-size:10.5px;color:#555}tr{page-break-inside:avoid}
+      .tot{margin-left:auto;width:62mm;margin-top:10px}.tot div{display:flex;justify-content:space-between;padding:3px 0}.tot .ttc{border-top:2px solid #4a7c3f;font-weight:800;font-size:13px;margin-top:3px;padding-top:5px}
+      .mentions{margin-top:14px;font-size:10.5px;color:#444;border:1px solid #eee;border-radius:6px;padding:8px 10px;line-height:1.5}
+      .sign{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.sign div{border:1px solid #ccc;border-radius:6px;height:24mm;padding:6px;font-size:10px;color:#777}</style></head><body>
+      <div class="ent"><img src="${LOGO_URL}" alt="${esc(S.nom)}"><div class="t"><h1>BON DE COMMANDE</h1>
+        <div class="soc">${esc(S.nom)} — ${esc(S.adresse)} — ${esc(S.ville)}${S.tel ? '<br>Tél. ' + esc(S.tel) : ''}${S.email ? ' — ' + esc(S.email) : ''}${S.siret ? '<br>SIRET ' + esc(S.siret) : ''}${S.tva ? ' — TVA ' + esc(S.tva) : ''}</div></div>
+        <div class="num"><b>N° ${esc(cmd['Numero commande'] || '')}</b>du ${dateFr(cmd['Date commande'])}</div></div>
+      <div class="blocs">
+        <div class="bloc"><div class="bt">Fournisseur</div><div class="four">${esc(cmd['Fournisseur'] || '')}</div>
+          ${four ? `<div>${esc(four.contact || '')}</div><div style="white-space:pre-line">${esc(four.adresse || '')}</div><div>${esc([four.email, four.telephone].filter(Boolean).join(' — '))}</div>` : ''}</div>
+        <div class="bloc"><div class="bt">Livraison</div>
+          <div><b>${esc(lieu || ('Chantier ' + chantier))}</b></div>${lieu === 'Atelier' || !lieu ? `<div>${esc(S.adresse)} — ${esc(S.ville)}</div>` : ''}
+          ${cmd['Date reception prevue'] ? `<div style="margin-top:4px">Livraison souhaitée le <b>${dateFr(cmd['Date reception prevue'])}</b></div>` : ''}
+          ${chantier ? `<div style="margin-top:4px">Affaire : <b>${esc(chantier)}</b></div>` : ''}
+          ${cmd['Designation'] && cmd['Designation'] !== cmd['Numero commande'] ? `<div>Objet : ${esc(cmd['Designation'])}</div>` : ''}</div></div>
+      <table><thead><tr><th style="width:24mm">Référence</th><th>Désignation</th><th class="nb" style="width:16mm">Qté</th><th style="width:13mm">Unité</th><th class="nb" style="width:22mm">PU HT</th><th class="nb" style="width:25mm">Montant HT</th></tr></thead>
+      <tbody>${lignes.map(l => `<tr><td class="code">${esc(l['Reference fournisseur'] || '')}</td><td>${esc(l['Description'] || '')}</td>
+        <td class="nb">${(Number(l['Quantite']) || 0).toLocaleString('fr-FR', { maximumFractionDigits: 3 })}</td><td>${esc(l['Unite'] || '')}</td>
+        <td class="nb">${Number(l['Debourse HT']) ? eurBC(l['Debourse HT']) : ''}</td><td class="nb">${Number(l['Montant HT']) ? eurBC(l['Montant HT']) : ''}</td></tr>`).join('')}</tbody></table>
+      <div class="tot"><div><span>Total HT</span><b>${eurBC(ht)}</b></div><div><span>TVA</span><span>${eurBC(tva)}</span></div><div class="ttc"><span>Total TTC</span><span>${eurBC(ht + tva)}</span></div></div>
+      <div class="mentions">Merci de nous retourner un <b>accusé de réception</b> confirmant prix et délai.<br>
+        Notre n° de commande <b>${esc(cmd['Numero commande'] || '')}</b>${chantier ? ' et la référence de l\'affaire' : ''} doivent figurer sur le bon de livraison et sur la facture.</div>
+      <div class="sign"><div>Commande établie par : <b style="color:#222">${esc(connectedCollab || '')}</b></div><div>Cachet et signature</div></div>
+      <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`;
+  }
+  async function imprimerBonCommande(id) {
+    const fen = window.open('', '_blank');
+    if (!fen) { alert('Autorisez les fenêtres surgissantes pour imprimer.'); return; }
+    fen.document.write('<p style="font-family:sans-serif">⏳ Préparation du bon de commande…</p>');
+    try { const d = await donneesBonCommande(id); if (d.four && d.four.email && !_bcEmails[id]) _bcEmails[id] = d.four.email; fen.document.open(); fen.document.write(htmlBonCommande(d)); fen.document.close(); }
+    catch (e) { fen.document.body.innerHTML = '<p style="font-family:sans-serif;color:#c0392b">❌ ' + echapperHtmlNote(e.message) + '</p>'; }
+  }
+  // ── Envoi depuis la messagerie de l'utilisateur (son adresse), AVEC pièces jointes ──
+  // Ordinateur : brouillon .eml (s'ouvre dans Outlook comme un nouveau message prêt à partir, depuis votre adresse).
+  // Téléphone : partage vers l'appli de messagerie (bon PDF + documents joints). Repli : message simple sans pièce jointe.
+  let _envoiBC = null;
+  async function envoyerCommandeMail(id) {
+    document.getElementById('modal-envoi-bc')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-envoi-bc';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10060;display:flex;align-items:center;justify-content:center;padding:12px';
+    fond.innerHTML = '<div id="envoi-bc-boite" style="background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:90vh;overflow:auto;padding:16px"><div style="color:#999">⏳ Préparation…</div></div>';
+    document.body.appendChild(fond);
+    try {
+      const d = await donneesBonCommande(id);
+      const docs = (d.cmd['Documents'] || []).filter(f => f && f.url && !/\.json$/i.test(f.visible_name || '')).map(f => ({ nom: f.visible_name || f.name || 'document', url: f.url, coche: true }));
+      _envoiBC = { id, d, email: _bcEmails[id] || (d.four && d.four.email) || '', docs };
+      renderEnvoiBC();
+    } catch (e) { document.getElementById('envoi-bc-boite').innerHTML = `<div style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</div>`; }
+  }
+  function renderEnvoiBC() {
+    const b = document.getElementById('envoi-bc-boite'), E = _envoiBC, esc = echapperHtmlNote;
+    if (!b || !E) return;
+    const num = E.d.cmd['Numero commande'];
+    const btn = (fn, lib, fondC, coul) => `<button onclick="${fn}" style="width:100%;margin-top:8px;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer;background:${fondC};color:${coul}">${lib}</button>`;
+    const partageOk = !!(navigator.canShare && navigator.share);
+    b.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:800;color:var(--gris)">✉️ Envoyer la commande ${esc(num)}</div>
+        <button onclick="document.getElementById('modal-envoi-bc').remove()" style="border:1px solid #ddd;background:#fff;border-radius:6px;padding:5px 8px;cursor:pointer">✕</button></div>
+      <div style="font-size:11px;font-weight:700;color:#777;margin:12px 0 3px">Destinataire</div>
+      <input value="${esc(E.email)}" oninput="_envoiBC.email=this.value" placeholder="adresse e-mail du fournisseur" style="width:100%;box-sizing:border-box;padding:8px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px">
+      <div style="font-size:11px;font-weight:700;color:#777;margin:12px 0 3px">Pièces jointes</div>
+      <label style="display:block;font-size:13px;padding:3px 0"><input type="checkbox" checked disabled> 📄 Bon de commande ${esc(num)}.pdf</label>
+      ${E.docs.map((f, i) => `<label style="display:block;font-size:13px;padding:3px 0"><input type="checkbox" ${f.coche ? 'checked' : ''} onchange="_envoiBC.docs[${i}].coche=this.checked"> 📎 ${esc(f.nom)}</label>`).join('') || '<div style="font-size:11px;color:#999">Aucun document attaché à la commande.</div>'}
+      <div id="envoi-bc-msg" style="font-size:12px;margin-top:8px"></div>
+      ${btn('envoyerBCEml()', '💻 Ouvrir dans ma messagerie (ordinateur)', '#5e35b1', '#fff')}
+      ${partageOk ? btn('envoyerBCPartage()', '📱 Partager vers ma messagerie (téléphone)', 'var(--vert)', '#fff') : ''}
+      ${btn('envoyerBCSimple()', '✉️ Message simple, sans pièce jointe', 'var(--beige-clair)', 'var(--gris)')}
+      <div style="font-size:11px;color:#999;margin-top:10px;line-height:1.4">Le message part de <b>votre adresse</b>, comme un e-mail écrit normalement. Sur ordinateur, le fichier téléchargé s'ouvre dans Outlook comme un nouveau message prêt à envoyer, pièces jointes comprises.</div>`;
+  }
+  function chargerHtml2pdf() {
+    if (window.html2pdf) return Promise.resolve();
+    return new Promise((ok, ko) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js'; s.onload = () => ok(); s.onerror = () => ko(new Error('Module PDF indisponible (réseau)')); document.head.appendChild(s); });
+  }
+  // Bon de commande en PDF (rendu de la même page que l'impression)
+  async function pdfBonCommande(d) {
+    await chargerHtml2pdf();
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0';
+    document.body.appendChild(ifr);
+    try {
+      ifr.contentDocument.open(); ifr.contentDocument.write(htmlBonCommande(d).replace('window.print();', '')); ifr.contentDocument.close();
+      await new Promise(r => setTimeout(r, 600)); // logo et mise en page
+      return await window.html2pdf().set({ margin: 0, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } })
+        .from(ifr.contentDocument.body).outputPdf('blob');
+    } finally { ifr.remove(); }
+  }
+  async function piecesJointesBC() {
+    const E = _envoiBC, num = E.d.cmd['Numero commande'];
+    const res = [{ nom: `Bon de commande ${num}.pdf`, type: 'application/pdf', blob: await pdfBonCommande(E.d) }];
+    for (const f of E.docs.filter(x => x.coche)) {
+      const r = await _fetchNatifBrut(GB_WORKER + '/achats/fichier?url=' + encodeURIComponent(f.url), { headers: headersWorker() });
+      if (!r.ok) throw new Error('Document « ' + f.nom + ' » illisible');
+      const blob = await r.blob();
+      res.push({ nom: f.nom, type: blob.type || 'application/octet-stream', blob });
+    }
+    return res;
+  }
+  function texteMailBC() {
+    const cmd = _envoiBC.d.cmd, chantier = (cmd['Chantier'] || [])[0]?.value || '';
+    const sujet = `Commande ${cmd['Numero commande']} — ${SOCIETE_BC.nom}${chantier ? ' — ' + chantier : ''}`;
+    const corps = `Bonjour,\n\nVeuillez trouver ci-joint notre bon de commande n° ${cmd['Numero commande']}${chantier ? ' (affaire ' + chantier + ')' : ''}.\n${cmd['Date reception prevue'] ? '\nLivraison souhaitée le ' + String(cmd['Date reception prevue']).slice(0, 10).split('-').reverse().join('/') + '.\n' : ''}\nMerci de nous retourner un accusé de réception confirmant prix et délai, et de rappeler ce numéro sur le bon de livraison et la facture.\n\nCordialement,\n${connectedCollab || ''}\n${SOCIETE_BC.nom}`;
+    return { sujet, corps };
+  }
+  const b64Blob = blob => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = ko; r.readAsDataURL(blob); });
+  const encMot = t => '=?UTF-8?B?' + btoa(unescape(encodeURIComponent(t))) + '?=';
+  async function envoyerBCEml() {
+    const msg = document.getElementById('envoi-bc-msg');
+    msg.innerHTML = '⏳ Préparation du message et des pièces jointes…';
+    try {
+      const pj = await piecesJointesBC(), { sujet, corps } = texteMailBC(), num = _envoiBC.d.cmd['Numero commande'];
+      const frontiere = '----=_GuerinBC_' + Date.now();
+      const lignes76 = s => s.replace(/.{1,76}/g, '$&\r\n');
+      let eml = `X-Unsent: 1\r\nTo: ${_envoiBC.email.trim()}\r\nSubject: ${encMot(sujet)}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${frontiere}"\r\n\r\n`
+        + `--${frontiere}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${lignes76(btoa(unescape(encodeURIComponent(corps))))}`;
+      for (const f of pj) {
+        eml += `--${frontiere}\r\nContent-Type: ${f.type}; name="${encMot(f.nom)}"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="${encMot(f.nom)}"\r\n\r\n${lignes76(await b64Blob(f.blob))}`;
+      }
+      eml += `--${frontiere}--\r\n`;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([eml], { type: 'message/rfc822' }));
+      a.download = `Commande ${num}.eml`;
+      document.body.appendChild(a); a.click(); a.remove();
+      msg.innerHTML = '✅ Message téléchargé : ouvrez « Commande ' + echapperHtmlNote(num) + '.eml » (barre de téléchargements) — il s\'ouvre prêt à envoyer.';
+      proposerMarquageEnvoyeBC();
+    } catch (e) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; }
+  }
+  async function envoyerBCPartage() {
+    const msg = document.getElementById('envoi-bc-msg');
+    msg.innerHTML = '⏳ Préparation des pièces jointes…';
+    try {
+      const pj = await piecesJointesBC(), { sujet, corps } = texteMailBC();
+      const fichiers = pj.map(f => new File([f.blob], f.nom, { type: f.type }));
+      if (!navigator.canShare({ files: fichiers })) throw new Error('Ce téléphone ne permet pas de partager ces fichiers');
+      try { await navigator.clipboard.writeText(_envoiBC.email.trim()); } catch (e) {}
+      msg.innerHTML = '📋 Adresse du fournisseur copiée : collez-la dans « À » de votre messagerie.';
+      await navigator.share({ files: fichiers, title: sujet, text: corps });
+      proposerMarquageEnvoyeBC();
+    } catch (e) { if (e && e.name === 'AbortError') return; msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; }
+  }
+  function envoyerBCSimple() {
+    const { sujet, corps } = texteMailBC();
+    window.location.href = 'mailto:' + encodeURIComponent(_envoiBC.email.trim()) + '?subject=' + encodeURIComponent(sujet) + '&body=' + encodeURIComponent(corps);
+    proposerMarquageEnvoyeBC();
+  }
+  function proposerMarquageEnvoyeBC() {
+    const id = _envoiBC.id;
+    setTimeout(async () => {
+      if (!confirm('Une fois le message envoyé depuis votre messagerie :\n\nmarquer la commande comme envoyée ?')) return;
+      try {
+        const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Envoye par mail': true }) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const c = (_commandesCache || []).find(x => x.id === id); if (c) c['Envoye par mail'] = true;
+        document.getElementById('modal-envoi-bc')?.remove();
+        try { chargerCommandesPage(); } catch (e) {}
+      } catch (e) { alert('❌ Marquage impossible : ' + e.message); }
+    }, 1500);
+  }
+  // ── V25 : FICHE DE PLIAGE jointe à une commande (fiche-pliage.html intégrée) ──
+  // La fiche est enregistrée dans les Documents de la commande en PDF (envoyé au fournisseur avec le bon)
+  // et en .json (pour la rouvrir et la modifier). Une nouvelle version remplace la précédente.
+  let _pliage = null;
+  const RE_FICHE_PLIAGE = /^Fiche pliage .*\.(pdf|json)$/i;
+  async function ouvrirFichePliage(id) {
+    if (!estProfilPrix()) { alert('Réservé aux profils Administrateur et Gestionnaire.'); return; }
+    document.getElementById('modal-pliage')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-pliage';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10070;display:flex;flex-direction:column;padding:8px';
+    fond.innerHTML = `<div style="display:flex;align-items:center;gap:8px;background:#fff;border-radius:10px 10px 0 0;padding:8px 12px">
+        <b style="flex:1;color:var(--gris)">📐 Fiche de pliage — <span id="pliage-titre">…</span></b><span id="pliage-msg" style="font-size:12px"></span>
+        <button onclick="fermerFichePliage()" style="border:1px solid #ddd;background:#fff;border-radius:6px;padding:5px 10px;cursor:pointer">✕ Fermer</button></div>
+      <iframe id="pliage-cadre" style="flex:1;width:100%;border:0;background:#f4f4f4;border-radius:0 0 10px 10px"></iframe>`;
+    document.body.appendChild(fond);
+    try {
+      let cmd = (_commandesCache || []).find(x => x.id === id);
+      if (!cmd) { const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS }); if (!r.ok) throw new Error('Commande introuvable'); cmd = await r.json(); }
+      const docs = cmd['Documents'] || [];
+      let etat = null;
+      const json = docs.find(f => /^Fiche pliage .*\.json$/i.test(f.visible_name || ''));
+      if (json) {
+        const r = await _fetchNatifBrut(GB_WORKER + '/achats/fichier?url=' + encodeURIComponent(json.url), { headers: headersWorker() });
+        if (r.ok) { try { etat = await r.json(); } catch (e) {} }
+      }
+      _pliage = { id, cmd, etat };
+      document.getElementById('pliage-titre').textContent = (cmd['Numero commande'] || '') + ' · ' + (cmd['Fournisseur'] || '') + (etat ? ' (fiche existante)' : '');
+      window.addEventListener('message', recevoirMessagePliage);
+      document.getElementById('pliage-cadre').src = 'fiche-pliage.html?integre=1&t=' + Date.now();
+    } catch (e) { document.getElementById('pliage-msg').innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; }
+  }
+  function fermerFichePliage() {
+    window.removeEventListener('message', recevoirMessagePliage);
+    document.getElementById('modal-pliage')?.remove();
+    _pliage = null;
+  }
+  const FORMES_PLIAGE = { cheneau: 'Chéneau', faitage: 'Faîtage', rive: 'Rive', casquette: 'Casquette', portail: 'Portail applique', rejet: "Rejet d'eau", capot: 'Capot portail',
+    pignon: 'Bas pignon', plat: 'Plat', L: 'Cornière (L)', U: 'U', Z: 'Z', omega: 'Oméga', retour: 'L à retour', V: 'V', custom: 'Forme spéciale' };
+  async function lignesPliageCommande(cmdId, etat) {
+    const nombre = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return isFinite(n) ? n : 0; };
+    const pieces = (etat.pieces || []).filter(p => !p.blank && (p.segs || []).length);
+    const items = pieces.map((p, i) => {
+      const dev = (p.segs || []).reduce((t, g) => t + nombre(g.len), 0);
+      const plis = Math.max(0, (p.segs || []).length - 1);
+      const repere = String(p.rep || '').trim() || 'P' + (i + 1);
+      const desc = ['Pliage ' + repere, FORMES_PLIAGE[p.tpl] || 'Forme spéciale',
+        [p.mat, p.ep ? 'ép. ' + p.ep : ''].filter(Boolean).join(' '), p.ral && p.mat !== 'Galva' ? 'RAL ' + p.ral : '',
+        dev ? 'dév. ' + Math.round(dev) + ' mm' : '', nombre(p.long) ? 'L ' + Math.round(nombre(p.long)) + ' mm' : '', plis ? plis + ' pli' + (plis > 1 ? 's' : '') : ''
+      ].filter(Boolean).join(' – ');
+      return { 'Reference fournisseur': 'PLIAGE-' + repere.replace(/\s+/g, '').slice(0, 40), 'Description': desc + ' (selon fiche de pliage)', 'Unite': 'U', 'Quantite': nombre(p.qte) || 1, 'Debourse HT': 0, 'Montant HT': 0, 'TVA': 0 };
+    });
+    const r0 = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${cmdId}`, { headers: HEADERS });
+    const existantes = (await r0.json()).results || [];
+    for (const l of existantes.filter(l => /^PLIAGE-/i.test(String(l['Reference fournisseur'] || '')))) {
+      const rd = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${l.id}/`, { method: 'DELETE', headers: HEADERS });
+      if (!rd.ok && rd.status !== 404) throw new Error('Remplacement des lignes de pliage : HTTP ' + rd.status);
+    }
+    const ordre0 = existantes.filter(l => !/^PLIAGE-/i.test(String(l['Reference fournisseur'] || ''))).reduce((m, l) => Math.max(m, Number(l['Ordre']) || 0), 0);
+    if (items.length) {
+      const rb = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/batch/?user_field_names=true`,
+        { method: 'POST', headers: HEADERS, body: JSON.stringify({ items: items.map((x, i) => ({ ...x, 'Commande': [cmdId], 'Ordre': ordre0 + i + 1 })) }) });
+      if (!rb.ok) throw new Error('Création des lignes de pliage : HTTP ' + rb.status);
+    }
+    try { delete _commandesLignesCache[cmdId]; } catch (e) {}
+    return items.length;
+  }
+  async function recevoirMessagePliage(e) {
+    const cadre = document.getElementById('pliage-cadre');
+    if (!cadre || e.source !== cadre.contentWindow || !_pliage) return;
+    const m = e.data || {}, cmd = _pliage.cmd;
+    if (m.type === 'gb-pliage-pret') {
+      cadre.contentWindow.postMessage({ type: 'gb-pliage-init', state: _pliage.etat, h: {
+        num: cmd['Numero commande'] || '', ref: (cmd['Chantier'] || [])[0]?.value || '', emetteur: connectedCollab || '',
+        type: 'commande', liv: true, livDate: String(cmd['Date reception prevue'] || '').slice(0, 10) } }, '*');
+      return;
+    }
+    if (m.type !== 'gb-pliage-joindre') return;
+    const msg = document.getElementById('pliage-msg');
+    msg.innerHTML = '⏳ Création du PDF et enregistrement dans la commande…';
+    try {
+      // PDF de la fiche : mise en page d'impression appliquée le temps du rendu
+      await chargerHtml2pdf();
+      const doc = cadre.contentDocument;
+      doc.documentElement.classList.add('pdf');
+      let pdf;
+      try {
+        await new Promise(r => setTimeout(r, 300));
+        pdf = await window.html2pdf().set({ margin: 6, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }, pagebreak: { mode: ['css', 'avoid-all'] } })
+          .from(doc.getElementById('sheet')).outputPdf('blob');
+      } finally { doc.documentElement.classList.remove('pdf'); }
+      const num = String(cmd['Numero commande'] || 'commande').replace(/[^\w-]+/g, '_');
+      const envoyer = async (blob, nom) => {
+        const fd = new FormData(); fd.append('file', new File([blob], nom, { type: blob.type }));
+        const r = await fetch('https://api.baserow.io/api/user-files/upload-file/', { method: 'POST', headers: { 'Authorization': 'Token ' + BASEROW_TOKEN }, body: fd });
+        if (!r.ok) throw new Error('Envoi du fichier « ' + nom + ' » refusé');
+        return { name: (await r.json()).name };
+      };
+      const fPdf = await envoyer(pdf, `Fiche pliage ${num}.pdf`);
+      const fJson = await envoyer(new Blob([JSON.stringify(m.state, null, 1)], { type: 'application/json' }), `Fiche pliage ${num}.json`);
+      // Documents de la commande : la fiche précédente est remplacée, les autres documents conservés
+      const garder = (cmd['Documents'] || []).filter(f => !RE_FICHE_PLIAGE.test(f.visible_name || '')).map(f => ({ name: f.name }));
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${_pliage.id}/?user_field_names=true`,
+        { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Documents': [...garder, fPdf, fJson] }) });
+      if (!r.ok) throw new Error('Mise à jour de la commande : HTTP ' + r.status);
+      const maj = await r.json();
+      const c = (_commandesCache || []).find(x => x.id === _pliage.id); if (c) c['Documents'] = maj['Documents'];
+      _pliage.cmd['Documents'] = maj['Documents']; _pliage.etat = m.state;
+      // V26 : une ligne d'article par pièce pliée (les lignes « PLIAGE » précédentes sont remplacées)
+      const nbLignes = await lignesPliageCommande(_pliage.id, m.state);
+      msg.innerHTML = `<span style="color:var(--vert);font-weight:700">✅ Fiche jointe (PDF + modifiable) · ${nbLignes} ligne(s) de pliage dans la commande</span>`;
+      try { chargerCommandesPage(); } catch (e) {}
+    } catch (err) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(err.message)}</span>`; }
   }
   // ── V21 : DÉLAIS DE FABRICATION d'après le plan de charge (même calcul que l'onglet Charge) ──
   let _delaisOF = {}; // chantier_id → { fabDebut, fabFin, pose, joursRestants } | { aucun: true } | { chargement: true }
@@ -20879,18 +21324,10 @@
       _commandesClientsTotalBase = rows.length;
       _commandesClientsCache = rows.sort((a, b) => (b['Date commande'] || '').localeCompare(a['Date commande'] || ''));
 
+      // V23 : les lignes (≈ 14 000, plusieurs Mo) ne sont plus toutes téléchargées à l'ouverture de la page :
+      // celles d'une commande sont lues à l'ouverture de son détail (requête ciblée), puis gardées en mémoire.
       _commandesClientsLignesCache = {};
-      if (TABLE_COMMANDES_CLIENTS_LIGNES && TABLE_COMMANDES_CLIENTS_LIGNES !== 'A_COMPLETER') {
-        const idsCommandes = _commandesClientsCache.map(r => r.id);
-        const urlLignes = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS_LIGNES}/?user_field_names=true&size=200`;
-        const toutesLignes = await fetchToutesLesPages(urlLignes);
-        toutesLignes.forEach(l => {
-          const cid = (l['Commande'] || [])[0]?.id;
-          if (!cid || !idsCommandes.includes(cid)) return;
-          if (!_commandesClientsLignesCache[cid]) _commandesClientsLignesCache[cid] = [];
-          _commandesClientsLignesCache[cid].push(l);
-        });
-      }
+      for (const id of _commandesClientsDetailOuvert) chargerLignesCommandeClient(id);
       renderCommandesClientsListe();
       rafraichirTerminesEbpSiBesoin().then(ok => { if (ok) renderCommandesClientsListe(); });
       // V126 : catalogue (repérage des ouvrages EBP) puis réaffichage
@@ -21038,7 +21475,18 @@
 
   function toggleDetailCommandeClient(id) {
     if (_commandesClientsDetailOuvert.has(id)) _commandesClientsDetailOuvert.delete(id);
-    else _commandesClientsDetailOuvert.add(id);
+    else { _commandesClientsDetailOuvert.add(id); chargerLignesCommandeClient(id); }
+    renderCommandesClientsListe();
+  }
+  // V23 : lignes d'une seule commande client, à la demande
+  const _cmdCliLignesEnCours = new Set();
+  async function chargerLignesCommandeClient(id) {
+    if (_commandesClientsLignesCache[id] || _cmdCliLignesEnCours.has(id)) return;
+    _cmdCliLignesEnCours.add(id);
+    try {
+      _commandesClientsLignesCache[id] = await fetchToutesLesPages(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_CLIENTS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`);
+    } catch (e) { _commandesClientsLignesCache[id] = []; }
+    finally { _cmdCliLignesEnCours.delete(id); }
     renderCommandesClientsListe();
   }
 
@@ -21229,7 +21677,8 @@
         <div onclick="toggleDetailCommandeClient(${r.id})" style="cursor:pointer;font-size:11px;color:var(--vert);font-weight:700;margin-top:8px;display:flex;align-items:center;gap:4px">
           <span>${ouvert ? '▾' : '▸'} Détail${nbArt ? ` (${nbArt} article${nbArt > 1 ? 's' : ''})` : ''}</span>
         </div>
-        ${ouvert ? renderLignesCommandeClient(lignes, { montantHT: (r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '') ? Number(r['Montant HT']) : undefined }) : ''}
+        ${ouvert && !_commandesClientsLignesCache[r.id] ? '<div style="font-size:11px;color:#999;padding:6px 0">⏳ Lecture des lignes…</div>' : ''}
+        ${ouvert && _commandesClientsLignesCache[r.id] ? renderLignesCommandeClient(lignes, { montantHT: (r['Montant HT'] !== undefined && r['Montant HT'] !== null && r['Montant HT'] !== '') ? Number(r['Montant HT']) : undefined }) : ''}
       </div>`;
     }).join('') : '<div style="color:#aaa;font-size:12px;text-align:center;padding:10px">Aucune commande client.</div>';
   }
@@ -21554,6 +22003,11 @@
         <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
+      ${/^CA-\d{4}-/i.test(String(r['Numero commande'] || '')) ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0">
+        <span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800">🆕 Commande appli</span>
+        ${estProfilPrix() ? `<button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
+          <button onclick="event.stopPropagation();ouvrirFichePliage(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">📐 Pliage${(r['Documents'] || []).some(f => /^Fiche pliage .*\.pdf$/i.test(f.visible_name || '')) ? ' ✓' : ''}</button>
+          <button onclick="event.stopPropagation();envoyerCommandeMail(${r.id})" style="border:none;background:var(--vert);color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✉️ Envoyer</button>` : ''}</div>` : ''}
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
       ${retardAR ? `<div style="font-size:11px;color:#c0392b;font-weight:700;margin-bottom:2px"><span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ AR en attente depuis ${retardAR} j</span>commandé le ${dateLabel}</div>` : ''}
       ${(dateReceptionPrevue && statut !== 'En attente AR' && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:${retard ? '#c0392b' : '#8a5fc2'};${retard ? 'font-weight:700;' : ''}margin-bottom:2px">${retard ? `<span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ En retard de ${retard} j</span>` : ''}📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
@@ -29593,6 +30047,7 @@
       <button onclick="synchroniserToutEbp()" id="btn-sync-ebp" title="Synchroniser tout depuis EBP (commandes, articles, ouvrages, clients, répertoire)" style="background:#e8f0e7;border:none;border-radius:8px;padding:7px 10px;font-size:13px;cursor:pointer;color:var(--vert);display:flex;align-items:center;gap:5px;font-weight:700">
         <span id="sync-icon">🔄</span><span id="sync-label">Synchroniser</span>
       </button>
+      <button id="btn-nouvelle-commande" onclick="ouvrirNouvelleCommande()" title="Créer une commande fournisseur dans l'appli" style="display:none;background:#5e35b1;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;color:#fff;white-space:nowrap">➕ Commande</button>
       <button onclick="ouvrirReemploi()" title="Matériel revenu des chantiers, disponible avant de commander" style="background:#fde8c3;border:none;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:800;cursor:pointer;color:#7c5200;white-space:nowrap">↩️ Réemploi</button>
       <button onclick="ouvrirScanInfo()" title="Scanner une étiquette (commande ou article)" style="background:var(--vert);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:#fff">📷</button>
       <button onclick="ouvrirImpressionCommandes()" title="Imprimer" style="background:var(--vert-clair);border:none;border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;color:var(--vert)">🖨️</button>

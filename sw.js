@@ -1,4 +1,4 @@
-const CACHE_NAME = 'chantier-app-V21'; // ⚠️ à aligner sur APP_VERSION de chantier-app.html à chaque version
+const CACHE_NAME = 'chantier-app-V26'; // ⚠️ à aligner sur APP_VERSION de chantier-app.html à chaque version
 const ASSETS = [
   '/Chantier-APP/chantier-app.html',
   '/Chantier-APP/manifest.json',
@@ -33,7 +33,7 @@ self.addEventListener('fetch', e => {
   // Ouverture / rechargement de l'appli : réseau d'abord, cache en secours hors-ligne
   if (e.request.mode === 'navigate') {
     e.respondWith(
-      fetch(e.request, { cache: 'no-store' })
+      fetch(e.request, { cache: 'no-cache' }) // V23 : revalidation (réponse 304 légère si l'appli n'a pas changé) au lieu de 2 Mo à chaque ouverture
         .then(response => {
           if (response.ok) {
             const clone = response.clone();
