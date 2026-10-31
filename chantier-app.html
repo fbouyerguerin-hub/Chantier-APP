@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V36';
+  const APP_VERSION = 'V37';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2927,7 +2927,7 @@
     const champ = 'padding:7px;border:1.5px solid #ddd5c5;border-radius:8px;font-size:13px;box-sizing:border-box';
     const petit = 'border:1px solid #ddd;background:#fff;border-radius:6px;padding:5px 8px;font-size:12px;cursor:pointer';
     boite.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:800;color:var(--gris)">🛒 Nouvelle commande fournisseur</div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:16px;font-weight:800;color:var(--gris)">${C.mode === 'edition' ? '✏️ Modifier la commande ' + esc(C.numero) : '🛒 Nouvelle commande fournisseur'}</div>
         <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="${petit}">✕</button></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
         <div style="grid-column:1/-1;position:relative">
@@ -2954,7 +2954,7 @@
       <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin:14px 0 6px">Lignes</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
         <thead><tr style="color:#777;text-align:left"><th style="padding:4px">Code</th><th style="padding:4px">Désignation</th><th style="padding:4px;width:70px">Qté</th><th style="padding:4px;width:60px">Unité</th><th style="padding:4px;width:90px">PU HT €</th><th style="padding:4px;width:90px;text-align:right">Total HT</th><th style="padding:4px;width:150px">Chantier</th><th></th></tr></thead>
-        <tbody>${C.lignes.map((l, i) => `<tr>
+        <tbody>${C.lignes.map((l, i) => `<tr ${l.pliage ? 'style="opacity:.55;pointer-events:none" title="Ligne issue de la fiche de pliage : modifier par 📐 Pliage"' : ''}>
           <td style="padding:3px"><input value="${esc(l.code)}" oninput="_nouvCmd.lignes[${i}].code=this.value" style="${champ};width:100%;font-family:monospace;font-size:12px"></td>
           <td style="padding:3px"><input value="${esc(l.description)}" oninput="_nouvCmd.lignes[${i}].description=this.value" style="${champ};width:100%"></td>
           <td style="padding:3px"><input type="number" min="0" step="any" value="${esc(l.quantite)}" oninput="_nouvCmd.lignes[${i}].quantite=this.value;majTotauxNC()" style="${champ};width:100%"></td>
@@ -2965,14 +2965,15 @@
           <td style="padding:3px"><button onclick="_nouvCmd.lignes.splice(${i},1);renderNouvelleCommande()" style="${petit};color:#c0392b">✕</button></td></tr>`).join('')}</tbody></table></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
         <button onclick="_nouvCmd.lignes.push({code:'',description:'',unite:'U',quantite:1,pu:''});renderNouvelleCommande()" style="${petit}">＋ Ligne libre</button>
-        <button onclick="_nouvCmd.pliage=!_nouvCmd.pliage;renderNouvelleCommande()" title="Les lignes de pliage sont créées depuis la fiche, juste après la commande" style="${petit};${_nouvCmd.pliage ? 'background:#ede7f6;border-color:#5e35b1;color:#5e35b1;font-weight:800' : 'color:#5e35b1'}">📐 ${_nouvCmd.pliage ? 'Fiche de pliage : oui ✓' : 'Ajouter des pliages'}</button>
+        ${C.mode === 'edition' ? `<button onclick="ouvrirFichePliage(${C.id})" style="${petit};color:#5e35b1">📐 Fiche de pliage</button>` : ''}
+        <button ${C.mode === 'edition' ? 'hidden' : ''} onclick="_nouvCmd.pliage=!_nouvCmd.pliage;renderNouvelleCommande()" title="Les lignes de pliage sont créées depuis la fiche, juste après la commande" style="${petit};${_nouvCmd.pliage ? 'background:#ede7f6;border-color:#5e35b1;color:#5e35b1;font-weight:800' : 'color:#5e35b1'}">📐 ${_nouvCmd.pliage ? 'Fiche de pliage : oui ✓' : 'Ajouter des pliages'}</button>
         <input id="nc-cat" placeholder="🔍 Ajouter depuis le catalogue EBP (code, désignation, réf. fournisseur)…" oninput="chercherCatalogueNC(this.value)" style="${champ};flex:1;min-width:220px"></div>
       <div id="nc-cat-res" style="font-size:12px"></div>
       <div id="nc-totaux" style="text-align:right;margin-top:10px;font-size:13px"></div>
       <div id="nc-msg" style="margin-top:8px;font-size:12px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eee;padding-top:12px;margin-top:10px">
         <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Annuler</button>
-        <button id="nc-creer" onclick="creerCommandeNC(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">💾 Créer la commande</button></div>`;
+        <button id="nc-creer" onclick="${C.mode === 'edition' ? 'enregistrerModifCommande(this)' : 'creerCommandeNC(this)'}" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">💾 ${C.mode === 'edition' ? 'Enregistrer les modifications' : 'Créer la commande'}</button></div>`;
     majTotauxNC();
   }
   // V30 : chantier choisi en tapant (n° ou nom), parmi les chantiers en cours
@@ -3595,6 +3596,104 @@
     const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${cmdId}/?user_field_names=true`, { method: 'PATCH', headers: HEADERS, body: JSON.stringify({ 'Repartition chantiers': valeur }) });
     if (!r.ok) throw new Error('Ligne enregistrée, mais la répartition n\'a pas pu être mise à jour : créer le champ texte « Repartition chantiers » dans la table « Commandes Fournisseurs » de Baserow.');
     if (cmd) cmd['Repartition chantiers'] = valeur;
+  }
+  // ── V37 : MODIFIER UNE COMMANDE APPLI dans le même formulaire que la création ──
+  async function ouvrirModifCommande(id) {
+    if (!estProfilPrix()) { alert('Réservé aux profils Administrateur et Gestionnaire.'); return; }
+    let cmd = (_commandesCache || []).find(x => x.id === id);
+    try {
+      if (!cmd) { const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${id}/?user_field_names=true`, { headers: HEADERS }); if (!r.ok) throw new Error('Commande introuvable'); cmd = await r.json(); }
+      if (cmd['Envoye par mail'] && !confirm(`La commande ${cmd['Numero commande']} a déjà été envoyée au fournisseur.\n\nLa modifier ? Il faudra la lui renvoyer ensuite.`)) return;
+      const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`, { headers: HEADERS });
+      const lignesB = ((await rl.json()).results || []).sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
+      await chargerChantiersActifs();
+      const nomCh = cid => ((_nouvCmdChantiers || []).find(c => c.id === cid) || {}).nom || '';
+      const enteteCh = (cmd['Chantier'] || [])[0];
+      const lieu = String(cmd['Lieu de réception'] || ''), k = lieu.indexOf(' — ');
+      const estPliage = l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')) || /\(fiche de pliage\)\s*$/i.test(String(l['Description'] || ''));
+      _nouvCmd = {
+        mode: 'edition', id, numero: cmd['Numero commande'], envoyee: !!cmd['Envoye par mail'],
+        fournisseur: { societe: cmd['Fournisseur'] || '' }, email: _bcEmails[id] || '',
+        chantier_id: enteteCh ? enteteCh.id : '', chantier_texte: enteteCh ? (nomCh(enteteCh.id) || enteteCh.value || '') : '',
+        objet: cmd['Designation'] && cmd['Designation'] !== cmd['Numero commande'] ? cmd['Designation'] : '',
+        date_livraison: String(cmd['Date reception prevue'] || '').slice(0, 10),
+        lieu: /^chantier/i.test(lieu) ? 'Chantier' : 'Atelier', adresse: /^chantier/i.test(lieu) && k > 0 ? lieu.slice(k + 3) : '',
+        idsOrigine: lignesB.filter(l => !estPliage(l)).map(l => l.id),
+        lignes: lignesB.map(l => { const lc = (l['Chantier'] || [])[0]; return {
+          id: l.id, pliage: estPliage(l), ordre: Number(l['Ordre']) || 0,
+          code: l['Reference fournisseur'] || '', description: l['Description'] || '', unite: l['Unite'] || '', quantite: l['Quantite'] ?? '', pu: l['Debourse HT'] ?? '',
+          chantier_id: lc ? lc.id : '', chantier_texte: lc ? (nomCh(lc.id) || lc.value || '') : '' }; })
+      };
+      if (!_nouvCmd.lignes.some(l => !l.pliage)) _nouvCmd.lignes.push({ code: '', description: '', unite: 'U', quantite: 1, pu: '' });
+    } catch (e) { alert('❌ ' + e.message); return; }
+    document.getElementById('modal-nouv-cmd')?.remove();
+    const fond = document.createElement('div');
+    fond.id = 'modal-nouv-cmd';
+    fond.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:10px';
+    fond.innerHTML = '<div id="nc-boite" style="background:#fff;border-radius:14px;max-width:820px;width:100%;max-height:92vh;overflow:auto;padding:16px"></div>';
+    document.body.appendChild(fond);
+    chargerCatalogueLocal().catch(() => {});
+    renderNouvelleCommande();
+  }
+  async function enregistrerModifCommande(btn) {
+    const C = _nouvCmd, msg = document.getElementById('nc-msg');
+    if (!C.fournisseur || !C.fournisseur.societe) { msg.innerHTML = '<span style="color:#c0392b">Choisir un fournisseur.</span>'; return; }
+    if (C.chantier_texte && !C.chantier_id) { msg.innerHTML = '<span style="color:#c0392b">Chantier non reconnu : le choisir dans la liste (ou vider le champ).</span>'; return; }
+    if (C.lignes.some(l => !l.pliage && String(l.chantier_texte || '').trim() && !l.chantier_id)) { msg.innerHTML = '<span style="color:#c0392b">Un chantier de ligne n\'est pas reconnu.</span>'; return; }
+    if (C.lieu === 'Chantier' && !String(C.adresse || '').trim()) { msg.innerHTML = '<span style="color:#c0392b">Indiquer l\'adresse de livraison sur chantier.</span>'; return; }
+    const nb = v => Number(String(v ?? '').replace(',', '.')) || 0;
+    const lignes = C.lignes.filter(l => !l.pliage && (String(l.description).trim() || String(l.code).trim()) && nb(l.quantite) > 0);
+    btn.disabled = true; msg.textContent = '⏳ Enregistrement…';
+    try {
+      const chantier = (_nouvCmdChantiers || []).find(c => String(c.id) === String(C.chantier_id));
+      const urlC = `https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS}/${C.id}/?user_field_names=true`;
+      const entete = {
+        'Fournisseur': C.fournisseur.societe, 'Chantier': C.chantier_id ? [Number(C.chantier_id)] : [],
+        'Designation': C.objet || C.numero, 'Reference complete': [C.numero, C.objet].filter(Boolean).join(' — '),
+        'Date reception prevue': C.date_livraison || null, 'Envoye par mail': false,
+        'Lieu de réception': C.lieu === 'Chantier' ? ('Chantier ' + (chantier ? chantier.nom.split(' ')[0] : '') + ' — ' + String(C.adresse).replace(/\s*\n\s*/g, ', ').trim()).slice(0, 200) : 'Atelier'
+      };
+      let r = await fetch(urlC, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(entete) });
+      if (!r.ok) { delete entete['Lieu de réception']; r = await fetch(urlC, { method: 'PATCH', headers: HEADERS, body: JSON.stringify(entete) }); }
+      if (!r.ok) throw new Error('En-tête : HTTP ' + r.status);
+      // Lignes : modifiées, ajoutées, supprimées (les lignes de pliage se gèrent par la fiche)
+      const ordreMax = Math.max(0, ...C.lignes.map(l => l.ordre || 0));
+      let nouvelOrdre = ordreMax;
+      const corps = (l, avecChantier) => {
+        const q = nb(l.quantite), pu = nb(l.pu), mt = Math.round(q * pu * 100) / 100;
+        const o = { 'Reference fournisseur': String(l.code || '').trim(), 'Description': String(l.description || '').trim() || String(l.code || '').trim(), 'Unite': String(l.unite || '').trim(),
+          'Quantite': q, 'Debourse HT': pu, 'Montant HT': mt, 'TVA': Math.round(mt * TAUX_TVA_BC) / 100 };
+        if (avecChantier) o['Chantier'] = l.chantier_id && String(l.chantier_id) !== String(C.chantier_id) ? [Number(l.chantier_id)] : [];
+        return o;
+      };
+      const ecrire = async (url, methode, objet) => {
+        let rr = await fetch(url, { method: methode, headers: HEADERS, body: JSON.stringify(objet('oui')) });
+        if (!rr.ok) rr = await fetch(url, { method: methode, headers: HEADERS, body: JSON.stringify(objet('')) }); // champ « Chantier » absent des lignes
+        if (!rr.ok) throw new Error('Ligne : HTTP ' + rr.status);
+      };
+      for (const l of lignes) {
+        if (l.id) await ecrire(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${l.id}/?user_field_names=true`, 'PATCH', a => corps(l, a));
+        else { nouvelOrdre++; const ord = nouvelOrdre; await ecrire(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true`, 'POST', a => ({ ...corps(l, a), 'Commande': [C.id], 'Ordre': ord })); }
+      }
+      const gardes = new Set(lignes.filter(l => l.id).map(l => l.id));
+      for (const idL of (C.idsOrigine || []).filter(x => !gardes.has(x))) {
+        const rd = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/${idL}/`, { method: 'DELETE', headers: HEADERS });
+        if (!rd.ok && rd.status !== 404) throw new Error('Suppression de ligne : HTTP ' + rd.status);
+      }
+      try { delete _commandesLignesCache[C.id]; } catch (e) {}
+      const c = (_commandesCache || []).find(x => x.id === C.id);
+      if (c) Object.assign(c, { 'Fournisseur': entete['Fournisseur'], 'Designation': entete['Designation'], 'Envoye par mail': false, 'Date reception prevue': entete['Date reception prevue'], 'Chantier': chantier ? [{ id: chantier.id, value: chantier.nom }] : [] });
+      await majTotauxCommandeAppli(C.id);
+      if (_nouvCmd.email) _bcEmails[C.id] = _nouvCmd.email;
+      document.getElementById('nc-boite').innerHTML = `<div style="text-align:center;padding:20px">
+        <div style="font-size:40px">✅</div><div style="font-size:17px;font-weight:800;color:var(--gris);margin:6px 0">Commande ${echapperHtmlNote(C.numero)} modifiée</div>
+        ${C.envoyee ? '<div style="color:#a2560f;font-size:13px">Elle avait déjà été envoyée : pensez à renvoyer la version modifiée au fournisseur.</div>' : ''}
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+          <button onclick="imprimerBonCommande(${C.id})" style="background:#5e35b1;color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">🖨️ Bon de commande</button>
+          <button onclick="envoyerCommandeMail(${C.id})" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">✉️ Envoyer au fournisseur</button>
+          <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Fermer</button></div></div>`;
+      try { chargerCommandesPage(); } catch (e) {}
+    } catch (e) { msg.innerHTML = `<span style="color:#c0392b">❌ ${echapperHtmlNote(e.message)}</span>`; btn.disabled = false; }
   }
   // ── V21 : DÉLAIS DE FABRICATION d'après le plan de charge (même calcul que l'onglet Charge) ──
   let _delaisOF = {}; // chantier_id → { fabDebut, fabFin, pose, joursRestants } | { aucun: true } | { chargement: true }
@@ -22312,7 +22411,8 @@
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
       ${/^CA-\d{4}-/i.test(String(r['Numero commande'] || '')) ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0">
         <span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800">🆕 Commande appli</span>
-        ${estProfilPrix() ? `<button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
+        ${estProfilPrix() ? `<button onclick="event.stopPropagation();ouvrirModifCommande(${r.id})" style="border:none;background:#5e35b1;color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✏️ Modifier</button>
+          <button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
           <button onclick="event.stopPropagation();ouvrirFichePliage(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">📐 Pliage${(r['Documents'] || []).some(f => /^Fiche pliage .*\.pdf$/i.test(f.visible_name || '')) ? ' ✓' : ''}</button>
           <button onclick="event.stopPropagation();recalculerTarifsPliage(${r.id})" title="Recalculer le prix des pliages avec la grille du fournisseur" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">💶 Tarifs pliage</button>
           <button onclick="event.stopPropagation();envoyerCommandeMail(${r.id})" style="border:none;background:var(--vert);color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✉️ Envoyer</button>` : ''}</div>` : ''}
