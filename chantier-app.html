@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V29';
+  const APP_VERSION = 'V30';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2871,7 +2871,7 @@
   const eurBC = v => (Number(v) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
   async function ouvrirNouvelleCommande() {
     if (!estProfilPrix()) { alert('Réservé aux profils Administrateur et Gestionnaire.'); return; }
-    _nouvCmd = { fournisseur: null, email: '', chantier_id: '', objet: '', date_livraison: '', lieu: 'Atelier', lignes: [{ code: '', description: '', unite: 'U', quantite: 1, pu: '' }] };
+    _nouvCmd = { fournisseur: null, email: '', chantier_id: '', chantier_texte: '', objet: '', date_livraison: '', lieu: 'Atelier', adresse: '', lignes: [{ code: '', description: '', unite: 'U', quantite: 1, pu: '' }] };
     document.getElementById('modal-nouv-cmd')?.remove();
     const fond = document.createElement('div');
     fond.id = 'modal-nouv-cmd';
@@ -2907,15 +2907,17 @@
             : `<input id="nc-fourn" placeholder="Rechercher dans le répertoire (2 lettres minimum)…" oninput="chercherFournisseurNC(this.value)" style="${champ};width:100%">
                <div id="nc-fourn-res" style="font-size:12px"></div>`}
         </div>
-        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Chantier</div>
-          <select onchange="_nouvCmd.chantier_id=this.value" style="${champ};width:100%"><option value="">— Stock atelier / sans chantier —</option>
-            ${(_nouvCmdChantiers || []).map(c => `<option value="${c.id}" ${String(c.id) === String(C.chantier_id) ? 'selected' : ''}>${esc(c.nom)}</option>`).join('')}</select></div>
+        <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Chantier <span id="nc-ch-ok" style="color:var(--vert)">${C.chantier_id ? '✓' : ''}</span></div>
+          <input list="nc-dl-chantiers" value="${esc(C.chantier_texte)}" oninput="choisirChantierNC(this.value)" placeholder="Taper le n° ou le nom (vide = stock atelier)" style="${champ};width:100%;${C.chantier_texte && !C.chantier_id ? 'border-color:#c0392b' : ''}">
+          <datalist id="nc-dl-chantiers">${(_nouvCmdChantiers || []).map(c => `<option value="${esc(c.nom)}"></option>`).join('')}</datalist></div>
         <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Objet / référence</div>
           <input value="${esc(C.objet)}" oninput="_nouvCmd.objet=this.value" placeholder="ex. Boulonnerie portiques" style="${champ};width:100%"></div>
         <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Livraison souhaitée le</div>
           <input type="date" value="${esc(C.date_livraison)}" onchange="_nouvCmd.date_livraison=this.value" style="${champ};width:100%"></div>
         <div><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Lieu de livraison</div>
-          <select onchange="_nouvCmd.lieu=this.value" style="${champ};width:100%">${['Atelier', 'Chantier'].map(x => `<option ${x === C.lieu ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+          <select onchange="_nouvCmd.lieu=this.value;if(this.value==='Chantier')preremplirAdresseNC();renderNouvelleCommande()" style="${champ};width:100%">${['Atelier', 'Chantier'].map(x => `<option ${x === C.lieu ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+        ${C.lieu === 'Chantier' ? `<div style="grid-column:1/-1"><div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Adresse de livraison sur chantier *</div>
+          <textarea id="nc-adresse" rows="2" oninput="_nouvCmd.adresse=this.value" placeholder="Lieu-dit, rue, code postal, commune — contact sur place, accès…" style="${champ};width:100%;resize:vertical">${esc(C.adresse)}</textarea></div>` : ''}
       </div>
       <div style="font-size:12px;font-weight:800;color:var(--vert);text-transform:uppercase;margin:14px 0 6px">Lignes</div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
@@ -2927,8 +2929,7 @@
           <td style="padding:3px"><input value="${esc(l.unite)}" oninput="_nouvCmd.lignes[${i}].unite=this.value" style="${champ};width:100%"></td>
           <td style="padding:3px"><input type="number" min="0" step="any" value="${esc(l.pu)}" oninput="_nouvCmd.lignes[${i}].pu=this.value;majTotauxNC()" style="${champ};width:100%"></td>
           <td id="nc-tot-${i}" style="padding:3px;text-align:right;font-weight:700"></td>
-          <td style="padding:3px"><select onchange="_nouvCmd.lignes[${i}].chantier_id=this.value" title="Imputer cette ligne à un autre chantier que celui de la commande" style="${champ};width:100%;font-size:11px;${l.chantier_id ? 'border-color:#c25e00;color:#c25e00;font-weight:700' : 'color:#999'}">
-            <option value="">= commande</option>${(_nouvCmdChantiers || []).map(c => `<option value="${c.id}" ${String(c.id) === String(l.chantier_id || '') ? 'selected' : ''}>${esc(c.nom)}</option>`).join('')}</select></td>
+          <td style="padding:3px"><input list="nc-dl-chantiers" value="${esc(l.chantier_texte || '')}" oninput="choisirChantierLigneNC(${i}, this)" placeholder="= commande" title="Imputer cette ligne à un autre chantier que celui de la commande" style="${champ};width:100%;font-size:11px;${l.chantier_id ? 'border-color:#c25e00;color:#c25e00;font-weight:700' : ''}"></td>
           <td style="padding:3px"><button onclick="_nouvCmd.lignes.splice(${i},1);renderNouvelleCommande()" style="${petit};color:#c0392b">✕</button></td></tr>`).join('')}</tbody></table></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
         <button onclick="_nouvCmd.lignes.push({code:'',description:'',unite:'U',quantite:1,pu:''});renderNouvelleCommande()" style="${petit}">＋ Ligne libre</button>
@@ -2941,6 +2942,39 @@
         <button onclick="document.getElementById('modal-nouv-cmd').remove()" style="background:var(--beige-clair);border:none;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer">Annuler</button>
         <button id="nc-creer" onclick="creerCommandeNC(this)" style="background:var(--vert);color:#fff;border:none;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer">💾 Créer la commande</button></div>`;
     majTotauxNC();
+  }
+  // V30 : chantier choisi en tapant (n° ou nom), parmi les chantiers en cours
+  function trouverChantierNC(texte) {
+    const t = String(texte || '').trim().toLowerCase();
+    if (!t) return null;
+    const liste = _nouvCmdChantiers || [];
+    return liste.find(c => c.nom.toLowerCase() === t) || (() => { const m = liste.filter(c => c.nom.toLowerCase().startsWith(t)); return m.length === 1 ? m[0] : null; })();
+  }
+  function choisirChantierNC(texte) {
+    _nouvCmd.chantier_texte = texte;
+    const c = trouverChantierNC(texte);
+    _nouvCmd.chantier_id = c ? c.id : '';
+    const ok = document.getElementById('nc-ch-ok'); if (ok) ok.textContent = c ? '✓' : '';
+    if (c && _nouvCmd.lieu === 'Chantier' && !_nouvCmd.adresse) preremplirAdresseNC();
+  }
+  function choisirChantierLigneNC(i, el) {
+    const l = _nouvCmd.lignes[i]; l.chantier_texte = el.value;
+    const c = trouverChantierNC(el.value);
+    l.chantier_id = c ? c.id : '';
+    el.style.borderColor = c ? '#c25e00' : (el.value.trim() ? '#c0392b' : '');
+    el.style.color = c ? '#c25e00' : '';
+  }
+  // Adresse du chantier reprise de sa fiche (si renseignée), modifiable
+  async function preremplirAdresseNC() {
+    const C = _nouvCmd;
+    if (!C || !C.chantier_id || C.adresse) return;
+    try {
+      const r = await fetch(`https://api.baserow.io/api/database/rows/table/${TABLE_CHANTIERS_ADMIN}/${C.chantier_id}/?user_field_names=true`, { headers: HEADERS });
+      if (!r.ok) return;
+      const ch = await r.json(), v = x => x == null ? '' : typeof x === 'object' ? (x.value ?? '') : String(x);
+      const adr = [v(ch['Adresse']), [v(ch['Code postal']), v(ch['Ville'])].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+      if (adr && !C.adresse) { C.adresse = adr; const t = document.getElementById('nc-adresse'); if (t) t.value = adr; }
+    } catch (e) {}
   }
   function majTotauxNC() {
     if (!_nouvCmd) return;
@@ -2999,11 +3033,14 @@
     const lignesSaisies = C.lignes.filter(l => (String(l.description).trim() || String(l.code).trim()) && Number(String(l.quantite).replace(',', '.')) > 0)
       .map(l => ({ ...l, chantier_nom: ((_nouvCmdChantiers || []).find(c => String(c.id) === String(l.chantier_id)) || {}).nom || '' }));
     if (!lignesSaisies.length && !C.pliage) { msg.innerHTML = '<span style="color:#c0392b">Ajouter au moins une ligne, ou des pliages.</span>'; return; }
+    if (C.chantier_texte && !C.chantier_id) { msg.innerHTML = '<span style="color:#c0392b">Chantier non reconnu : choisir dans la liste proposée (ou vider le champ pour le stock atelier).</span>'; return; }
+    if (C.lignes.some(l => String(l.chantier_texte || '').trim() && !l.chantier_id)) { msg.innerHTML = '<span style="color:#c0392b">Un chantier de ligne n\'est pas reconnu : le choisir dans la liste ou vider la case.</span>'; return; }
+    if (C.lieu === 'Chantier' && !String(C.adresse || '').trim()) { msg.innerHTML = '<span style="color:#c0392b">Indiquer l\'adresse de livraison sur chantier.</span>'; document.getElementById('nc-adresse')?.focus(); return; }
     btn.disabled = true; msg.textContent = '⏳ Création…';
     try {
       const r = await appelWorkerPost('/achats/commandes', {
         fournisseur: C.fournisseur.societe, chantier_id: C.chantier_id || null, objet: C.objet, date_livraison: C.date_livraison,
-        lieu: C.lieu === 'Chantier' && chantier ? 'Chantier ' + chantier.nom : 'Atelier', taux_tva: TAUX_TVA_BC, pliage: !!C.pliage,
+        lieu: C.lieu === 'Chantier' ? ('Chantier ' + (chantier ? chantier.nom.split(' ')[0] : '') + ' — ' + String(C.adresse).replace(/\s*\n\s*/g, ', ').trim()).slice(0, 200) : 'Atelier', taux_tva: TAUX_TVA_BC, pliage: !!C.pliage,
         lignes: lignesSaisies.length ? lignesSaisies : [{ code: 'PLIAGE', description: 'Pliages selon fiche de pliage', unite: 'U', quantite: 1, pu: 0 }] });
       _bcEmails[r.id] = C.email;
       document.getElementById('nc-boite').innerHTML = `<div style="text-align:center;padding:20px">
@@ -3056,7 +3093,9 @@
         <div class="bloc"><div class="bt">Fournisseur</div><div class="four">${esc(cmd['Fournisseur'] || '')}</div>
           ${four ? `<div>${esc(four.contact || '')}</div><div style="white-space:pre-line">${esc(four.adresse || '')}</div><div>${esc([four.email, four.telephone].filter(Boolean).join(' — '))}</div>` : ''}</div>
         <div class="bloc"><div class="bt">Livraison</div>
-          <div><b>${esc(lieu || ('Chantier ' + chantier))}</b></div>${lieu === 'Atelier' || !lieu ? `<div>${esc(S.adresse)} — ${esc(S.ville)}</div>` : ''}
+          ${(() => { const L = lieu || ('Chantier ' + chantier); const k = L.indexOf(' — ');
+            return k > 0 ? `<div><b>${esc(L.slice(0, k))}</b></div><div style="font-size:12.5px;font-weight:700">${esc(L.slice(k + 3))}</div>` : `<div><b>${esc(L)}</b></div>`; })()}
+          ${lieu === 'Atelier' || !lieu ? `<div>${esc(S.adresse)} — ${esc(S.ville)}</div>` : ''}
           ${cmd['Date reception prevue'] ? `<div style="margin-top:4px">Livraison souhaitée le <b>${dateFr(cmd['Date reception prevue'])}</b></div>` : ''}
           ${chantier ? `<div style="margin-top:4px">Affaire : <b>${esc(chantier)}</b></div>` : ''}
           ${cmd['Designation'] && cmd['Designation'] !== cmd['Numero commande'] ? `<div>Objet : ${esc(cmd['Designation'])}</div>` : ''}</div></div>
