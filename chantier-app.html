@@ -771,7 +771,7 @@
   // Version affichée dans l'application — à incrémenter à chaque déploiement,
   // en même temps que CACHE_NAME dans sw.js, pour que le numéro reste synchronisé.
   // Hébergement : Cloudflare (fichiers statiques) — https://erp-guerin-batiments.f-bouyer-guerin.workers.dev/
-  const APP_VERSION = 'V39';
+  const APP_VERSION = 'V42';
 
   // ── Mobile : le clavier ne s'ouvre que lorsque l'utilisateur touche un champ ──
   // Sur écran tactile, les mises au point automatiques (ouverture d'une fenêtre,
@@ -2897,7 +2897,16 @@
   }
   // ── V22 : COMMANDES FOURNISSEURS CRÉÉES DANS L'APPLI (n° CA-AAAA-NNNN), bon de commande à en-tête, envoi par e-mail ──
   // Coordonnées imprimées sur le bon : à compléter (téléphone, e-mail, SIRET, n° TVA)
-  const SOCIETE_BC = { nom: 'Guérin Bâtiments', adresse: '2 ZA Le Pont Girouard', ville: "85250 Saint-André-Goule-d'Oie", tel: '02 51 42 60 78', email: '', siret: '', tva: '' };
+  const SOCIETE_BC = { nom: 'Guérin Bâtiments', adresse: '2 ZA Le Pont Girouard', ville: "85250 Saint-André-Goule-d'Oie", tel: '02 51 42 60 78', fax: '02 51 42 65 64',
+    email: 'contact@guerin-batiments.fr', web: 'www.guerin-batiments.fr', metiers: 'Agricoles · Avicoles · Industriels',
+    forme: 'SAS au capital de 300 000 €', siret: '37924453600023', tva: 'FR56379244536',
+    assurance: 'Assurance décennale obligatoire souscrite auprès de AXA Tesson de Froment, 11 pl. Général Leclerc 85400 Luçon — N° 5481983704, valable en France métropolitaine' };
+  // Pied de page légal des bons de commande (comme les commandes EBP)
+  function piedBonCommande() {
+    const S = SOCIETE_BC, esc = echapperHtmlNote;
+    return `<div class="pg-g"><b>${esc(S.forme.toUpperCase())} — SIRET : ${esc(S.siret)}</b><br><b>N° TVA INTRACOMMUNAUTAIRE : ${esc(S.tva)}</b></div>
+      <div class="pg-d">${esc(S.assurance)}<br><b>${esc(S.nom.toUpperCase())}</b> — ${esc(S.adresse)} — ${esc(S.ville)} — Tél. ${esc(S.tel)} — Fax ${esc(S.fax)} — ${esc(S.email)}</div>`;
+  }
   const TAUX_TVA_BC = 20;
   let _nouvCmd = null, _nouvCmdChantiers = null, _nouvCmdMinuteur = null;
   const eurBC = v => (Number(v) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
@@ -2934,7 +2943,7 @@
           <div style="font-size:11px;font-weight:700;color:#777;margin-bottom:3px">Fournisseur *</div>
           ${C.fournisseur
             ? `<div style="display:flex;gap:8px;align-items:center;background:#f1f8ef;border-radius:8px;padding:8px"><b style="flex:1">${esc(C.fournisseur.societe)}</b>
-                <input id="nc-email" value="${esc(C.email)}" placeholder="e-mail de commande" oninput="_nouvCmd.email=this.value" style="${champ};flex:1">
+                <input id="nc-email" value="${esc(C.email)}" placeholder="e-mail de commande (absent du répertoire)" oninput="_nouvCmd.email=this.value" style="${champ};flex:1;${C.email ? '' : 'border-color:#e67e22'}">
                 <button onclick="_nouvCmd.fournisseur=null;renderNouvelleCommande()" style="${petit}">Changer</button></div>`
             : `<input id="nc-fourn" placeholder="Rechercher dans le répertoire (2 lettres minimum)…" oninput="chercherFournisseurNC(this.value)" style="${champ};width:100%">
                <div id="nc-fourn-res" style="font-size:12px"></div>`}
@@ -3072,7 +3081,7 @@
     btn.disabled = true; msg.textContent = '⏳ Création…';
     try {
       const r = await appelWorkerPost('/achats/commandes', {
-        fournisseur: C.fournisseur.societe, chantier_id: C.chantier_id || null, objet: C.objet, date_livraison: C.date_livraison,
+        fournisseur: C.fournisseur.societe, email: String(C.email || '').trim(), chantier_id: C.chantier_id || null, objet: C.objet, date_livraison: C.date_livraison,
         lieu: C.lieu === 'Chantier' ? ('Chantier ' + (chantier ? chantier.nom.split(' ')[0] : '') + ' — ' + String(C.adresse).replace(/\s*\n\s*/g, ', ').trim()).slice(0, 200) : 'Atelier', taux_tva: TAUX_TVA_BC, pliage: !!C.pliage,
         lignes: lignesSaisies.length ? lignesSaisies : [{ code: 'PLIAGE', description: 'Pliages selon fiche de pliage', unite: 'U', quantite: 1, pu: 0 }] });
       _bcEmails[r.id] = C.email;
@@ -3098,7 +3107,13 @@
     const rl = await fetchListeComplete(`https://api.baserow.io/api/database/rows/table/${TABLE_COMMANDES_FOURNISSEURS_LIGNES}/?user_field_names=true&size=200&filter__Commande__link_row_has=${id}`, { headers: HEADERS });
     const lignes = ((await rl.json()).results || []).sort((a, b) => (Number(a['Ordre']) || 0) - (Number(b['Ordre']) || 0));
     let four = null;
-    try { const d = await appelWorkerLecture('/achats/fournisseurs?q=' + encodeURIComponent(String(cmd['Fournisseur'] || '').slice(0, 40))); four = (d.results || []).find(f => f.societe.toUpperCase() === String(cmd['Fournisseur'] || '').toUpperCase()) || (d.results || [])[0] || null; } catch (e) {}
+    try {
+      const d = await appelWorkerLecture('/achats/fournisseurs?q=' + encodeURIComponent(String(cmd['Fournisseur'] || '').slice(0, 40)));
+      const res = d.results || [], nom = String(cmd['Fournisseur'] || '').toUpperCase();
+      four = res.find(f => f.societe.toUpperCase() === nom && f.email) || res.find(f => f.societe.toUpperCase() === nom) || res.find(f => f.email) || res[0] || null;
+    } catch (e) {}
+    // V41 : e-mail retenu pour cette commande (saisi à la création ou au dernier envoi)
+    try { const inf = await appelWorkerLecture('/achats/infos?commande_id=' + id); if (inf.email) { _bcEmails[id] = inf.email; four = { ...(four || {}), email: inf.email }; } } catch (e) {}
     return { cmd, lignes, four };
   }
   function htmlBonCommande({ cmd, lignes, four }) {
@@ -3108,7 +3123,7 @@
     const dateFr = s => s ? String(s).slice(0, 10).split('-').reverse().join('/') : '';
     const lieu = cmd['Lieu de réception'] || (chantier ? '' : 'Atelier');
     return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Commande ${esc(cmd['Numero commande'] || '')}</title><style>
-      @page{size:A4;margin:12mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;font-size:11.5px}
+      @page{size:A4;margin:12mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:0;font-size:11.5px}
       .ent{display:flex;align-items:flex-start;gap:16px;border-bottom:3px solid #4a7c3f;padding-bottom:10px}.ent img{height:62px}.ent .t{flex:1}
       .ent h1{margin:0;font-size:22px;color:#4a7c3f;letter-spacing:.5px}.ent .num{text-align:right}.ent .num b{display:block;font-size:19px;color:#5e35b1}
       .soc{font-size:10.5px;color:#555;margin-top:4px;line-height:1.4}
@@ -3118,9 +3133,12 @@
       .nb{text-align:right;white-space:nowrap}.code{font-family:monospace;font-size:10.5px;color:#555}tr{page-break-inside:avoid}
       .tot{margin-left:auto;width:62mm;margin-top:10px}.tot div{display:flex;justify-content:space-between;padding:3px 0}.tot .ttc{border-top:2px solid #4a7c3f;font-weight:800;font-size:13px;margin-top:3px;padding-top:5px}
       .mentions{margin-top:14px;font-size:10.5px;color:#444;border:1px solid #eee;border-radius:6px;padding:8px 10px;line-height:1.5}
-      .sign{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.sign div{border:1px solid #ccc;border-radius:6px;height:24mm;padding:6px;font-size:10px;color:#777}</style></head><body>
+      .sign{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.sign div{border:1px solid #ccc;border-radius:6px;height:24mm;padding:6px;font-size:10px;color:#777}
+      .pied{display:flex;gap:12px;justify-content:space-between;border-top:2px solid #4a7c3f;padding-top:5px;margin-top:14px;font-size:8.5px;color:#444;line-height:1.45}.pg-g{flex:1}.pg-d{flex:1.3;text-align:right;color:#666}
+      @media print{.pied.flux{display:none}.pied.fixe{display:flex;position:fixed;left:0;right:0;bottom:0;background:#fff}body{padding-bottom:22mm}}
+      @media screen{.pied.fixe{display:none}}</style></head><body>
       <div class="ent"><img src="${LOGO_URL}" alt="${esc(S.nom)}"><div class="t"><h1>BON DE COMMANDE</h1>
-        <div class="soc">${esc(S.nom)} — ${esc(S.adresse)} — ${esc(S.ville)}${S.tel ? '<br>Tél. ' + esc(S.tel) : ''}${S.email ? ' — ' + esc(S.email) : ''}${S.siret ? '<br>SIRET ' + esc(S.siret) : ''}${S.tva ? ' — TVA ' + esc(S.tva) : ''}</div></div>
+        <div class="soc"><span style="letter-spacing:1.5px;color:#4a7c3f;font-weight:700">${esc(S.metiers.toUpperCase())}</span><br>${esc(S.nom)} — ${esc(S.adresse)} — ${esc(S.ville)}<br>Tél. ${esc(S.tel)} — ${esc(S.email)} — ${esc(S.web)}</div></div>
         <div class="num"><b>N° ${esc(cmd['Numero commande'] || '')}</b>du ${dateFr(cmd['Date commande'])}</div></div>
       <div class="blocs">
         <div class="bloc"><div class="bt">Fournisseur</div><div class="four">${esc(cmd['Fournisseur'] || '')}</div>
@@ -3145,6 +3163,7 @@
       <div class="mentions">Merci de nous retourner un <b>accusé de réception</b> confirmant prix et délai.<br>
         Notre n° de commande <b>${esc(cmd['Numero commande'] || '')}</b>${chantier ? ' et la référence de l\'affaire' : ''} doivent figurer sur le bon de livraison et sur la facture.</div>
       <div class="sign"><div>Commande établie par : <b style="color:#222">${esc(connectedCollab || '')}</b></div><div>Cachet et signature</div></div>
+      <div class="pied flux">${piedBonCommande()}</div><div class="pied fixe">${piedBonCommande()}</div>
       <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script></body></html>`;
   }
   async function imprimerBonCommande(id) {
@@ -3282,6 +3301,8 @@
   }
   function proposerMarquageEnvoyeBC() {
     const id = _envoiBC.id;
+    const email = String(_envoiBC.email || '').trim();
+    if (email) { _bcEmails[id] = email; appelWorkerPost('/achats/infos', { commande_id: id, email }).catch(() => {}); } // V41
     setTimeout(async () => {
       if (!confirm('Une fois le message envoyé depuis votre messagerie :\n\nmarquer la commande comme envoyée ?')) return;
       try {
@@ -3621,7 +3642,7 @@
       const estPliage = l => /^PLIAGE(-|$)/i.test(String(l['Reference fournisseur'] || '')) || /\(fiche de pliage\)\s*$/i.test(String(l['Description'] || ''));
       _nouvCmd = {
         mode: 'edition', id, numero: cmd['Numero commande'], envoyee: !!cmd['Envoye par mail'],
-        fournisseur: { societe: cmd['Fournisseur'] || '' }, email: _bcEmails[id] || '',
+        fournisseur: { societe: cmd['Fournisseur'] || '' }, email: _bcEmails[id] || (await appelWorkerLecture('/achats/infos?commande_id=' + id).catch(() => ({}))).email || '',
         chantier_id: enteteCh ? enteteCh.id : '', chantier_texte: enteteCh ? (nomCh(enteteCh.id) || enteteCh.value || '') : '',
         objet: cmd['Designation'] && cmd['Designation'] !== cmd['Numero commande'] ? cmd['Designation'] : '',
         date_livraison: String(cmd['Date reception prevue'] || '').slice(0, 10),
@@ -3703,7 +3724,7 @@
       const c = (_commandesCache || []).find(x => x.id === C.id);
       if (c) Object.assign(c, { 'Fournisseur': entete['Fournisseur'], 'Designation': entete['Designation'], 'Envoye par mail': false, 'Date reception prevue': entete['Date reception prevue'], 'Chantier': chantier ? [{ id: chantier.id, value: chantier.nom }] : [] });
       await majTotauxCommandeAppli(C.id);
-      if (_nouvCmd.email) _bcEmails[C.id] = _nouvCmd.email;
+      if (_nouvCmd.email) { _bcEmails[C.id] = _nouvCmd.email; appelWorkerPost('/achats/infos', { commande_id: C.id, email: _nouvCmd.email }).catch(() => {}); }
       document.getElementById('nc-boite').innerHTML = `<div style="text-align:center;padding:20px">
         <div style="font-size:40px">✅</div><div style="font-size:17px;font-weight:800;color:var(--gris);margin:6px 0">Commande ${echapperHtmlNote(C.numero)} modifiée</div>
         ${C.envoyee ? '<div style="color:#a2560f;font-size:13px">Elle avait déjà été envoyée : pensez à renvoyer la version modifiée au fournisseur.</div>' : ''}
@@ -22354,7 +22375,17 @@
 
     // Tout ce qui n'est pas l'entete essentiel (fournisseur/chantier/référence/
     // statut/montant) est replié derrière "Détail", pour une liste plus lisible.
+    // V40 : actions des commandes appli (modifier, bon, pliage, tarifs, envoi) affichées dans le détail seulement
+    const actionsAppliHTML = /^CA-\d{4}-/i.test(String(r['Numero commande'] || '')) && estProfilPrix()
+      ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0 8px;padding:8px;background:#f7f4fc;border:1px solid #e4dcf3;border-radius:10px">
+        <span style="font-size:11px;font-weight:800;color:#5e35b1;margin-right:2px">🆕 Commande appli</span>
+        <button onclick="event.stopPropagation();ouvrirModifCommande(${r.id})" style="border:none;background:#5e35b1;color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✏️ Modifier</button>
+          <button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
+          <button onclick="event.stopPropagation();ouvrirFichePliage(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">📐 Pliage${(r['Documents'] || []).some(f => /^Fiche pliage .*\.pdf$/i.test(f.visible_name || '')) ? ' ✓' : ''}</button>
+          <button onclick="event.stopPropagation();recalculerTarifsPliage(${r.id})" title="Recalculer le prix des pliages avec la grille du fournisseur" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">💶 Tarifs pliage</button>
+          <button onclick="event.stopPropagation();envoyerCommandeMail(${r.id})" style="border:none;background:var(--vert);color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✉️ Envoyer</button></div>` : '';
     const genererDetails = () => `
+      ${actionsAppliHTML}
       ${arValidePar ? `<div style="font-size:10px;color:#aaa;margin-top:2px">✅ AR validé par : ${arValidePar}${dateValidationAR ? ` (${formaterDate(dateValidationAR)})` : ''}</div>` : ''}
       ${(() => {
         const st = 'font-size:10px;color:#aaa;margin-top:2px';
@@ -22428,13 +22459,7 @@
         <span style="font-weight:400;color:#999;font-size:11px">${dateLabel}</span>
       </div>
       <div style="font-size:11px;color:#888;margin:2px 0">🏗 ${chantierNom}${r['Numero devis'] ? ` <span style="color:#bbb">· devis ${r['Numero devis']}</span>` : ''}</div>
-      ${/^CA-\d{4}-/i.test(String(r['Numero commande'] || '')) ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:4px 0">
-        <span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800">🆕 Commande appli</span>
-        ${estProfilPrix() ? `<button onclick="event.stopPropagation();ouvrirModifCommande(${r.id})" style="border:none;background:#5e35b1;color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✏️ Modifier</button>
-          <button onclick="event.stopPropagation();imprimerBonCommande(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">🖨️ Bon</button>
-          <button onclick="event.stopPropagation();ouvrirFichePliage(${r.id})" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">📐 Pliage${(r['Documents'] || []).some(f => /^Fiche pliage .*\.pdf$/i.test(f.visible_name || '')) ? ' ✓' : ''}</button>
-          <button onclick="event.stopPropagation();recalculerTarifsPliage(${r.id})" title="Recalculer le prix des pliages avec la grille du fournisseur" style="border:1px solid #d1c4e9;background:#fff;color:#5e35b1;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">💶 Tarifs pliage</button>
-          <button onclick="event.stopPropagation();envoyerCommandeMail(${r.id})" style="border:none;background:var(--vert);color:#fff;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:700;cursor:pointer">✉️ Envoyer</button>` : ''}</div>` : ''}
+      ${/^CA-\d{4}-/i.test(String(r['Numero commande'] || '')) ? `<div style="margin:4px 0"><span style="background:#ede7f6;color:#5e35b1;border-radius:8px;padding:2px 8px;font-size:10px;font-weight:800">🆕 Commande appli</span></div>` : ''}
       ${referenceComplete ? `<div style="font-size:10px;color:#aaa;margin-bottom:2px">Réf. : ${referenceComplete}</div>` : ''}
       ${retardAR ? `<div style="font-size:11px;color:#c0392b;font-weight:700;margin-bottom:2px"><span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ AR en attente depuis ${retardAR} j</span>commandé le ${dateLabel}</div>` : ''}
       ${(dateReceptionPrevue && statut !== 'En attente AR' && !estStatutCommandeReceptionne(statut)) ? `<div style="font-size:11px;color:${retard ? '#c0392b' : '#8a5fc2'};${retard ? 'font-weight:700;' : ''}margin-bottom:2px">${retard ? `<span style="display:inline-block;background:#c0392b;color:#fff;border-radius:6px;padding:1px 7px;margin-right:6px;font-size:10px">⏰ En retard de ${retard} j</span>` : ''}📅 Réception prévue le ${new Date(dateReceptionPrevue + 'T12:00:00').toLocaleDateString('fr-FR')}</div>` : ''}
